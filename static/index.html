@@ -304,6 +304,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text-dim);
+  pointer-events: none;
 }
 .asset-del-btn {
   position: absolute;
@@ -2899,6 +2900,14 @@ function selectStyleFromSidebar(idx) {
   videoStyleId = s.id;
   updateImageStyleSlot();
   updateVideoStyleSlot();
+  // Flash the selected item for mobile feedback
+  var items = document.querySelectorAll('#sideContent .asset-item');
+  items.forEach(function(el, i) {
+    el.style.borderColor = (i === idx) ? 'var(--accent)' : 'transparent';
+  });
+  setTimeout(function() {
+    if (items[idx]) items[idx].style.borderColor = 'transparent';
+  }, 600);
 }
 
 // ── Asset Library CRUD ───────────────────────────────────────
