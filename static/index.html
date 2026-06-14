@@ -2317,35 +2317,72 @@ async function _doGenerateImage() {
   const btn = document.getElementById('imageGenBtn');
   btn.disabled = true;
   btn.textContent = '...';
-  renderImageResults(true);
+  var currentModel = imageModel;
+  var currentRatio = imageRatio;
+  var currentPromptShort = prompt.substring(0, 80);
 
+  sessionImageResults.push({ generating: true, time: new Date().toLocaleString(), model: currentModel, prompt: currentPromptShort });
+  renderImageResults(false);
+
+  var res;
   try {
-    const r = await fetch('/api/generate-image', {
+    res = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, image_model: imageModel, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map(r => ({ url: r.url })), style_id: selectedStyleId || undefined })
-    }).then(r => r.json());
+    }).then(function(r) { return r.json(); });
+  } catch (e) {
+    sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
+    sessionImageResults.push({ error: '网络错误', time: new Date().toLocaleString(), model: currentModel, prompt: currentPromptShort });
+    btn.disabled = false;
+    btn.textContent = '生成';
+    renderImageResults(false);
+    return;
+  }
 
-    if (r.error) {
-      sessionImageResults.push({ error: r.error, time: new Date().toLocaleString(), model: imageModel, prompt: prompt.substring(0, 80) });
-    } else {
+  if (res.error) {
+    sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
+    sessionImageResults.push({ error: res.error, time: new Date().toLocaleString(), model: currentModel, prompt: currentPromptShort });
+    btn.disabled = false;
+    btn.textContent = '生成';
+    renderImageResults(false);
+    return;
+  }
+
+  // Async mode: poll for result
+  pollImageJob(res.job_id, currentModel, currentRatio, currentPromptShort, btn);
+}
+
+function pollImageJob(jobId, model, ratio, promptShort, btn) {
+  var iv = setInterval(async function() {
+    var r;
+    try {
+      r = await fetch('/api/image-status/' + jobId).then(function(rr) { return rr.json(); });
+    } catch (e) { return; }
+
+    if (r.status === 'succeeded') {
+      clearInterval(iv);
+      sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
       lastGenImageUrl = r.url;
       addToStash(r.url, r.name || '生成图片');
       activeStashIdx = 0;
       sessionImageResults.push({
         url: r.url, name: r.name || '生成图片',
         time: new Date().toLocaleString(),
-        model: imageModel, ratio: imageRatio || r.ratio || '-',
-        prompt: prompt.substring(0, 80),
+        model: model, ratio: ratio || r.ratio || '-',
+        prompt: promptShort,
         refCount: imageRefs.length
       });
+      if (btn) { btn.disabled = false; btn.textContent = '生成'; }
+      renderImageResults(false);
+    } else if (r.status === 'failed') {
+      clearInterval(iv);
+      sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
+      sessionImageResults.push({ error: r.error || '生成失败', time: new Date().toLocaleString(), model: model, prompt: promptShort });
+      if (btn) { btn.disabled = false; btn.textContent = '生成'; }
+      renderImageResults(false);
     }
-  } catch (e) {
-    sessionImageResults.push({ error: '网络错误', time: new Date().toLocaleString(), model: imageModel, prompt: prompt.substring(0, 80) });
-  }
-  btn.disabled = false;
-  btn.textContent = '生成';
-  renderImageResults(false);
+  }, 3000);
 }
 
 function renderImageResults(generating) {
@@ -2354,7 +2391,7 @@ function renderImageResults(generating) {
   let html = '';
 
   // Section header
-  var totalOk = sessionImageResults.filter(function(r) { return r.url; }).length;
+  var totalOk = sessionImageResults.filter(function(r) { return r.url && !r.generating; }).length;
   if (totalOk > 0) {
     html += '<div class="result-section-header" style="display:flex;align-items:center;gap:8px;padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:8px;">' +
       '<span style="font-size:14px;">📸</span>' +
@@ -2363,11 +2400,10 @@ function renderImageResults(generating) {
       '</div>';
   }
 
-  if (generating) {
-    html += '<div class="generating" style="padding:12px 0;"><div class="spinner"></div><div class="gen-status" style="margin-top:8px;">生成中...</div></div>';
-  }
   sessionImageResults.slice().reverse().forEach(function(r, i) {
-    if (r.error) {
+    if (r.generating) {
+      html += '<div class="generating" style="padding:12px 0;"><div class="spinner"></div><div class="gen-status" style="margin-top:8px;">生成中...（' + (IMAGE_MODEL_LABELS[r.model] || r.model) + '）</div></div>';
+    } else if (r.error) {
       html += '<div class="error-state" style="margin:4px 0;"><p>' + escHtml(r.error) + '</p><div style="font-size:10px;color:var(--text-muted);">' + r.time + '</div></div>';
     } else {
       html += '<div class="result-card" style="margin:6px 0;">' +

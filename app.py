@@ -616,39 +616,52 @@ def generate_image():
         styles = load_json(styles_path(), [])
         style = next((s for s in styles if s.get('id') == style_id), None)
         if style:
-            # prepend style prompt
             prompt = style.get('prompt', '') + '\n' + prompt
-            # append negative prompt
             if style.get('negative_prompt'):
                 prompt += '\n\n避免：' + style.get('negative_prompt', '')
-            # add thumbnail as reference
             if style.get('thumbnail_url'):
                 input_images.append({'url': style['thumbnail_url'], 'role_label': '风格参考'})
 
-    try:
-        if image_model in NANO_GPT_IMAGE_MODELS:
-            local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size)
-        elif image_model == 'volc-seedream-4-5':
-            local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size)
-        else:
-            return jsonify(error=f'不支持的图片模型: {image_model}'), 400
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = {'status': 'pending', 'url': None, 'name': None, 'error': None,
+                     'model': image_model, 'ratio': ratio, 'mode': mode}
 
-        # save history
-        hist = load_json(history_path(), [])
-        hist.insert(0, {
-            'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
-            'type': 'image',
-            'image_url': local_url,
-            'script': prompt[:80],
-            'original_script': prompt,
-            'model': image_model,
-            'ratio': ratio
-        })
-        save_json(history_path(), hist[:50])
+    def run():
+        try:
+            if image_model in NANO_GPT_IMAGE_MODELS:
+                local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size)
+            elif image_model == 'volc-seedream-4-5':
+                local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size)
+            else:
+                JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'不支持的图片模型: {image_model}'}
+                return
 
-        return jsonify(url=local_url, name=filename, model=image_model, ratio=ratio, mode=mode)
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+            # save history
+            hist = load_json(history_path(), [])
+            hist.insert(0, {
+                'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
+                'type': 'image',
+                'image_url': local_url,
+                'script': prompt[:80],
+                'original_script': prompt,
+                'model': image_model,
+                'ratio': ratio
+            })
+            save_json(history_path(), hist[:50])
+            JOBS[job_id] = {'status': 'succeeded', 'url': local_url, 'name': filename,
+                             'model': image_model, 'ratio': ratio, 'mode': mode}
+        except Exception as e:
+            JOBS[job_id] = {'status': 'failed', 'url': None, 'error': str(e)}
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify(job_id=job_id)
+
+
+# ── Image job status (polling) ────────────────────────────────
+@app.route('/api/image-status/<job_id>', methods=['GET'])
+@login_required
+def image_status(job_id):
+    return jsonify(JOBS.get(job_id, {'status': 'not_found'}))
 
 
 # ── generate ──────────────────────────────────────────────────
