@@ -138,13 +138,20 @@ def styles_path():     return os.path.join(DATA, 'styles.json')
 def get_tos_client():
     return tos.TosClientV2(TOS_AK, TOS_SK, TOS_ENDPOINT, TOS_REGION)
 
-def upload_to_tos(file_bytes, object_key, content_type='application/octet-stream'):
-    """Upload bytes to TOS, return (public_url, success). Falls back gracefully."""
+def upload_to_tos(file_data, object_key, content_type='application/octet-stream', content_length=None):
+    """Upload bytes or stream to TOS, return (public_url, success)."""
     try:
         client = get_tos_client()
-        client.put_object(TOS_BUCKET, object_key,
-                          content=file_bytes,
-                          content_type=content_type)
+        if hasattr(file_data, 'read'):
+            # Stream: use put_object with streaming body
+            client.put_object(TOS_BUCKET, object_key,
+                              content=file_data,
+                              content_type=content_type,
+                              content_length=content_length)
+        else:
+            client.put_object(TOS_BUCKET, object_key,
+                              content=file_data,
+                              content_type=content_type)
         return f"{TOS_PUBLIC_BASE}/{object_key}", True
     except Exception as e:
         print(f'[TOS] upload failed: {e}')
@@ -189,19 +196,47 @@ def upload():
     if not f: return jsonify(error='no file'), 400
     ext  = os.path.splitext(secure_filename(f.filename))[1].lower()
     name = uuid.uuid4().hex + ext
-    file_bytes = f.read()
-
-    # Try TOS first
     ct = f.content_type or 'application/octet-stream'
-    public_url, ok = upload_to_tos(file_bytes, name, ct)
+
+    # Stream directly to TOS (no full buffering)
+    public_url, ok = upload_to_tos(f.stream, name, ct, content_length=request.content_length)
     if ok:
         return jsonify(url=public_url, name=name, storage='tos')
 
     # Fallback to local
     path = os.path.join(UPLOAD, name)
-    with open(path, 'wb') as fw:
-        fw.write(file_bytes)
+    f.save(path)
     return jsonify(url=f'/static/uploads/{name}', name=name, storage='local')
+
+# ── TOS presigned URL for direct upload ───────────────────────
+@app.route('/api/tos-presign', methods=['POST'])
+@login_required
+def tos_presign():
+    body = request.json or {}
+    filename = body.get('filename', 'file')
+    content_type = body.get('content_type', 'application/octet-stream')
+    ext = os.path.splitext(secure_filename(filename))[1].lower() or '.bin'
+    date_prefix = datetime.now().strftime('%Y%m%d')
+    object_key = f'uploads/{date_prefix}/{uuid.uuid4().hex}{ext}'
+
+    try:
+        client = get_tos_client()
+        from tos import HttpMethodType
+        result = client.pre_signed_url(
+            http_method=HttpMethodType.Http_Method_Put,
+            bucket=TOS_BUCKET,
+            key=object_key,
+            expires=3600
+        )
+        upload_url = result.signed_url
+    except Exception as e:
+        return jsonify(error=f'签名生成失败: {e}'), 500
+
+    return jsonify(
+        upload_url=upload_url,
+        public_url=f'{TOS_PUBLIC_BASE}/{object_key}',
+        object_key=object_key
+    )
 
 # ── characters ────────────────────────────────────────────────
 @app.route('/api/characters', methods=['GET'])
