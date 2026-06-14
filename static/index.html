@@ -2322,6 +2322,8 @@ function pollImageJob(jobId, model, ratio, promptShort, btn) {
       lastGenImageUrl = r.url;
       addToStash(r.url, r.name || '生成图片');
       activeStashIdx = 0;
+      // Refresh history cache
+      fetch('/api/history').then(function(rr) { return rr.json(); }).then(function(d) { history = d || []; }).catch(function() {});
       sessionImageResults.push({
         url: r.url, name: r.name || '生成图片',
         time: new Date().toLocaleString(),
