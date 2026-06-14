@@ -4026,7 +4026,7 @@ function renderHistory() {
             <div class="timeline-actions">
               <button onclick="window.open('${safeUrl}')">下载</button>
               ${!isImage ? `<button class="primary" onclick="useHistoryVideo('${safeUrl}')">接续此段</button>` : ''}
-              <button onclick="reeditScript('${escAttr(reeditText)}',${isImage})">重新编辑</button>
+              <button onclick="reeditHistoryItem(${idx})">重新编辑</button>
             </div>
           </div>
         </div>
@@ -4043,6 +4043,26 @@ function useHistoryVideo(url) {
     clearSelectedRefs();
     selectRef({ url, role_label: '参考视频', type: 'video', name: '历史视频' });
   }, 100);
+}
+
+function reeditHistoryItem(idx) {
+  const h = history[idx];
+  if (!h) return;
+  const isImage = h.type === 'image';
+  const text = h.original_script || h.script || '';
+  if (isImage) {
+    switchMainTab('imageGen');
+    setTimeout(function() {
+      var el = document.getElementById('imagePrompt');
+      if (el) { el.value = text; el.focus(); }
+    }, 100);
+  } else {
+    switchMainTab('studio');
+    setTimeout(function() {
+      scriptInput.textContent = text;
+      scriptInput.focus();
+    }, 100);
+  }
 }
 
 function reeditScript(scriptText, isImage) {
