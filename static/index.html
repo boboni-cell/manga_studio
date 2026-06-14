@@ -1343,44 +1343,121 @@ input[type=file] { display: none; }
 
 /* ===== RESPONSIVE ===== */
 @media (max-width: 768px) {
+  /* Main layout: sidebar on top */
   .main { flex-direction: column; }
   .sidebar {
-    width: 100%;
-    min-width: 100%;
-    max-height: 220px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
+    width: 100%; min-width: 100%; max-height: 160px;
+    border-right: none; border-bottom: 1px solid var(--border);
   }
-  .sidebar-tabs { overflow-x: auto; }
-  .sidebar-tab { flex: none; padding: 8px 14px; font-size: 11px; }
-  .sidebar-content { max-height: 170px; }
-  .center { flex: 1; min-height: 0; }
-  .result-area { padding: 12px; }
-  .shot-editor { padding: 10px 12px 12px; }
-  .ref-slots { gap: 6px; }
-  .ref-slot { min-width: 52px; max-width: 90px; padding: 5px; }
-  .ref-slot .slot-preview { height: 32px; }
-  .ref-slot .slot-label { font-size: 9px; }
-  .editor { min-height: 60px; max-height: 120px; font-size: 12px; }
-  .toolbar { gap: 4px; }
-  .ratio-btn, .dur-btn { padding: 3px 7px; font-size: 10px; }
-  .at-grid { grid-template-columns: repeat(4, 1fr); max-height: 140px; }
-  .result-card { max-width: 100%; }
-  .timeline::before { left: 20px; }
-  .timeline-dot { margin-left: 15px; }
-}
-@media (max-width: 400px) {
-  .topbar { padding: 0 8px; height: 44px; }
+  .sidebar-tabs { overflow-x: auto; flex-wrap: nowrap; }
+  .sidebar-tab { flex: none; padding: 6px 12px; font-size: 11px; white-space: nowrap; }
+  .sidebar-content { max-height: 120px; }
+  .center { flex: 1; min-height: 0; overflow-y: auto; }
+
+  /* Topbar: compact */
+  .topbar { padding: 0 8px; height: 42px; gap: 4px; }
   .topbar-logo { font-size: 13px; }
-  .topbar-btn { padding: 4px 8px; font-size: 11px; }
-  .ref-slot { min-width: 46px; max-width: 72px; padding: 4px; }
+  .topbar-logo .icon { font-size: 14px; }
+  .topbar-btn { padding: 4px 8px; font-size: 10px; gap: 3px; }
+  .topbar-spacer { flex: 0.5; }
+  .topbar-status { font-size: 10px; padding: 2px 6px; }
+
+  /* Ref slots: compact grid */
+  .ref-slots { gap: 4px; flex-wrap: wrap; }
+  .ref-slot { min-width: 48px; max-width: 80px; padding: 4px; }
   .ref-slot .slot-preview { height: 28px; }
   .ref-slot .slot-label { font-size: 8px; }
-  .send-btn { width: 36px; height: 36px; }
-  .editor-row .plus-btn { width: 34px; height: 34px; }
-  .image-gen-row { flex-direction: column; }
-  .image-gen-prompt { min-width: 100%; }
-  .image-gen-controls { width: 100%; }
+  .ref-slot .slot-count { font-size: 9px; width: 16px; height: 16px; }
+  .slot-gallery-popover { left: 0; right: 0; max-height: 280px; }
+  .slot-gallery-item { width: 56px; height: 56px; }
+
+  /* Editor */
+  .editor { min-height: 56px; max-height: 100px; font-size: 12px; }
+  .editor-row .plus-btn { width: 32px; height: 32px; font-size: 16px; }
+
+  /* Toolbar: scrollable row */
+  .toolbar { gap: 3px; overflow-x: auto; flex-wrap: nowrap; padding: 6px 0; }
+  .tlabel { font-size: 9px; white-space: nowrap; }
+  .ratio-btn, .dur-btn { padding: 3px 6px; font-size: 10px; white-space: nowrap; }
+  #durBtns { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .model-select { font-size: 10px; padding: 2px 4px; max-width: 100px; }
+  .optimize-toggle { font-size: 10px; }
+  .img-count { font-size: 10px; }
+
+  /* At picker */
+  .at-grid { grid-template-columns: repeat(3, 1fr); max-height: 130px; }
+  .at-tabs { gap: 2px; }
+  .at-tab { padding: 4px 8px; font-size: 10px; }
+
+  /* Result area */
+  .result-area { padding: 8px; }
+  .result-card { max-width: 100%; }
+  .result-card video, .result-card img { max-height: 200px; }
+  .result-actions { gap: 3px; }
+  .result-actions button { padding: 3px 6px; font-size: 10px; }
+  .result-meta { font-size: 10px; }
+  .meta-badge { font-size: 9px; padding: 2px 5px; }
+
+  /* History panel */
+  .history-panel { padding: 8px; }
+  .history-card { padding: 8px; }
+  .history-card video, .history-card img { max-height: 160px; }
+
+  /* Image gen */
+  .image-gen-prompt { min-height: 60px; font-size: 12px; }
+  .image-gen-controls { flex-wrap: wrap; gap: 4px; }
+  .image-gen-controls .model-select { max-width: 90px; }
+  .image-ref-area { padding: 6px; }
+  .image-ref-item { width: 52px; height: 52px; }
+  .image-refs { gap: 4px; }
+  .stash-item { width: 52px; height: 52px; }
+
+  /* Script workspace */
+  .script-ws-panel { padding: 8px; }
+  .script-shots { gap: 8px; }
+  .shot-card { padding: 8px; }
+  .shot-actions { flex-wrap: wrap; gap: 4px; }
+  .shot-actions button { padding: 4px 8px; font-size: 10px; }
+
+  /* Modals */
+  .modal-bg.show { align-items: flex-end; padding: 0; }
+  .modal { width: 100% !important; max-width: 100%; border-radius: 16px 16px 0 0; padding: 16px; max-height: 85vh; }
+  .modal h3 { font-size: 14px; }
+  .modal input, .modal textarea, .modal select { font-size: 14px; }
+
+  /* Send button */
+  .send-btn { width: 34px; height: 34px; font-size: 16px; }
+
+  /* Timeline */
+  .timeline::before { left: 18px; }
+  .timeline-dot { margin-left: 13px; }
+
+  /* Empty state */
+  .empty-state h3 { font-size: 14px; }
+  .empty-state p { font-size: 11px; }
+  .empty-state .steps { font-size: 10px; }
+}
+@media (max-width: 400px) {
+  .topbar { padding: 0 6px; height: 40px; gap: 2px; }
+  .topbar-logo { font-size: 11px; }
+  .topbar-logo .icon { font-size: 12px; }
+  .topbar-btn { padding: 3px 6px; font-size: 9px; }
+  .topbar-status { display: none; }
+  .sidebar { max-height: 140px; }
+  .sidebar-content { max-height: 100px; }
+  .ref-slot { min-width: 42px; max-width: 64px; padding: 3px; }
+  .ref-slot .slot-preview { height: 24px; }
+  .ref-slot .slot-label { font-size: 7px; }
+  .ref-slot .slot-remove { width: 14px; height: 14px; font-size: 8px; }
+  .slot-gallery-item { width: 48px; height: 48px; }
+  .send-btn { width: 32px; height: 32px; }
+  .editor-row .plus-btn { width: 30px; height: 30px; }
+  .image-gen-controls { flex-direction: column; }
+  .image-gen-controls .model-select { max-width: 100%; }
+  .ratio-btn, .dur-btn { padding: 2px 5px; font-size: 9px; }
+  .tlabel { font-size: 8px; }
+  .at-grid { grid-template-columns: repeat(2, 1fr); }
+  .result-actions button { padding: 2px 5px; font-size: 9px; }
 }
 </style>
 </head>
@@ -2310,8 +2387,8 @@ function addImageToRefs() {
 // ── Prompt Templates ────────────────────────────────────────
 const PROMPT_TEMPLATES = {
   scene_angle: '基于参考图生成同一场景的另一个机位视角。保持空间结构、装修风格、主要家具、材质、色调、光线方向一致。改变镜头位置和构图，让画面像同一真实空间中的连续镜头。不要改变房间类型，不要新增不合理家具，不要让门窗、楼梯、沙发、桌椅位置逻辑混乱。真人短剧质感，真实摄影风格，画面清晰，适合后续图生视频。',
-  char_turnaround: '基于参考人物生成同一角色的三视图设定图：正面、侧面、背面。保持同一人物身份、脸型轮廓、五官比例、发型、发色、身材比例、服装款式和颜色完全一致。三视图并排展示，站姿自然，光线均匀，背景简洁。不要换脸，不要改变年龄，不要改变性别，不要改变服装，不要生成不同人物。真人短剧角色定妆照质感，高清清晰。',
-  char_portrait: '基于参考人物生成真人短剧角色定妆照。保持人物身份特征、脸型轮廓、五官比例、发型、发色、气质和服装主特征一致。生成真实人物质感，五官清晰，皮肤自然，表情自然有戏，适合短剧角色档案和后续视频参考。避免廉价网红脸、过度磨皮、塑料感、年龄漂移、性别变化、欧美化、脸部变形。半身构图，柔和棚拍光，背景简洁。',
+  char_turnaround: '基于参考人物生成同一角色的三视图设定图：正面、侧面、背面。保持同一人物身份、脸型轮廓、五官比例、发型、发色、身材比例、服装款式和颜色完全一致。三视图按所选比例合理排列展示，站姿自然，光线均匀，背景简洁。不要换脸，不要改变年龄，不要改变性别，不要改变服装，不要生成不同人物。真人短剧角色定妆照质感，高清清晰。',
+  char_portrait: '基于参考人物生成真人短剧角色定妆照。保持人物身份特征、脸型轮廓、五官比例、发型、发色、气质和服装主特征一致。生成真实人物质感，五官清晰，皮肤自然，表情自然有戏，适合短剧角色档案和后续视频参考。避免廉价网红脸、过度磨皮、塑料感、年龄漂移、性别变化、欧美化、脸部变形。构图适配所选比例，主体突出不裁切关键部位，柔和棚拍光，背景简洁。',
   outfit_ref: '基于参考图生成真人短剧服装参考图。重点保持服装款式、颜色、面料质感、版型、领口、袖口、腰线、配饰和整体穿搭风格一致。人物姿态自然，服装完整清晰可见，正面展示为主。不要改变服装设计，不要让衣服穿模，不要增加多余配饰，不要遮挡关键服装细节。真实摄影质感，背景简洁，适合后续作为服装参考图。',
   storyboard: '基于当前剧情生成一张专业导演分镜构图参考图，用于后续视频生成。画面可以采用导演分镜板形式，展示同一段剧情的关键镜头设计。可以包含 3-9 个小画面，每个小画面代表一个镜头构图，例如远景、全景、中景、近景、特写、高角度、低角度、侧面、背影、俯拍等。每个小画面必须围绕同一场景、同一组人物和同一段剧情，不要生成无关画面。每个小画面要清楚表达镜头景别、机位角度、人物站位、主体动作、情绪重点、场景空间关系、前景/中景/背景层次和光线氛围。人物脸部只需要表达大致方向和表情，不要过于具体，不要生成真实明星脸或固定真人身份。重点是镜头构图、人物站位、动作关系、景别变化和场景调度。可以有简单镜头标记或景别缩写，但不要出现大段文字。不要生成字幕、对白气泡、水印、Logo。构图清晰，画面可读性强。风格跟随当前选择的风格库，如果没有选择风格，使用电影导演分镜板风格，画面干净，镜头感强，光影明确。',
   group_photo: '基于多张人物参考图，生成这些角色在同一场景中的合照。保持每个角色各自的脸型、五官、发型、年龄感、气质和服装特征，不要混脸，不要换脸，不要把一个人的五官套到另一个人身上。人物站位自然，比例正确，互动关系清楚，真人短剧质感，真实摄影风格，画面清晰。',

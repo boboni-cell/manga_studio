@@ -1,5 +1,6 @@
 import os, json, uuid, time, threading, requests, functools
 import tos
+from tos.enum import HttpMethodType
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, redirect, session
 from werkzeug.utils import secure_filename
@@ -189,6 +190,34 @@ def index():
     return send_from_directory('static', 'index.html')
 
 # ── uploads ───────────────────────────────────────────────────
+@app.route('/api/tos-presign', methods=['POST'])
+@login_required
+def tos_presign():
+    body = request.json or {}
+    filename = secure_filename(body.get('filename') or 'upload')
+    content_type = body.get('content_type') or 'application/octet-stream'
+    ext = os.path.splitext(filename)[1].lower()
+    date_prefix = datetime.now().strftime('%Y%m%d')
+    object_key = f"uploads/{date_prefix}/{uuid.uuid4().hex}{ext}"
+    try:
+        client = get_tos_client()
+        signed = client.pre_signed_url(
+            HttpMethodType.Http_Method_Put,
+            TOS_BUCKET,
+            object_key,
+            expires=3600,
+            header={'Content-Type': content_type}
+        )
+        upload_url = getattr(signed, 'signed_url', None) or getattr(signed, 'url', None) or str(signed)
+        return jsonify({
+            'upload_url': upload_url,
+            'public_url': f"{TOS_PUBLIC_BASE}/{object_key}",
+            'object_key': object_key
+        })
+    except Exception as e:
+        print(f'[TOS] presign failed: {e}')
+        return jsonify(error=str(e)), 500
+
 @app.route('/api/upload', methods=['POST'])
 @login_required
 def upload():
@@ -207,36 +236,6 @@ def upload():
     path = os.path.join(UPLOAD, name)
     f.save(path)
     return jsonify(url=f'/static/uploads/{name}', name=name, storage='local')
-
-# ── TOS presigned URL for direct upload ───────────────────────
-@app.route('/api/tos-presign', methods=['POST'])
-@login_required
-def tos_presign():
-    body = request.json or {}
-    filename = body.get('filename', 'file')
-    content_type = body.get('content_type', 'application/octet-stream')
-    ext = os.path.splitext(secure_filename(filename))[1].lower() or '.bin'
-    date_prefix = datetime.now().strftime('%Y%m%d')
-    object_key = f'uploads/{date_prefix}/{uuid.uuid4().hex}{ext}'
-
-    try:
-        client = get_tos_client()
-        from tos import HttpMethodType
-        result = client.pre_signed_url(
-            http_method=HttpMethodType.Http_Method_Put,
-            bucket=TOS_BUCKET,
-            key=object_key,
-            expires=3600
-        )
-        upload_url = result.signed_url
-    except Exception as e:
-        return jsonify(error=f'签名生成失败: {e}'), 500
-
-    return jsonify(
-        upload_url=upload_url,
-        public_url=f'{TOS_PUBLIC_BASE}/{object_key}',
-        object_key=object_key
-    )
 
 # ── characters ────────────────────────────────────────────────
 @app.route('/api/characters', methods=['GET'])
