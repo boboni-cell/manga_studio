@@ -1963,52 +1963,8 @@ function hideTempBannerSoon(delay) {
 async function uploadFile(file) {
   if (!file) throw new Error('没有选择文件');
 
-  // ── Step 1: Try TOS direct upload via presigned URL ──
-  showTempBanner('正在获取上传签名...', 'warn');
-  try {
-    var presignRes = await fetch('/api/tos-presign', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filename: file.name,
-        content_type: file.type || 'application/octet-stream'
-      }),
-      credentials: 'same-origin'
-    });
-    if (presignRes.status === 401) throw new Error('登录已失效，请刷新页面重新输入密码');
-    var presignData;
-    try { presignData = await presignRes.json(); } catch (e) { throw new Error('签名接口返回异常'); }
-
-    if (presignData.upload_url) {
-      showTempBanner('正在直传 TOS...', 'warn');
-      // Use XMLHttpRequest for better CORS compatibility with presigned URLs
-      try {
-        var publicUrl = await new Promise(function(resolve, reject) {
-          var xhr = new XMLHttpRequest();
-          xhr.open('PUT', presignData.upload_url, true);
-          xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-          xhr.timeout = 300000;
-          xhr.onload = function() {
-            if (xhr.status >= 200 && xhr.status < 300) resolve(presignData.public_url);
-            else reject(new Error('TOS returned ' + xhr.status));
-          };
-          xhr.onerror = function() { reject(new Error('XHR network error')); };
-          xhr.ontimeout = function() { reject(new Error('XHR timeout')); };
-          xhr.send(file);
-        });
-        showTempBanner('直传成功', 'ok');
-        hideTempBannerSoon();
-        return { url: publicUrl, name: presignData.object_key, storage: 'tos-direct' };
-      } catch (xhrErr) {
-        console.warn('TOS直传XHR失败:', xhrErr.message || xhrErr);
-      }
-    }
-  } catch (presignErr) {
-    console.warn('获取签名失败，改用后端上传:', presignErr.message || presignErr);
-  }
-
-  // ── Step 2: Fallback to backend upload ──
-  showTempBanner('直传失败，改用后端上传...', 'warn');
+  // ── Upload via backend proxy (Railway → TOS) ──
+  showTempBanner('正在上传：' + file.name, 'warn');
   var fd = new FormData();
   fd.append('file', file);
   var fbController = new AbortController();
