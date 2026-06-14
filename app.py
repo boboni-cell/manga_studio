@@ -226,15 +226,17 @@ def upload():
     ext  = os.path.splitext(secure_filename(f.filename))[1].lower()
     name = uuid.uuid4().hex + ext
     ct = f.content_type or 'application/octet-stream'
+    file_bytes = f.read()
 
-    # Stream directly to TOS (no full buffering)
-    public_url, ok = upload_to_tos(f.stream, name, ct, content_length=request.content_length)
+    # Upload to TOS
+    public_url, ok = upload_to_tos(file_bytes, name, ct)
     if ok:
         return jsonify(url=public_url, name=name, storage='tos')
 
     # Fallback to local
     path = os.path.join(UPLOAD, name)
-    f.save(path)
+    with open(path, 'wb') as fw:
+        fw.write(file_bytes)
     return jsonify(url=f'/static/uploads/{name}', name=name, storage='local')
 
 # ── characters ────────────────────────────────────────────────
