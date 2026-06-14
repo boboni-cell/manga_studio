@@ -1367,8 +1367,19 @@ input[type=file] { display: none; }
   .sidebar-tabs { overflow-x: auto; flex-wrap: nowrap; padding: 0 6px; gap: 2px; }
   .sidebar-tab { flex: none; padding: 5px 10px; font-size: 10px; white-space: nowrap; border-radius: 4px; }
   .sidebar-content { max-height: 70px; padding: 4px 6px; }
-  .sidebar .char-card { padding: 4px 6px; font-size: 10px; }
-  .sidebar .char-card img { width: 28px; height: 28px; }
+  .sidebar .char-card { padding: 4px 6px; margin-bottom: 4px; }
+  .sidebar .char-card .char-name { font-size: 10px; }
+  .sidebar .char-card .char-name-row { margin-bottom: 3px; }
+  .sidebar .char-card .sec-label { font-size: 8px; margin: 3px 0 2px; }
+  .sidebar .char-card img { width: 22px; height: 22px; }
+  .sidebar .char-card .add-img-btn { width: 22px; height: 22px; font-size: 12px; }
+  .sidebar .char-card .audio-row { font-size: 9px; padding: 2px 0; }
+  .sidebar .char-card .aname { font-size: 9px; }
+  .sidebar .asset-grid { gap: 3px; grid-template-columns: repeat(4, 1fr); }
+  .sidebar .asset-item { border-radius: 4px; }
+  .sidebar .asset-label { font-size: 8px; padding: 1px 3px; }
+  .sidebar .asset-item .audio-thumb { font-size: 8px; gap: 1px; }
+  .sidebar .asset-item .audio-thumb .icon { font-size: 14px; }
   .center { flex: 1; min-height: 0; overflow-y: auto; }
 
   /* ── Ref slots: 5 per row ── */
@@ -1488,6 +1499,13 @@ input[type=file] { display: none; }
   .sidebar { max-height: 95px; }
   .sidebar-tab { padding: 4px 8px; font-size: 9px; }
   .sidebar-content { max-height: 55px; }
+  .sidebar .char-card { padding: 2px 4px; margin-bottom: 3px; }
+  .sidebar .char-card .char-name { font-size: 9px; }
+  .sidebar .char-card .sec-label { font-size: 7px; }
+  .sidebar .char-card img { width: 18px; height: 18px; }
+  .sidebar .char-card .add-img-btn { width: 18px; height: 18px; font-size: 10px; }
+  .sidebar .asset-grid { gap: 2px; grid-template-columns: repeat(5, 1fr); }
+  .sidebar .asset-label { font-size: 7px; padding: 1px 2px; }
   .ref-slots { grid-template-columns: repeat(4, 1fr); gap: 2px; }
   .ref-slot { padding: 3px 1px; }
   .ref-slot .slot-icon { font-size: 12px; }
