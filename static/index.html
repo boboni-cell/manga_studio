@@ -1,0 +1,3698 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>漫剧工作室 - 专业漫剧生成工作台</title>
+<style>
+/* ===== RESET & VARIABLES ===== */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
+:root {
+  --bg: #0c0c10;
+  --surface: #16161d;
+  --surface2: #1e1e28;
+  --surface3: #262634;
+  --border: #2a2a3a;
+  --border-light: #353550;
+  --accent: #5b8def;
+  --accent-dim: #3d6fd9;
+  --accent-glow: rgba(91,141,239,0.15);
+  --text: #e4e4ed;
+  --text-dim: #9d9db5;
+  --text-muted: #6b6b82;
+  --danger: #f06565;
+  --danger-dim: #c03939;
+  --success: #4ecb71;
+  --warning: #f0b865;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.4);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+}
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+
+/* ===== TOP BAR ===== */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  height: 48px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 10;
+}
+.topbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+.topbar-logo .icon { font-size: 18px; }
+.topbar-logo .accent { color: var(--accent); }
+.topbar-spacer { flex: 1; }
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 4px 10px;
+  background: var(--surface2);
+  border-radius: var(--radius-sm);
+}
+.topbar-status .dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  flex-shrink: 0;
+}
+.topbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  transition: all 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.topbar-btn:hover { border-color: var(--accent); color: var(--text); }
+.topbar-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ===== MAIN LAYOUT ===== */
+.main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ===== LEFT SIDEBAR ===== */
+.sidebar {
+  width: 264px;
+  min-width: 264px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: transform 0.2s;
+}
+.sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.sidebar-tab {
+  flex: 1;
+  padding: 10px 4px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.sidebar-tab:hover { color: var(--text-dim); }
+.sidebar-tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 500; }
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+.sidebar-content::-webkit-scrollbar { width: 3px; }
+
+/* Character Cards */
+.char-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin-bottom: 8px;
+  transition: border-color 0.15s;
+}
+.char-card:hover { border-color: var(--border-light); }
+.char-name-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.char-name {
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.char-del {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+.char-del:hover { color: var(--danger); background: rgba(240,101,101,0.1); }
+.sec-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 6px 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.char-images {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.char-images img {
+  width: 44px; height: 44px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 2px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.char-images img:hover { border-color: var(--danger); }
+.add-img-btn {
+  width: 44px; height: 44px;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+  color: var(--text-muted);
+  transition: all 0.15s;
+  flex-shrink: 0;
+  background: transparent;
+}
+.add-img-btn:hover { border-color: var(--accent); color: var(--accent); }
+.char-audios { display: flex; flex-direction: column; gap: 3px; }
+.audio-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface3);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.audio-row .aname {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+}
+.audio-row button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  font-family: inherit;
+  transition: color 0.15s;
+}
+.audio-row button:hover { color: var(--accent); }
+.audio-row .adel { color: var(--text-muted); }
+.audio-row .adel:hover { color: var(--danger); }
+.add-audio-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: var(--surface3);
+  border-radius: var(--radius-sm);
+  padding: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  margin-top: 2px;
+  transition: all 0.15s;
+}
+.add-audio-row:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Asset Grid */
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.asset-item {
+  position: relative;
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+  aspect-ratio: 1;
+  background: var(--surface3);
+}
+.asset-item img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.asset-item:hover { border-color: var(--accent); }
+.asset-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.8);
+  font-size: 10px;
+  padding: 3px 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+}
+.asset-del-btn {
+  position: absolute;
+  top: 3px; right: 3px;
+  background: rgba(0,0,0,0.75);
+  border: none;
+  color: var(--danger);
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  display: none;
+  font-family: inherit;
+}
+.asset-item:hover .asset-del-btn { display: block; }
+.audio-thumb {
+  background: var(--surface3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.audio-thumb .icon { font-size: 20px; }
+.add-asset-btn {
+  grid-column: span 3;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.add-asset-btn:hover { border-color: var(--accent); color: var(--accent); }
+.new-char-btn {
+  width: 100%;
+  padding: 8px;
+  background: var(--surface2);
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 6px;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.new-char-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ===== CENTER PANEL ===== */
+.center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* Result / Preview Area */
+.result-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 24px;
+  min-height: 0;
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  max-width: 360px;
+}
+.empty-state .icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+.empty-state h3 {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.empty-state p {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.empty-state .steps {
+  text-align: left;
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.empty-state .steps span {
+  display: block;
+  padding: 3px 0;
+}
+
+/* Generating State */
+.generating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.spinner {
+  width: 44px; height: 44px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.gen-info { text-align: center; }
+.gen-info .gen-status {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.gen-info .gen-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.gen-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 280px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+/* Result Card */
+.result-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  max-width: 360px;
+  width: 100%;
+  box-shadow: var(--shadow);
+}
+.result-card video {
+  width: 100%;
+  display: block;
+  max-height: 60vh;
+  object-fit: contain;
+  background: #000;
+}
+.result-meta {
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.result-meta .meta-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.result-meta .meta-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--surface3);
+  color: var(--text-dim);
+}
+.result-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.result-actions button {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.result-actions button:hover { border-color: var(--accent); color: var(--text); }
+.result-actions button.primary-action {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+.result-actions button.primary-action:hover { background: var(--accent-dim); }
+
+/* Error State */
+.error-state {
+  text-align: center;
+  color: var(--danger);
+  max-width: 360px;
+}
+.error-state .icon { font-size: 40px; margin-bottom: 10px; }
+.error-state p { font-size: 13px; }
+
+/* ===== SHOT EDITOR (Bottom Panel) ===== */
+.shot-editor {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  padding: 12px 16px 14px;
+}
+
+/* Reference Slots */
+.ref-slots {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.ref-slot {
+  flex: 1;
+  min-width: 64px;
+  max-width: 110px;
+  background: var(--surface2);
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.ref-slot:hover { border-color: var(--border-light); }
+.ref-slot.filled {
+  border-style: solid;
+  border-color: var(--border-light);
+  background: var(--surface3);
+}
+.ref-slot.has-multiple { border-color: var(--accent-dim); }
+.ref-slot .slot-icon {
+  font-size: 18px;
+  opacity: 0.4;
+}
+.ref-slot .slot-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+}
+.ref-slot.filled .slot-label { color: var(--text-dim); }
+.ref-slot .slot-preview {
+  width: 100%;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: none;
+}
+.ref-slot.filled .slot-preview { display: block; }
+.ref-slot.filled .slot-icon { display: none; }
+.ref-slot .slot-count {
+  position: absolute;
+  top: -4px; right: -4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 10px;
+  min-width: 18px; height: 18px;
+  border-radius: 9px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  padding: 0 4px;
+}
+.ref-slot.has-multiple .slot-count { display: flex; }
+.ref-slot .slot-remove {
+  position: absolute;
+  top: -6px; right: -6px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  line-height: 1;
+  transition: all 0.15s;
+  z-index: 2;
+}
+.ref-slot .slot-remove:hover { background: var(--danger); border-color: var(--danger); color: #fff; }
+.ref-slot.filled .slot-remove { display: flex; }
+.ref-slot.audio-slot.filled .slot-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  gap: 3px;
+  height: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+}
+.ref-slot.audio-slot.filled .slot-preview .audio-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Script Input Row */
+.editor-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.editor-row .plus-btn {
+  width: 38px; height: 38px;
+  border-radius: var(--radius);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.editor-row .plus-btn:hover { border-color: var(--accent); color: var(--accent); }
+.script-wrap {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+.editor {
+  width: 100%;
+  min-height: 80px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color 0.15s;
+  line-height: 1.7;
+  word-break: break-all;
+  cursor: text;
+}
+.editor:focus { border-color: var(--accent); }
+.editor:empty:before {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.editor img.inline-ref {
+  width: 32px; height: 32px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 2px solid var(--accent);
+  vertical-align: middle;
+  margin: 0 2px;
+  cursor: default;
+  display: inline-block;
+}
+.editor span.inline-audio {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--surface3);
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  vertical-align: middle;
+  margin: 0 2px;
+  cursor: default;
+}
+.send-btn {
+  width: 40px; height: 40px;
+  border-radius: var(--radius);
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.send-btn:hover { opacity: 0.85; }
+.send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Toolbar */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.tlabel {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-right: 2px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.ratio-btn, .dur-btn {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.ratio-btn:hover, .dur-btn:hover { border-color: var(--accent); color: var(--text-dim); }
+.ratio-btn.active, .dur-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+.toolbar-sep {
+  width: 1px; height: 16px;
+  background: var(--border);
+  margin: 0 3px;
+  flex-shrink: 0;
+}
+/* Toggle switch */
+.optimize-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  user-select: none;
+  margin-left: auto;
+}
+.optimize-toggle .switch-track {
+  width: 32px; height: 18px;
+  border-radius: 9px;
+  background: var(--border);
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.optimize-toggle.on .switch-track { background: var(--accent); }
+.optimize-toggle .switch-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: left 0.2s;
+}
+.optimize-toggle.on .switch-thumb { left: 16px; }
+/* Model selector */
+.model-select {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  max-width: 130px;
+}
+.model-select:hover, .model-select:focus { border-color: var(--accent); }
+.model-select option { background: var(--surface); color: var(--text); }
+/* Image generation panel */
+.image-gen-panel {
+  padding: 10px 0;
+}
+.image-gen-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.image-gen-prompt {
+  flex: 1;
+  min-width: 200px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 10px 12px;
+  resize: vertical;
+  outline: none;
+}
+.image-gen-prompt:focus { border-color: var(--accent); }
+.image-gen-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.image-gen-result {
+  margin-top: 12px;
+  display: none;
+}
+.image-gen-result.show { display: block; }
+.image-gen-result img {
+  max-width: 300px;
+  max-height: 300px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.image-gen-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.image-gen-actions button {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface3);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.image-gen-actions button:hover { border-color: var(--accent); color: var(--text); }
+/* Template buttons */
+.tpl-btn {
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.tpl-btn:hover, .tpl-btn.active { border-color: var(--accent); color: #fff; background: var(--accent); }
+/* Result stash */
+.result-stash { margin-top: 12px; }
+.stash-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.stash-list {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.stash-item {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s;
+  position: relative;
+}
+.stash-item:hover, .stash-item.active { border-color: var(--accent); }
+.stash-item img { width: 100%; height: 100%; object-fit: cover; }
+.stash-item .stash-del {
+  position: absolute;
+  top: -4px; right: -4px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 9px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+}
+.stash-item:hover .stash-del { display: flex; }
+/* Script workspace */
+.script-ws-panel { margin-top: 8px; padding: 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); }
+.script-ws-row { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+.script-ws-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.script-shots { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+.shot-card { background: var(--surface3); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; font-size: 11px; }
+.shot-card .shot-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.shot-card .shot-no { font-weight: 600; color: var(--accent); font-size: 12px; }
+.shot-card .shot-meta { color: var(--text-muted); font-size: 10px; margin-bottom: 4px; }
+.shot-card .shot-meta span { margin-right: 8px; }
+.shot-card .shot-prompt { color: var(--text-dim); line-height: 1.5; margin-bottom: 8px; }
+.shot-card .shot-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.shot-card .shot-actions button { padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface2); color: var(--text-dim); cursor: pointer; font-size: 10px; font-family: inherit; transition: all 0.15s; }
+.shot-card .shot-actions button:hover { border-color: var(--accent); color: var(--text); }
+.shot-card.generated { opacity: 0.65; border-color: var(--green, #4caf50); }
+.shot-card.generated .shot-header::after { content: ' ✅'; font-size: 11px; }
+.shot-card.generated .shot-actions button:last-child { background: #2e7d32; border-color: #2e7d32; color: #fff; }
+/* Image reference area */
+.image-ref-area {
+  margin-top: 10px;
+  padding: 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.image-ref-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.ref-hint {
+  font-size: 10px;
+  color: var(--warning);
+}
+.ref-header-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.image-refs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-height: 40px;
+  align-items: center;
+}
+.image-ref-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.image-ref-item {
+  position: relative;
+  width: 56px; height: 56px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 2px solid var(--border);
+  flex-shrink: 0;
+}
+.image-ref-item img {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.image-ref-item .ref-del {
+  position: absolute;
+  top: -4px; right: -4px;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+}
+.image-ref-item .ref-del:hover { background: var(--danger); color: #fff; }
+.img-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* ===== @ PICKER ===== */
+.at-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0; right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+  z-index: 100;
+  display: none;
+}
+.at-picker.show { display: block; }
+.at-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+}
+.at-tab {
+  flex: 1;
+  padding: 8px 2px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.at-tab:hover { color: var(--text-dim); }
+.at-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.at-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  padding: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.at-item {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+  aspect-ratio: 1;
+  position: relative;
+  background: var(--surface3);
+}
+.at-item:hover { border-color: var(--accent); }
+.at-item img, .at-item video {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.at-label {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.8);
+  font-size: 9px;
+  padding: 2px 4px;
+  text-align: center;
+  color: var(--text-dim);
+}
+.at-audio {
+  background: var(--surface3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  gap: 2px;
+  height: 100%;
+}
+.at-empty {
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  grid-column: span 5;
+  text-align: center;
+}
+
+/* ===== HISTORY PANEL ===== */
+#historyTab {
+  display: none;
+  flex: 1;
+  overflow-y: auto;
+}
+.history-panel {
+  padding: 16px;
+  max-width: 600px;
+  margin: 0 auto;
+}
+.history-header { margin-bottom: 16px; }
+.history-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+.history-header p {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+.timeline { position: relative; }
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 28px; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--border);
+  z-index: 0;
+}
+.timeline-item {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  z-index: 1;
+}
+.timeline-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  margin-top: 18px;
+  margin-left: 23px;
+  border: 2px solid var(--bg);
+  z-index: 1;
+}
+.timeline-card {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.timeline-card:hover { border-color: var(--border-light); }
+.timeline-card video {
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+.timeline-card .video-fallback {
+  width: 100%;
+  max-height: 200px;
+}
+.timeline-card-body {
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.timeline-card-body .info {
+  flex: 1;
+  min-width: 0;
+}
+.timeline-card-body .time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+.timeline-card-body .script {
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.timeline-actions button {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.timeline-actions button:hover { border-color: var(--accent); color: var(--text); }
+.timeline-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.timeline-actions button.primary:hover { background: var(--accent-dim); }
+.history-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+}
+.history-empty .icon { font-size: 40px; margin-bottom: 10px; opacity: 0.5; }
+
+/* ===== MODAL ===== */
+.modal-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 200;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.modal-bg.show { display: flex; }
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  width: 360px;
+  max-width: 95vw;
+  box-shadow: var(--shadow);
+}
+.modal h3 { margin-bottom: 14px; font-size: 15px; font-weight: 600; }
+.modal input[type=text] {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+  margin-bottom: 12px;
+  font-family: inherit;
+}
+.modal input:focus { border-color: var(--accent); }
+.modal-btns {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.modal-btns button {
+  padding: 7px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.modal-btns button:hover { border-color: var(--accent); }
+.modal-btns .primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.modal-btns .primary:hover { background: var(--accent-dim); }
+
+/* Hidden file inputs */
+input[type=file] { display: none; }
+
+/* ===== RESPONSIVE ===== */
+@media (max-width: 768px) {
+  .main { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    min-width: 100%;
+    max-height: 220px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-tabs { overflow-x: auto; }
+  .sidebar-tab { flex: none; padding: 8px 14px; font-size: 11px; }
+  .sidebar-content { max-height: 170px; }
+  .center { flex: 1; min-height: 0; }
+  .result-area { padding: 12px; }
+  .shot-editor { padding: 10px 12px 12px; }
+  .ref-slots { gap: 6px; }
+  .ref-slot { min-width: 52px; max-width: 90px; padding: 5px; }
+  .ref-slot .slot-preview { height: 32px; }
+  .ref-slot .slot-label { font-size: 9px; }
+  .editor { min-height: 60px; max-height: 120px; font-size: 12px; }
+  .toolbar { gap: 4px; }
+  .ratio-btn, .dur-btn { padding: 3px 7px; font-size: 10px; }
+  .at-grid { grid-template-columns: repeat(4, 1fr); max-height: 140px; }
+  .result-card { max-width: 100%; }
+  .timeline::before { left: 20px; }
+  .timeline-dot { margin-left: 15px; }
+}
+@media (max-width: 400px) {
+  .topbar { padding: 0 8px; height: 44px; }
+  .topbar-logo { font-size: 13px; }
+  .topbar-btn { padding: 4px 8px; font-size: 11px; }
+  .ref-slot { min-width: 46px; max-width: 72px; padding: 4px; }
+  .ref-slot .slot-preview { height: 28px; }
+  .ref-slot .slot-label { font-size: 8px; }
+  .send-btn { width: 36px; height: 36px; }
+  .editor-row .plus-btn { width: 34px; height: 34px; }
+  .image-gen-row { flex-direction: column; }
+  .image-gen-prompt { min-width: 100%; }
+  .image-gen-controls { width: 100%; }
+}
+</style>
+</head>
+<body>
+
+<!-- ===== TOP BAR ===== -->
+<div class="topbar">
+  <div class="topbar-logo">
+    <span class="icon">🎬</span>
+    <span>漫剧<span class="accent">工作室</span></span>
+  </div>
+  <div class="topbar-status">
+    <span class="dot"></span>
+    <span id="projectStatus">就绪</span>
+  </div>
+  <div class="topbar-spacer"></div>
+  <button class="topbar-btn" id="topbarScriptWS" onclick="switchMainTab('scriptWS')">📜 剧本工作台</button>
+  <button class="topbar-btn" id="topbarImageGen" onclick="switchMainTab('imageGen')">🎨 图片生成</button>
+  <button class="topbar-btn active" id="topbarStudio" onclick="switchMainTab('studio')">📷 镜头生成</button>
+  <button class="topbar-btn" id="topbarHistory" onclick="switchMainTab('history')">📋 历史记录</button>
+</div>
+
+<!-- ===== MAIN LAYOUT ===== -->
+<div class="main">
+
+  <!-- LEFT SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-tabs">
+      <div class="sidebar-tab active" onclick="switchSideTab('chars')">👤 角色</div>
+      <div class="sidebar-tab" onclick="switchSideTab('outfits')">👗 服装</div>
+      <div class="sidebar-tab" onclick="switchSideTab('scenes')">🏞 场景</div>
+      <div class="sidebar-tab" onclick="switchSideTab('audios')">🎵 音频</div>
+      <div class="sidebar-tab" onclick="switchSideTab('styles')">🎨 风格</div>
+    </div>
+    <div class="sidebar-content" id="sideContent"></div>
+  </div>
+
+  <!-- CENTER -->
+  <div class="center">
+    <!-- STUDIO TAB -->
+    <div id="studioTab" style="display:flex;flex-direction:column;flex:1;overflow:hidden;min-height:0;">
+      <!-- Result Area -->
+      <div class="result-area" id="resultArea">
+        <div class="empty-state">
+          <div class="icon">🎥</div>
+          <h3>开始创作你的漫剧镜头</h3>
+          <p>选择角色与素材，编写分镜描述，一键生成专业漫剧视频</p>
+          <div class="steps">
+            <span>① 在左侧素材库选择或上传角色、服装、场景</span>
+            <span>② 在下方镜头编辑器中 @ 引用素材</span>
+            <span>③ 选择画面比例和时长</span>
+            <span>④ 点击发送按钮生成镜头</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Shot Editor -->
+      <div class="shot-editor">
+        <!-- Reference Slots -->
+        <div class="ref-slots" id="refSlots">
+          <div class="ref-slot" data-slot="character" onclick="focusSlot('character')">
+            <span class="slot-icon">👤</span>
+            <span class="slot-label">角色参考</span>
+            <span class="slot-count" id="slotCountChar">0</span>
+            <img class="slot-preview" id="slotPreviewChar" style="display:none">
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('character')" title="清除">✕</button>
+          </div>
+          <div class="ref-slot" data-slot="outfit" onclick="focusSlot('outfit')">
+            <span class="slot-icon">👗</span>
+            <span class="slot-label">服装参考</span>
+            <span class="slot-count" id="slotCountOutfit">0</span>
+            <img class="slot-preview" id="slotPreviewOutfit" style="display:none">
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('outfit')" title="清除">✕</button>
+          </div>
+          <div class="ref-slot" data-slot="scene" onclick="focusSlot('scene')">
+            <span class="slot-icon">🏞</span>
+            <span class="slot-label">场景参考</span>
+            <span class="slot-count" id="slotCountScene">0</span>
+            <img class="slot-preview" id="slotPreviewScene" style="display:none">
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('scene')" title="清除">✕</button>
+          </div>
+          <div class="ref-slot" data-slot="storyboard" onclick="focusSlot('storyboard')">
+            <span class="slot-icon">🎬</span>
+            <span class="slot-label">分镜参考</span>
+            <span class="slot-count" id="slotCountStoryboard">0</span>
+            <img class="slot-preview" id="slotPreviewStoryboard" style="display:none">
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('storyboard')" title="清除">✕</button>
+          </div>
+          <div class="ref-slot audio-slot" data-slot="audio" onclick="focusSlot('audio')">
+            <span class="slot-icon">🎵</span>
+            <span class="slot-label">音频参考</span>
+            <span class="slot-count" id="slotCountAudio">0</span>
+            <span class="slot-preview" id="slotPreviewAudio" style="display:none">🎵 <span class="audio-name"></span></span>
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('audio')" title="移除音频">✕</button>
+          </div>
+          <div class="ref-slot" data-slot="firstframe" onclick="focusSlot('firstframe')">
+            <span class="slot-icon">🎞️</span>
+            <span class="slot-label">首帧图</span>
+            <span class="slot-count" id="slotCountFirstframe">0</span>
+            <img class="slot-preview" id="slotPreviewFirstframe" style="display:none">
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('firstframe')" title="清除">✕</button>
+          </div>
+          <div class="ref-slot" data-slot="lastframe" onclick="focusSlot('lastframe')">
+            <span class="slot-icon">🏁</span>
+            <span class="slot-label">尾帧图</span>
+            <span class="slot-count" id="slotCountLastframe">0</span>
+            <img class="slot-preview" id="slotPreviewLastframe" style="display:none">
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('lastframe')" title="清除">✕</button>
+          </div>
+          <div class="ref-slot" data-slot="multiref" onclick="focusSlot('multiref')">
+            <span class="slot-icon">🗂</span>
+            <span class="slot-label">多图参考</span>
+            <span class="slot-count" id="slotCountMultiref">0</span>
+            <img class="slot-preview" id="slotPreviewMultiref" style="display:none">
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('multiref')" title="清除">✕</button>
+          </div>
+          <div class="ref-slot" data-slot="video" onclick="focusSlot('video')">
+            <span class="slot-icon">🎬</span>
+            <span class="slot-label">上一段视频</span>
+            <span class="slot-count" id="slotCountVideo">0</span>
+            <video class="slot-preview" id="slotPreviewVideo" style="display:none" muted></video>
+            <button class="slot-remove" onclick="event.stopPropagation();clearSlot('video')" title="清除">✕</button>
+          </div>
+        </div>
+
+        <!-- Editor Row -->
+        <div class="editor-row">
+          <button class="plus-btn" onclick="openDirectUpload()" title="上传参考图片或视频">＋</button>
+          <div class="script-wrap">
+            <div class="editor" id="scriptInput" contenteditable="true" data-placeholder="输入分镜描述，@ 引用素材库中的角色、服装、场景…"></div>
+            <div class="at-picker" id="atPicker">
+              <div class="at-tabs">
+                <div class="at-tab active" onclick="switchAtTab('chars')">角色</div>
+                <div class="at-tab" onclick="switchAtTab('outfits')">服装</div>
+                <div class="at-tab" onclick="switchAtTab('scenes')">场景</div>
+                <div class="at-tab" onclick="switchAtTab('audios')">音频</div>
+                <div class="at-tab" onclick="switchAtTab('history')">上段视频</div>
+              </div>
+              <div class="at-grid" id="atGrid"></div>
+            </div>
+          </div>
+          <button class="send-btn" id="sendBtn" onclick="generate()" title="生成镜头">▶</button>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="toolbar">
+          <span class="tlabel">比例</span>
+          <button class="ratio-btn" data-r="21:9" onclick="setRatio(this)">21:9</button>
+          <button class="ratio-btn" data-r="16:9" onclick="setRatio(this)">16:9</button>
+          <button class="ratio-btn" data-r="4:3" onclick="setRatio(this)">4:3</button>
+          <button class="ratio-btn" data-r="1:1" onclick="setRatio(this)">1:1</button>
+          <button class="ratio-btn" data-r="3:4" onclick="setRatio(this)">3:4</button>
+          <button class="ratio-btn active" data-r="9:16" onclick="setRatio(this)">9:16</button>
+          <div class="toolbar-sep"></div>
+          <span class="tlabel">时长</span>
+          <div id="durBtns" style="display:flex;gap:3px;flex-wrap:wrap;"></div>
+          <div class="toolbar-sep"></div>
+          <span class="tlabel">模型</span>
+          <select class="model-select" id="modelSelect" onchange="setVideoModel(this.value)">
+            <option value="seedance">Seedance</option>
+          </select>
+          <span class="tlabel">分辨率</span>
+          <select class="model-select" id="resSelect" onchange="selectedResolution=this.value">
+            <option value="720p">720p</option>
+            <option value="480p">480p</option>
+          </select>
+          <label class="optimize-toggle on" id="optimizeToggle" onclick="toggleOptimize()">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span>智能优化</span>
+          </label>
+          <div class="toolbar-sep"></div>
+          <span class="tlabel">🎨 风格</span>
+          <img id="videoStyleThumb" style="width:22px;height:22px;border-radius:4px;object-fit:cover;display:none;vertical-align:middle;">
+          <span id="videoStyleBadge" style="font-size:10px;color:var(--text-muted);">未选择</span>
+          <button class="ratio-btn" onclick="videoStyleId=null;updateVideoStyleSlot();" style="font-size:9px;display:none;" id="videoStyleClear">✕</button>
+          <div class="img-count">素材 <span id="imgCount">0</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCRIPT WS TAB -->
+    <div id="scriptWSTab" style="display:none;flex:1;overflow-y:auto;">
+      <div class="history-panel">
+        <div class="history-header">
+          <h3>剧本工作台</h3>
+          <p>写剧本、导入文件、AI 构思、拆成分镜</p>
+        </div>
+        <div class="script-ws-panel" style="display:block;">
+          <div class="script-ws-row">
+            <textarea class="image-gen-prompt" id="scriptWSText" placeholder="在这里写剧本、粘贴剧本，或上传剧本文件…" rows="6" style="flex:1;min-width:200px;"></textarea>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
+            <input type="file" id="scriptFileInput" accept=".txt,.md,.docx" style="display:none" onchange="uploadScriptFile(this)">
+            <button class="ratio-btn" onclick="document.getElementById('scriptFileInput').click()">上传剧本</button>
+            <button class="ratio-btn" onclick="brainstormScript()">没灵感，帮我想</button>
+            <span style="flex:1;"></span>
+            <span class="tlabel" style="font-size:11px;">剧本模型</span>
+            <button class="ratio-btn active" id="smDoubao" onclick="setScriptModel('doubao',this)">豆包</button>
+            <button class="ratio-btn" id="smGlm46" onclick="setScriptModel('glm46',this)">GLM4.6</button>
+            <button class="ratio-btn" id="smClaude46" onclick="setScriptModel('claude46',this)">Claude4.6</button>
+            <span style="flex:1;"></span>
+            <span class="tlabel" style="font-size:11px;">模式</span>
+            <button class="ratio-btn active" id="modeSmart" onclick="setSplitMode('smart',this)">智能段落</button>
+            <button class="ratio-btn" id="modeShort" onclick="setSplitMode('short',this)">短镜头</button>
+            <button class="ratio-btn" id="modeLong" onclick="setSplitMode('long',this)">长段落</button>
+            <span style="flex:1;"></span>
+            <button class="send-btn" onclick="splitScript()" style="width:auto;padding:0 20px;font-size:13px;">拆成分镜</button>
+          </div>
+          <div class="script-shots" id="scriptShots"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- IMAGE GEN TAB -->
+    <div id="imageGenTab" style="display:none;flex:1;overflow-y:auto;">
+      <div class="history-panel">
+        <div class="history-header">
+          <h3>图片生成</h3>
+          <p>使用 AI 生成角色立绘、场景图、服装参考图</p>
+        </div>
+        <div class="image-gen-panel" style="display:block;">
+          <div class="image-gen-row" style="flex-direction:column;gap:8px;">
+            <div style="display:flex;gap:4px;flex-wrap:wrap;">
+              <span class="tlabel" style="line-height:22px;">模板</span>
+              <button class="tpl-btn" id="tpl_scene_angle" onclick="applyTemplate('scene_angle')">场景换视角</button>
+              <button class="tpl-btn" id="tpl_char_turnaround" onclick="applyTemplate('char_turnaround')">角色三视图</button>
+              <button class="tpl-btn" id="tpl_char_portrait" onclick="applyTemplate('char_portrait')">真人短剧定妆</button>
+              <button class="tpl-btn" id="tpl_outfit_ref" onclick="applyTemplate('outfit_ref')">服装参考</button>
+              <button class="tpl-btn" id="tpl_storyboard" onclick="applyTemplate('storyboard')">分镜构图</button>
+              <button class="tpl-btn" id="tpl_group_photo" onclick="applyTemplate('group_photo')">人物同场合照</button>
+              <button class="tpl-btn" id="tpl_scene_master" onclick="applyTemplate('scene_master')">场景母图</button>
+              <button class="tpl-btn" id="tpl_video_first_frame" onclick="applyTemplate('video_first_frame')">视频首帧</button>
+            </div>
+            <div id="templateStatus" style="display:none;align-items:center;gap:8px;font-size:11px;color:var(--accent);">
+              <span id="templateLabel">已选模板：场景换视角</span>
+              <button class="ratio-btn" onclick="toggleTemplateDetail()">查看详情</button>
+              <button class="ratio-btn" onclick="cancelTemplate()">取消模板</button>
+            </div>
+            <div id="templateDetail" style="display:none;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:11px;color:var(--text-muted);line-height:1.6;max-height:120px;overflow-y:auto;white-space:pre-wrap;"></div>
+            <div style="font-size:10px;color:var(--text-muted);display:flex;gap:12px;">
+              <span>📋 模板：负责稳定结构和质量</span>
+              <span>✏️ 补充：负责本次具体变化</span>
+            </div>
+            <textarea class="image-gen-prompt" id="imagePrompt" placeholder="写你的补充要求，例如：换成夜晚、镜头从楼梯上方俯拍、保持红色沙发" rows="3"></textarea>
+            <div class="image-gen-controls">
+              <select class="model-select" id="imageModelSelect"></select>
+              <select class="model-select" id="imageRatioSelect"></select>
+              <input class="model-select" id="customSizeInput" placeholder="宽x高" style="display:none;width:100px;text-align:center;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;font-family:inherit;padding:4px 6px;outline:none;" oninput="imageCustomSize=this.value">
+              <button class="send-btn" id="imageGenBtn" onclick="generateImage()" style="width:auto;padding:0 14px;font-size:13px;" title="生成图片">生成</button>
+            </div>
+          </div>
+          <div class="image-ref-area">
+            <div class="image-ref-header">
+              <span class="tlabel">风格参考</span>
+              <div id="imageStyleBadge" style="display:none;align-items:center;gap:6px;font-size:11px;color:var(--accent);">
+                <img id="imageStyleThumb" style="width:28px;height:28px;border-radius:4px;object-fit:cover;display:none;">
+                <span id="imageStyleName">-</span>
+                <button class="ratio-btn" onclick="selectedStyleId=null;updateImageStyleSlot();" style="font-size:10px;">✕</button>
+              </div>
+              <span style="font-size:10px;color:var(--text-muted);" id="noImageStyle">未选择（从左侧风格库点击添加）</span>
+            </div>
+          </div>
+          <div class="image-ref-area">
+            <div class="image-ref-header">
+              <span class="tlabel">参考图片</span>
+              <span class="ref-hint" id="refModelHint"></span>
+              <div class="ref-header-actions">
+                <button class="ratio-btn" onclick="addImageRefFromUpload()">+ 上传</button>
+                <button class="ratio-btn" onclick="addImageRefFromLib()">从素材库选</button>
+                <button class="ratio-btn" onclick="clearImageRefs()">清空</button>
+              </div>
+            </div>
+            <div class="image-refs" id="imageRefs">
+              <div class="image-ref-empty">无参考图（文生图模式）</div>
+            </div>
+          </div>
+          <div class="image-gen-result" id="imageGenResult"></div>
+          <div class="result-stash" id="resultStash" style="display:none;">
+            <div class="stash-header">
+              <span class="tlabel">最近生成（快速预览）</span>
+              <button class="ratio-btn" onclick="clearImageStash()">清空</button>
+            </div>
+            <div class="stash-preview" id="stashPreviewArea" style="display:none;"></div>
+            <div class="stash-list" id="stashList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORY TAB -->
+    <div id="historyTab">
+      <div class="history-panel" id="historyPanel"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MODALS ===== -->
+<div class="modal-bg" id="charModal">
+  <div class="modal">
+    <h3>新建角色</h3>
+    <input type="text" id="charNameInput" placeholder="角色名称（如：女主、男主、配角A）" autocomplete="off">
+    <div class="modal-btns">
+      <button onclick="closeCharModal()">取消</button>
+      <button class="primary" onclick="createChar()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- Style Modal -->
+<div class="modal-bg" id="styleModal">
+  <div class="modal" style="width:420px;">
+    <h3 id="styleModalTitle">新建风格</h3>
+    <input type="text" id="styleNameInput" placeholder="风格名称" autocomplete="off">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <img id="styleThumbPreview" style="width:48px;height:48px;border-radius:6px;object-fit:cover;background:var(--surface2);display:none;">
+      <button class="ratio-btn" onclick="document.getElementById('styleThumbInput').click()">上传缩略图</button>
+      <input type="file" id="styleThumbInput" accept="image/*" style="display:none" onchange="uploadStyleThumb(this)">
+    </div>
+    <textarea id="stylePromptInput" placeholder="正向风格 prompt" rows="3" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;font-family:inherit;padding:6px 8px;resize:vertical;outline:none;margin-bottom:8px;"></textarea>
+    <textarea id="styleNegInput" placeholder="负向约束 prompt" rows="2" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;font-family:inherit;padding:6px 8px;resize:vertical;outline:none;margin-bottom:8px;"></textarea>
+    <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;color:var(--text-dim);">
+      <label><input type="checkbox" id="styleUseImage" checked> 用于图片生成</label>
+      <label><input type="checkbox" id="styleUseVideo" checked> 用于视频生成</label>
+    </div>
+    <div class="modal-btns">
+      <button onclick="closeStyleModal()">取消</button>
+      <button class="primary" onclick="saveStyle()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Check Modal -->
+<div class="modal-bg" id="checkModal">
+  <div class="modal" style="width:400px;max-height:80vh;overflow-y:auto;">
+    <h3 id="checkModalTitle">生成前检查</h3>
+    <div id="checkContent" style="font-size:12px;color:var(--text-dim);line-height:1.8;"></div>
+    <div style="margin-top:10px;font-size:11px;color:var(--text-muted);">
+      <label><input type="checkbox" id="checkSkipCb"> 本次不再提示</label>
+    </div>
+    <div class="modal-btns" style="margin-top:12px;">
+      <button onclick="closeCheckModal(false)">取消</button>
+      <button class="primary" onclick="closeCheckModal(true)">继续生成</button>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden File Inputs -->
+<input type="file" id="imgFileInput" accept="image/*" multiple>
+<input type="file" id="audioFileInput" accept="audio/mp3,audio/mpeg" multiple>
+<input type="file" id="directFileInput" accept="image/*,video/mp4,video/mov,video/quicktime">
+
+<!-- Error Banner -->
+<div id="apiErrorBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#c0392b;color:#fff;font-size:12px;padding:6px 12px;text-align:center;cursor:pointer;" onclick="this.style.display='none'">⚠️ 接口加载失败，部分功能不可用（点击关闭）</div>
+
+<!-- Debug Overlay -->
+<div id="debugOverlay" style="display:none;position:fixed;bottom:0;right:0;width:420px;max-height:260px;z-index:9998;background:rgba(0,0,0,0.92);border:1px solid #333;border-radius:8px 0 0 0;font-family:monospace;font-size:11px;color:#0f0;overflow-y:auto;padding:8px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:4px;">
+    <span>🐛 Debug Console</span>
+    <button onclick="document.getElementById('debugOverlay').style.display='none'" style="background:none;border:none;color:#f66;cursor:pointer;font-size:14px;">✕</button>
+  </div>
+  <div id="debugLog"></div>
+</div>
+
+<!-- Init Fallback -->
+<div id="initError" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;z-index:9997;">
+  <div style="font-size:48px;">⚠️</div>
+  <h2 style="color:#e4e4ed;margin:12px 0;">初始化失败</h2>
+  <p id="initErrorMsg" style="color:#9d9db5;font-size:13px;max-width:400px;"></p>
+  <button onclick="location.reload()" style="margin-top:16px;padding:8px 24px;background:#5b8def;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">重试</button>
+</div>
+
+<!-- ===== SCRIPTS ===== -->
+<script>
+// ── Error Handling & Debug ───────────────────────────────────
+var _debugMode = (function() { return /[?&]debug=1/.test(location.search); })();
+var _apiErrors = [];
+
+function _debugLog(tag, msg) {
+  if (!_debugMode) return;
+  var ov = document.getElementById('debugOverlay');
+  if (!ov || ov.style.display === 'none') {
+    if (_debugMode) { ov.style.display = 'block'; }
+    else return;
+  }
+  var log = document.getElementById('debugLog');
+  var line = document.createElement('div');
+  var ts = new Date().toLocaleTimeString();
+  line.style.cssText = 'padding:1px 0;border-bottom:1px solid #1a1a1a;';
+  line.innerHTML = '<span style="color:#888;">' + ts + '</span> <span style="color:#ff0;">[' + tag + ']</span> ' + msg;
+  log.appendChild(line);
+  if (log.children.length > 80) log.firstChild.remove();
+  ov.scrollTop = ov.scrollHeight;
+}
+
+window.onerror = function(msg, src, line, col, err) {
+  console.error('[onerror]', msg, src, line, col);
+  _debugLog('ERROR', (msg || '') + ' @ ' + (src || '') + ':' + (line || '') + ':' + (col || ''));
+  return false;
+};
+
+window.addEventListener('unhandledrejection', function(ev) {
+  console.error('[unhandledrejection]', ev.reason);
+  _debugLog('REJECT', (ev.reason && ev.reason.message) || String(ev.reason || ''));
+  // Show API error banner for fetch failures
+  if (ev.reason && ev.reason.message && ev.reason.message.indexOf('fetch') >= 0 || String(ev.reason || '').indexOf('NetworkError') >= 0) {
+    _showApiErrorBanner();
+  }
+});
+
+function _showApiErrorBanner() {
+  var banner = document.getElementById('apiErrorBanner');
+  if (banner) { banner.style.display = 'block'; }
+  _debugLog('API', '接口加载失败提示已显示');
+}
+
+/**
+ * Safe fetch wrapper: console.error + UI banner on failure.
+ * Usage: safeFetch('/api/xxx').then(...).catch(...)
+ */
+function safeFetch(url, opts) {
+  _debugLog('FETCH', '→ ' + url);
+  return fetch(url, opts).then(function(res) {
+    _debugLog('FETCH', '← ' + url + ' ' + res.status);
+    if (!res.ok) {
+      console.error('接口返回错误: ' + url + ' status=' + res.status);
+      _showApiErrorBanner();
+    }
+    return res;
+  }).catch(function(e) {
+    console.error('接口加载失败: ' + url, e);
+    _showApiErrorBanner();
+    _debugLog('FETCH', '✕ ' + url + ' ' + (e.message || ''));
+    throw e;
+  });
+}
+
+// ── State ────────────────────────────────────────────────────
+let characters = {};
+let assets = { outfits: [], scenes: [], audios: [] };
+let history = [];
+let selectedRefs = [];
+let currentSideTab = 'chars';
+let currentAtTab = 'chars';
+let currentMainTab = 'studio';
+let atPickerOpen = false;
+let selectedRatio = '9:16';
+let selectedDuration = 5;
+let optimizePrompt = true;
+let videoModel = 'seedance';
+let selectedResolution = '720p';
+let modelCaps = {};
+let imageModel = 'gpt-image-2';
+let imageRatio = '1:1';
+let imageCustomSize = '';
+let lastGenImageUrl = '';
+let imageRefs = [];
+let imageStash = [];
+let activeStashIdx = -1;
+let selectedTemplate = '';
+let splitMode = 'smart';
+let scriptModel = 'doubao';
+let styles = [];
+let selectedStyleId = null;
+let videoStyleId = null;
+let editingStyleId = null;
+let _styleThumbUrl = '';
+let _currentSegments = [];
+let sessionImageResults = [];
+let sessionVideoResults = [];
+let skipImageCheck = false;
+let skipVideoCheck = false;
+const IMAGE_MODEL_LABELS = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'volc-seedream-4-5': 'Seedream 4.5' };
+const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'kling-v30-pro': 'Kling v3.0 Pro', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
+
+// Mirror of app.py NANO_GPT_NAMES for frontend model filtering
+const NANO_GPT_NAMES = new Set(['kling-v30-pro','grok-imagine-video','vidu-q3','seedance-v15-pro']);
+
+// ── Init ─────────────────────────────────────────────────────
+let _initDone = false;
+async function init() {
+  _debugLog('INIT', '开始初始化...');
+  // Load each API independently so one failure doesn't block others
+  const fetchers = [
+    safeFetch('/api/characters').then(r => r.json()).then(d => { characters = d || {}; }).catch(function(e) { console.error('加载角色失败:', e); }),
+    safeFetch('/api/assets/outfits').then(r => r.json()).then(d => { assets.outfits = d || []; }).catch(function(e) { console.error('加载服装失败:', e); }),
+    safeFetch('/api/assets/scenes').then(r => r.json()).then(d => { assets.scenes = d || []; }).catch(function(e) { console.error('加载场景失败:', e); }),
+    safeFetch('/api/assets/audios').then(r => r.json()).then(d => { assets.audios = d || []; }).catch(function(e) { console.error('加载音频失败:', e); }),
+    safeFetch('/api/styles').then(r => r.json()).then(d => { styles = d || []; }).catch(function(e) { console.error('加载风格失败:', e); }),
+    safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; }).catch(function(e) { console.error('加载历史失败:', e); })
+  ];
+  await Promise.allSettled(fetchers);
+  _initDone = true;
+  buildDurBtns();
+  buildModelSelect();
+  buildImageSelects();
+  renderSidebar();
+  updateRefSlots();
+  // If already on history tab, re-render now that data is loaded
+  if (currentMainTab === 'history') renderHistory();
+}
+
+// ── Duration Buttons ─────────────────────────────────────────
+function buildDurBtns() {
+  const w = document.getElementById('durBtns');
+  w.innerHTML = '';
+  for (let s = 4; s <= 15; s++) {
+    const b = document.createElement('button');
+    b.className = 'dur-btn' + (s === 5 ? ' active' : '');
+    b.textContent = s + 's';
+    b.onclick = (() => { const n = s; return () => setDuration(n, b); })();
+    w.appendChild(b);
+  }
+}
+
+function setRatio(btn) {
+  selectedRatio = btn.dataset.r;
+  document.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setDuration(s, btn) {
+  selectedDuration = s;
+  document.querySelectorAll('.dur-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function toggleOptimize() {
+  optimizePrompt = !optimizePrompt;
+  document.getElementById('optimizeToggle').classList.toggle('on', optimizePrompt);
+}
+
+function setVideoModel(val) {
+  videoModel = val;
+  buildResSelect();
+}
+
+function updateVideoStyleSlot() {
+  const badge = document.getElementById('videoStyleBadge');
+  const clearBtn = document.getElementById('videoStyleClear');
+  const thumb = document.getElementById('videoStyleThumb');
+  if (videoStyleId) {
+    const s = styles.find(s => s.id === videoStyleId);
+    badge.textContent = s ? s.name : videoStyleId;
+    badge.style.color = 'var(--accent)';
+    if (clearBtn) clearBtn.style.display = 'inline-block';
+    if (thumb && s && s.thumbnail_url) { thumb.src = s.thumbnail_url; thumb.style.display = 'inline-block'; }
+    else if (thumb) thumb.style.display = 'none';
+  } else {
+    badge.textContent = '未选择';
+    badge.style.color = 'var(--text-muted)';
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (thumb) thumb.style.display = 'none';
+  }
+}
+
+function updateImageStyleSlot() {
+  const badge = document.getElementById('imageStyleBadge');
+  const nameEl = document.getElementById('imageStyleName');
+  const thumb = document.getElementById('imageStyleThumb');
+  const noStyle = document.getElementById('noImageStyle');
+  if (selectedStyleId) {
+    const s = styles.find(s => s.id === selectedStyleId);
+    if (badge) badge.style.display = 'flex';
+    if (nameEl) nameEl.textContent = s ? s.name : '';
+    if (thumb && s && s.thumbnail_url) { thumb.src = s.thumbnail_url; thumb.style.display = 'block'; }
+    else if (thumb) thumb.style.display = 'none';
+    if (noStyle) noStyle.style.display = 'none';
+  } else {
+    if (badge) badge.style.display = 'none';
+    if (noStyle) noStyle.style.display = 'inline';
+  }
+}
+
+async function buildModelSelect() {
+  try {
+    const res = await fetch('/api/models').then(r => r.json());
+    const sel = document.getElementById('modelSelect');
+    if (!sel || !res.models) return;
+    sel.innerHTML = '';
+    const labels = {
+      'seedance': 'Seedance (火山)',
+      'kling-v30-pro': 'Kling v3.0 Pro',
+      'grok-imagine-video': 'Grok Imagine',
+      'vidu-q3': 'Vidu Q3',
+      'seedance-v15-pro': 'Seedance v1.5 Pro',
+      'third-party': '第三方模型'
+    };
+    res.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = labels[m] || m;
+      if (m === videoModel) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    // Disable nano models if not available
+    if (!res.nano_available) {
+      sel.querySelectorAll('option').forEach(opt => {
+        if (NANO_GPT_NAMES.has(opt.value)) opt.disabled = true;
+      });
+    }
+    // Disable third-party if not available
+    if (!res.third_party_available) {
+      const tpo = sel.querySelector('option[value="third-party"]');
+      if (tpo) tpo.disabled = true;
+    }
+    // Store model caps
+    if (res.caps) modelCaps = res.caps;
+    buildResSelect();
+  } catch (e) {
+    console.error('加载模型列表失败:', e);
+  }
+}
+
+function buildResSelect() {
+  let sel = document.getElementById('resSelect');
+  if (!sel) return;
+  const caps = modelCaps[videoModel] || {};
+  const resolutions = caps.resolutions || ['480p','720p'];
+  sel.innerHTML = '';
+  resolutions.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r; opt.textContent = r;
+    if (r === selectedResolution) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  // If current resolution not supported, pick first available
+  if (!resolutions.includes(selectedResolution)) {
+    selectedResolution = resolutions[0];
+    sel.value = selectedResolution;
+  }
+}
+
+// ── Image Gen UI ─────────────────────────────────────────────
+async function buildImageSelects() {
+  try {
+    const res = await fetch('/api/image-models').then(r => r.json());
+    // Model select
+    const mSel = document.getElementById('imageModelSelect');
+    mSel.innerHTML = '';
+    const labels = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'volc-seedream-4-5': 'Seedream 4.5' };
+    (res.models || []).forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = labels[m] || m;
+      if (m === imageModel) opt.selected = true;
+      mSel.appendChild(opt);
+    });
+    mSel.onchange = () => { imageModel = mSel.value; };
+    // Ratio select
+    const rSel = document.getElementById('imageRatioSelect');
+    rSel.innerHTML = '';
+    (res.ratios || []).forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r;
+      opt.textContent = r === 'custom' ? '自定义' : r;
+      if (r === imageRatio) opt.selected = true;
+      rSel.appendChild(opt);
+    });
+    rSel.onchange = () => {
+      imageRatio = rSel.value;
+      const customInput = document.getElementById('customSizeInput');
+      customInput.style.display = imageRatio === 'custom' ? 'inline-block' : 'none';
+    };
+  } catch (e) {
+    console.error('加载图片模型失败:', e);
+  }
+}
+
+async function generateImage() {
+  checkBeforeImageGen(async function(proceed) {
+    if (!proceed) return;
+    await _doGenerateImage();
+  });
+}
+
+async function _doGenerateImage() {
+  const userInput = document.getElementById('imagePrompt').value.trim();
+  // Combine template + user supplement
+  // storyboard template: user content first, template rules appended
+  const templateText = selectedTemplate ? (PROMPT_TEMPLATES[selectedTemplate] || '') : '';
+  const prompt = templateText
+    ? (selectedTemplate === 'storyboard'
+        ? (userInput + '\n\n【分镜构图规则】\n' + templateText).trim()
+        : (templateText + '\n' + userInput).trim())
+    : userInput;
+  if (!prompt) return;
+  const btn = document.getElementById('imageGenBtn');
+  btn.disabled = true;
+  btn.textContent = '...';
+  renderImageResults(true);
+
+  try {
+    const r = await fetch('/api/generate-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, image_model: imageModel, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map(r => ({ url: r.url })), style_id: selectedStyleId || undefined })
+    }).then(r => r.json());
+
+    if (r.error) {
+      sessionImageResults.push({ error: r.error, time: new Date().toLocaleString(), model: imageModel, prompt: prompt.substring(0, 80) });
+    } else {
+      lastGenImageUrl = r.url;
+      addToStash(r.url, r.name || '生成图片');
+      activeStashIdx = 0;
+      sessionImageResults.push({
+        url: r.url, name: r.name || '生成图片',
+        time: new Date().toLocaleString(),
+        model: imageModel, ratio: imageRatio || r.ratio || '-',
+        prompt: prompt.substring(0, 80),
+        refCount: imageRefs.length
+      });
+    }
+  } catch (e) {
+    sessionImageResults.push({ error: '网络错误', time: new Date().toLocaleString(), model: imageModel, prompt: prompt.substring(0, 80) });
+  }
+  btn.disabled = false;
+  btn.textContent = '生成';
+  renderImageResults(false);
+}
+
+function renderImageResults(generating) {
+  const el = document.getElementById('imageGenResult');
+  el.classList.add('show');
+  let html = '';
+
+  // Section header
+  var totalOk = sessionImageResults.filter(function(r) { return r.url; }).length;
+  if (totalOk > 0) {
+    html += '<div class="result-section-header" style="display:flex;align-items:center;gap:8px;padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:8px;">' +
+      '<span style="font-size:14px;">📸</span>' +
+      '<span style="font-size:12px;font-weight:600;color:var(--text);">本次图片结果</span>' +
+      '<span style="font-size:10px;color:var(--text-muted);">共 ' + totalOk + ' 张</span>' +
+      '</div>';
+  }
+
+  if (generating) {
+    html += '<div class="generating" style="padding:12px 0;"><div class="spinner"></div><div class="gen-status" style="margin-top:8px;">生成中...</div></div>';
+  }
+  sessionImageResults.slice().reverse().forEach(function(r, i) {
+    if (r.error) {
+      html += '<div class="error-state" style="margin:4px 0;"><p>' + escHtml(r.error) + '</p><div style="font-size:10px;color:var(--text-muted);">' + r.time + '</div></div>';
+    } else {
+      html += '<div class="result-card" style="margin:6px 0;">' +
+        '<img src="' + r.url + '" style="width:100%;max-height:260px;object-fit:contain;background:var(--surface3);display:block;" loading="lazy">' +
+        '<div class="result-meta"><div class="meta-left">' +
+        '<span class="meta-badge">' + (IMAGE_MODEL_LABELS[r.model] || r.model) + '</span>' +
+        '<span class="meta-badge">' + (r.ratio || '-') + '</span>' +
+        '<span class="meta-badge" style="font-size:9px;color:var(--text-muted);">' + r.time + '</span>' +
+        '</div></div>' +
+        '<div style="font-size:10px;color:var(--text-muted);padding:0 8px 6px;">' + escHtml(r.prompt || '') + '</div>' +
+        '<div class="result-actions" style="padding:0 8px 8px;">' +
+        '<button onclick="window.open(\'' + escAttr(r.url) + '\')">下载</button>' +
+        '<button onclick="sessionImageToChar(\'' + escAttr(r.url) + '\')">加入角色库</button>' +
+        '<button onclick="sessionImageToLib(\'scenes\',\'' + escAttr(r.url) + '\')">场景库</button>' +
+        '<button onclick="sessionImageToLib(\'outfits\',\'' + escAttr(r.url) + '\')">服装库</button>' +
+        '<button onclick="sessionImageToRefs(\'' + escAttr(r.url) + '\')">参考素材</button>' +
+        '<button onclick="sessionImageToStoryboard(\'' + escAttr(r.url) + '\')">设为分镜参考</button>' +
+        '</div></div>';
+    }
+  });
+  el.innerHTML = html;
+}
+
+function sessionImageToChar(url) {
+  const ids = Object.keys(characters);
+  if (!ids.length) { openCharModal(); alert('请先创建角色'); return; }
+  characters[ids[0]].images = characters[ids[0]].images || [];
+  characters[ids[0]].images.push({ url, name: 'AI生成' });
+  saveCharacters(); renderSidebar();
+}
+
+async function sessionImageToLib(cat, url) {
+  assets[cat].push({ url, name: 'AI生成' });
+  await fetch('/api/assets/' + cat, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(assets[cat]) });
+  renderSidebar();
+}
+
+function sessionImageToRefs(url) {
+  selectRef({ url, role_label: '参考图片', type: 'image', name: 'AI生成' });
+}
+
+function sessionImageToStoryboard(url) {
+  clearSlot('storyboard');
+  selectRef({ url, role_label: '分镜构图参考', type: 'image', name: '分镜参考' });
+}
+
+function addImageToChar() {
+  if (!lastGenImageUrl) return;
+  // Find first character or prompt to create one
+  const charIds = Object.keys(characters);
+  if (charIds.length === 0) {
+    openCharModal();
+    alert('请先创建角色，再重新点击"加入角色库"');
+    return;
+  }
+  const id = charIds[0];
+  characters[id].images = characters[id].images || [];
+  characters[id].images.push({ url: lastGenImageUrl, name: 'AI生成' });
+  saveCharacters();
+  renderSidebar();
+}
+
+async function addImageToLib(cat) {
+  if (!lastGenImageUrl) return;
+  assets[cat].push({ url: lastGenImageUrl, name: 'AI生成' });
+  await fetch(`/api/assets/${cat}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(assets[cat])
+  });
+  renderSidebar();
+}
+
+function addImageToRefs() {
+  if (!lastGenImageUrl) return;
+  selectRef({ url: lastGenImageUrl, role_label: '参考图片', type: 'image', name: 'AI生成' });
+}
+
+// ── Prompt Templates ────────────────────────────────────────
+const PROMPT_TEMPLATES = {
+  scene_angle: '基于参考图生成同一场景的另一个机位视角。保持空间结构、装修风格、主要家具、材质、色调、光线方向一致。改变镜头位置和构图，让画面像同一真实空间中的连续镜头。不要改变房间类型，不要新增不合理家具，不要让门窗、楼梯、沙发、桌椅位置逻辑混乱。真人短剧质感，真实摄影风格，画面清晰，适合后续图生视频。',
+  char_turnaround: '基于参考人物生成同一角色的三视图设定图：正面、侧面、背面。保持同一人物身份、脸型轮廓、五官比例、发型、发色、身材比例、服装款式和颜色完全一致。三视图并排展示，站姿自然，光线均匀，背景简洁。不要换脸，不要改变年龄，不要改变性别，不要改变服装，不要生成不同人物。真人短剧角色定妆照质感，高清清晰。',
+  char_portrait: '基于参考人物生成真人短剧角色定妆照。保持人物身份特征、脸型轮廓、五官比例、发型、发色、气质和服装主特征一致。生成真实人物质感，五官清晰，皮肤自然，表情自然有戏，适合短剧角色档案和后续视频参考。避免廉价网红脸、过度磨皮、塑料感、年龄漂移、性别变化、欧美化、脸部变形。半身构图，柔和棚拍光，背景简洁。',
+  outfit_ref: '基于参考图生成真人短剧服装参考图。重点保持服装款式、颜色、面料质感、版型、领口、袖口、腰线、配饰和整体穿搭风格一致。人物姿态自然，服装完整清晰可见，正面展示为主。不要改变服装设计，不要让衣服穿模，不要增加多余配饰，不要遮挡关键服装细节。真实摄影质感，背景简洁，适合后续作为服装参考图。',
+  storyboard: '基于当前剧情生成一张专业导演分镜构图参考图，用于后续视频生成。画面可以采用导演分镜板形式，展示同一段剧情的关键镜头设计。可以包含 3-9 个小画面，每个小画面代表一个镜头构图，例如远景、全景、中景、近景、特写、高角度、低角度、侧面、背影、俯拍等。每个小画面必须围绕同一场景、同一组人物和同一段剧情，不要生成无关画面。每个小画面要清楚表达镜头景别、机位角度、人物站位、主体动作、情绪重点、场景空间关系、前景/中景/背景层次和光线氛围。人物脸部只需要表达大致方向和表情，不要过于具体，不要生成真实明星脸或固定真人身份。重点是镜头构图、人物站位、动作关系、景别变化和场景调度。可以有简单镜头标记或景别缩写，但不要出现大段文字。不要生成字幕、对白气泡、水印、Logo。构图清晰，画面可读性强。风格跟随当前选择的风格库，如果没有选择风格，使用电影导演分镜板风格，画面干净，镜头感强，光影明确。',
+  group_photo: '基于多张人物参考图，生成这些角色在同一场景中的合照。保持每个角色各自的脸型、五官、发型、年龄感、气质和服装特征，不要混脸，不要换脸，不要把一个人的五官套到另一个人身上。人物站位自然，比例正确，互动关系清楚，真人短剧质感，真实摄影风格，画面清晰。',
+  scene_master: '生成一个可长期复用的真人短剧场景母图。场景空间结构清楚，主要家具和关键物件位置明确，风格统一，光线稳定，适合后续多个镜头反复参考。画面中不要出现人物，不要出现文字、水印、商标。构图尽量展示完整空间关系，真实摄影风格，高清清晰。',
+  video_first_frame: '生成适合作为图生视频首帧的画面。主体清楚，动作处于可继续运动的起始状态，人物表情自然，画面边缘不要裁切头部和身体关键部位。背景稳定，光线统一，构图适合后续镜头运动。不要加入文字、水印、边框、拼贴元素。真人短剧摄影质感，高清清晰。'
+};
+function applyTemplate(key) {
+  if (!key) return;
+  // Toggle: if same template clicked again, deselect
+  if (selectedTemplate === key) { cancelTemplate(); return; }
+  selectedTemplate = key;
+  // Update button highlights
+  document.querySelectorAll('.tpl-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('tpl_' + key);
+  if (btn) btn.classList.add('active');
+  // Show status bar
+  const labels = {
+    scene_angle: '场景换视角', char_turnaround: '角色三视图', char_portrait: '真人短剧定妆',
+    outfit_ref: '服装参考', storyboard: '分镜构图', group_photo: '人物同场合照',
+    scene_master: '场景母图', video_first_frame: '视频首帧'
+  };
+  document.getElementById('templateLabel').textContent = '已选模板：' + (labels[key] || key);
+  document.getElementById('templateStatus').style.display = 'flex';
+  document.getElementById('templateDetail').style.display = 'none';
+  document.getElementById('templateDetail').textContent = PROMPT_TEMPLATES[key] || '';
+}
+
+function cancelTemplate() {
+  selectedTemplate = '';
+  document.querySelectorAll('.tpl-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('templateStatus').style.display = 'none';
+  document.getElementById('templateDetail').style.display = 'none';
+}
+
+function toggleTemplateDetail() {
+  const el = document.getElementById('templateDetail');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// ── Image Result Stash ──────────────────────────────────────
+function addToStash(url, name) {
+  imageStash.unshift({ url, name: name || '生成图片' });
+  if (imageStash.length > 6) imageStash = imageStash.slice(0, 6);
+  renderStash();
+}
+function clearImageStash() { imageStash = []; activeStashIdx = -1; renderStash(); }
+function removeStashItem(idx) {
+  imageStash.splice(idx, 1);
+  if (activeStashIdx >= imageStash.length) activeStashIdx = imageStash.length - 1;
+  renderStash();
+}
+function renderStash() {
+  const container = document.getElementById('resultStash');
+  const list = document.getElementById('stashList');
+  if (!imageStash.length) { container.style.display = 'none'; return; }
+  container.style.display = 'block';
+  list.innerHTML = imageStash.map((item, i) => `
+    <div class="stash-item${i === activeStashIdx ? ' active' : ''}" onclick="previewStashItem(${i})">
+      <img src="${item.url}" loading="lazy">
+      <button class="stash-del" onclick="event.stopPropagation();removeStashItem(${i})">✕</button>
+    </div>`).join('');
+}
+function previewStashItem(idx) {
+  activeStashIdx = idx;
+  const item = imageStash[idx];
+  if (!item) return;
+  // Show preview in dedicated stash preview area — do NOT overwrite session results
+  var previewArea = document.getElementById('stashPreviewArea');
+  if (previewArea) {
+    previewArea.style.display = 'block';
+    previewArea.innerHTML = '<div style="position:relative;display:inline-block;max-width:100%;">' +
+      '<img src="' + item.url + '" alt="生成图片" style="max-width:100%;max-height:300px;object-fit:contain;background:var(--surface3);border-radius:8px;display:block;">' +
+      '<button onclick="document.getElementById(\'stashPreviewArea\').style.display=\'none\'" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.6);border:none;color:#fff;cursor:pointer;border-radius:4px;padding:2px 6px;font-size:11px;">✕ 关闭</button>' +
+      '</div>' +
+      '<div class="image-gen-actions" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;">' +
+      '<a href="' + item.url + '" download style="text-decoration:none;"><button>下载</button></a>' +
+      '<button onclick="stashAction(\'char\',' + idx + ')">加入角色库</button>' +
+      '<button onclick="stashAction(\'scenes\',' + idx + ')">加入场景库</button>' +
+      '<button onclick="stashAction(\'outfits\',' + idx + ')">加入服装库</button>' +
+      '<button onclick="stashAction(\'refs\',' + idx + ')">加入参考素材</button>' +
+      '</div>';
+  }
+  renderStash();
+}
+function stashAction(action, idx) {
+  const item = imageStash[idx];
+  if (!item) return;
+  if (action === 'char') {
+    const ids = Object.keys(characters);
+    if (!ids.length) { openCharModal(); alert('请先创建角色'); return; }
+    characters[ids[0]].images = characters[ids[0]].images || [];
+    characters[ids[0]].images.push({ url: item.url, name: item.name });
+    saveCharacters(); renderSidebar();
+  } else if (action === 'scenes' || action === 'outfits') {
+    addImageToLib(action);
+  } else if (action === 'refs') {
+    lastGenImageUrl = item.url;
+    selectRef({ url: item.url, role_label: '参考图片', type: 'image', name: item.name });
+  }
+}
+
+// ── Image Reference Management ───────────────────────────────
+function renderImageRefs() {
+  const container = document.getElementById('imageRefs');
+  if (!imageRefs.length) {
+    container.innerHTML = '<div class="image-ref-empty">无参考图（文生图模式）</div>';
+    document.getElementById('refModelHint').textContent = '';
+    return;
+  }
+  container.innerHTML = imageRefs.map((ref, i) => `
+    <div class="image-ref-item">
+      <img src="${ref.url}" loading="lazy">
+      <button class="ref-del" onclick="removeImageRef(${i})">✕</button>
+    </div>`).join('');
+  document.getElementById('refModelHint').textContent = `已选 ${imageRefs.length} 张`;
+}
+
+function addImageRef(url, name) {
+  if (imageRefs.length >= 10) { alert('最多10张参考图'); return; }
+  imageRefs.push({ url, name: name || '参考图' });
+  renderImageRefs();
+}
+
+function removeImageRef(idx) {
+  imageRefs.splice(idx, 1);
+  renderImageRefs();
+}
+
+function clearImageRefs() {
+  imageRefs = [];
+  renderImageRefs();
+}
+
+async function addImageRefFromUpload() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
+  inp.onchange = async () => {
+    for (const f of inp.files) {
+      const fd = new FormData(); fd.append('file', f);
+      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      addImageRef(r.url, f.name);
+    }
+  };
+  inp.click();
+}
+
+async function addImageRefFromLib() {
+  // Build a quick picker: show all character/scene/outfit images
+  const allImages = [];
+  const seen = new Set();
+  for (const [id, ch] of Object.entries(characters)) {
+    for (const img of (ch.images || [])) {
+      if (!seen.has(img.url)) { allImages.push({ url: img.url, name: ch.name }); seen.add(img.url); }
+    }
+  }
+  for (const cat of ['scenes', 'outfits']) {
+    for (const a of (assets[cat] || [])) {
+      if (!seen.has(a.url)) { allImages.push({ url: a.url, name: a.name || cat }); seen.add(a.url); }
+    }
+  }
+  if (!allImages.length) { alert('素材库无图片，请先上传'); return; }
+  // Show as overlay grid
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  let gridHtml = '<div style=\"background:var(--surface);border-radius:12px;padding:16px;max-width:500px;max-height:80vh;overflow-y:auto;\"><h3 style=\"margin-bottom:10px;font-size:14px;\">选择参考图片</h3><div style=\"display:grid;grid-template-columns:repeat(4,1fr);gap:6px;\">';
+  allImages.forEach((img, i) => {
+    gridHtml += `<div style=\"cursor:pointer;border-radius:6px;overflow:hidden;border:2px solid transparent;aspect-ratio:1;\" onclick=\"addImageRef('${img.url}','${escAttr(img.name)}');document.getElementById('libPickerOverlay').remove();\"><img src=\"${img.url}\" style=\"width:100%;height:100%;object-fit:cover;\" loading=\"lazy\"></div>`;
+  });
+  gridHtml += '</div></div>';
+  overlay.innerHTML = gridHtml;
+  overlay.id = 'libPickerOverlay';
+  document.body.appendChild(overlay);
+}
+
+// ── Tab Switching ────────────────────────────────────────────
+function switchMainTab(tab) {
+  currentMainTab = tab;
+  document.getElementById('studioTab').style.display = tab === 'studio' ? 'flex' : 'none';
+  document.getElementById('historyTab').style.display = tab === 'history' ? 'block' : 'none';
+  document.getElementById('topbarStudio').classList.toggle('active', tab === 'studio');
+  document.getElementById('topbarHistory').classList.toggle('active', tab === 'history');
+  document.getElementById('topbarImageGen').classList.toggle('active', tab === 'imageGen');
+  document.getElementById('imageGenTab').style.display = tab === 'imageGen' ? 'block' : 'none';
+  document.getElementById('scriptWSTab').style.display = tab === 'scriptWS' ? 'block' : 'none';
+  document.getElementById('topbarScriptWS').classList.toggle('active', tab === 'scriptWS');
+  if (tab === 'history') {
+    if (!_initDone) {
+      document.getElementById('historyPanel').innerHTML = `
+        <div class="history-header"><h3>生成历史</h3></div>
+        <div class="generating" style="padding:40px 0;"><div class="spinner"></div><div class="gen-status" style="margin-top:12px;">加载中…</div></div>`;
+    } else {
+      renderHistory();
+    }
+  }
+}
+
+function switchSideTab(tab) {
+  currentSideTab = tab;
+  document.querySelectorAll('.sidebar-tab').forEach((el, i) => {
+    el.classList.toggle('active', ['chars', 'outfits', 'scenes', 'audios', 'styles'][i] === tab);
+  });
+  renderSidebar();
+}
+
+function switchAtTab(tab) {
+  currentAtTab = tab;
+  document.querySelectorAll('.at-tab').forEach((el, i) => {
+    el.classList.toggle('active', ['chars', 'outfits', 'scenes', 'audios', 'history'][i] === tab);
+  });
+  renderAtGrid();
+}
+
+// ── HTML escape ──────────────────────────────────────────────
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── Sidebar Rendering ────────────────────────────────────────
+function renderSidebar() {
+  const el = document.getElementById('sideContent');
+  if (currentSideTab === 'chars') {
+    let html = '';
+    for (const [id, c] of Object.entries(characters)) {
+      html += `
+        <div class="char-card">
+          <div class="char-name-row">
+            <span class="char-name">${escHtml(c.name)}</span>
+            <button class="char-del" onclick="deleteChar('${id}')" title="删除角色">✕</button>
+          </div>
+          <div class="sec-label">脸部 / 形象图片</div>
+          <div class="char-images">
+            ${(c.images || []).map((img, i) => `<img src="${img.url}" title="点击删除" onclick="removeCharImg('${id}',${i})" loading="lazy">`).join('')}
+            <button class="add-img-btn" onclick="addCharImg('${id}')" title="添加图片">+</button>
+          </div>
+          <div class="sec-label" style="margin-top:8px;">角色音频</div>
+          <div class="char-audios">
+            ${(c.audios || []).map((a, i) => `
+              <div class="audio-row">
+                <span>🎵</span>
+                <span class="aname">${escHtml(a.name || '音频')}</span>
+                <button onclick="playAudio('${a.url}')" title="播放">▶</button>
+                <button class="adel" onclick="removeCharAudio('${id}',${i})" title="删除">✕</button>
+              </div>`).join('')}
+            <div class="add-audio-row" onclick="addCharAudio('${id}')">+ 上传音频</div>
+          </div>
+        </div>`;
+    }
+    html += `<button class="new-char-btn" onclick="openCharModal()">＋ 新建角色</button>`;
+    el.innerHTML = html;
+  } else if (currentSideTab === 'styles') {
+    let html = `<div class="asset-grid">`;
+    styles.forEach((s, i) => {
+      const thumb = s.thumbnail_url || '';
+      html += `<div class="asset-item" onclick="selectStyleFromSidebar(${i})">
+        ${thumb ? `<img src="${thumb}" loading="lazy" alt="${escHtml(s.name)}">` : `<div class="audio-thumb"><div class="icon">🎨</div><div>${escHtml(s.name)}</div></div>`}
+        <div class="asset-label">${escHtml(s.name)}<br><span style="font-size:9px;color:var(--text-muted);">${s.use_for_image ? '📷图' : ''}${s.use_for_video ? '🎬视频' : ''}</span></div>
+        <button class="asset-del-btn" onclick="event.stopPropagation();deleteStyle('${s.id}')">✕</button>
+      </div>`;
+    });
+    html += `<div class="add-asset-btn" onclick="openStyleModal()">＋ 新建风格</div></div>`;
+    el.innerHTML = html;
+  } else {
+    const cat = currentSideTab;
+    const list = assets[cat] || [];
+    let html = `<div class="asset-grid">`;
+    html += list.map((a, i) => cat === 'audios'
+      ? `<div class="asset-item" onclick="selectAssetFromSidebar('${cat}',${i})">
+           <div class="audio-thumb"><div class="icon">🎵</div><div>${escHtml(a.name || '音频')}</div></div>
+           <div class="asset-label">${escHtml(a.name || '')}</div>
+           <button class="asset-del-btn" onclick="event.stopPropagation();deleteAsset('${cat}',${i})">✕</button>
+         </div>`
+      : `<div class="asset-item" onclick="selectAssetFromSidebar('${cat}',${i})">
+           <img src="${a.url}" loading="lazy" alt="${escHtml(a.name || '')}">
+           <div class="asset-label">${escHtml(a.name || '')}</div>
+           <button class="asset-del-btn" onclick="event.stopPropagation();deleteAsset('${cat}',${i})">✕</button>
+         </div>`
+    ).join('');
+    const label = cat === 'outfits' ? '服装' : cat === 'scenes' ? '场景' : '音频';
+    html += `<div class="add-asset-btn" onclick="addAsset('${cat}')">＋ 上传${label}</div></div>`;
+    el.innerHTML = html;
+  }
+}
+
+// ── Select asset from sidebar ────────────────────────────────
+function selectAssetFromSidebar(cat, idx) {
+  const list = assets[cat] || [];
+  const a = list[idx];
+  if (!a) return;
+  if (cat === 'audios') {
+    selectRef({ url: a.url, role_label: '参考音频', type: 'audio', name: a.name || '音频' });
+  } else if (cat === 'outfits') {
+    selectRef({ url: a.url, role_label: '服装参考', type: 'image', name: a.name || '服装' });
+  } else if (cat === 'scenes') {
+    selectRef({ url: a.url, role_label: '场景参考', type: 'image', name: a.name || '场景' });
+  }
+}
+
+// ── Character CRUD ───────────────────────────────────────────
+function openCharModal() {
+  document.getElementById('charModal').classList.add('show');
+  document.getElementById('charNameInput').value = '';
+  document.getElementById('charNameInput').focus();
+}
+function closeCharModal() { document.getElementById('charModal').classList.remove('show'); }
+
+async function createChar() {
+  const name = document.getElementById('charNameInput').value.trim();
+  if (!name) return;
+  const id = 'char_' + Date.now();
+  characters[id] = { name, images: [], audios: [] };
+  await saveCharacters();
+  closeCharModal();
+  renderSidebar();
+}
+
+function deleteChar(id) {
+  if (!confirm('确认删除角色"' + characters[id].name + '"？')) return;
+  delete characters[id];
+  saveCharacters();
+  renderSidebar();
+}
+
+async function saveCharacters() {
+  await fetch('/api/characters', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(characters)
+  });
+}
+
+function addCharImg(id) {
+  const inp = document.getElementById('imgFileInput');
+  inp.multiple = true;
+  inp.onchange = async () => {
+    for (const f of inp.files) {
+      const fd = new FormData(); fd.append('file', f);
+      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      characters[id].images = characters[id].images || [];
+      characters[id].images.push({ url: r.url, name: f.name });
+    }
+    await saveCharacters();
+    renderSidebar();
+  };
+  inp.value = ''; inp.click();
+}
+
+function removeCharImg(id, idx) {
+  characters[id].images.splice(idx, 1);
+  saveCharacters();
+  renderSidebar();
+}
+
+function addCharAudio(id) {
+  const inp = document.getElementById('audioFileInput');
+  inp.onchange = async () => {
+    for (const f of inp.files) {
+      const fd = new FormData(); fd.append('file', f);
+      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      characters[id].audios = characters[id].audios || [];
+      characters[id].audios.push({ url: r.url, name: f.name });
+    }
+    await saveCharacters();
+    renderSidebar();
+  };
+  inp.value = ''; inp.click();
+}
+
+function removeCharAudio(id, idx) {
+  characters[id].audios.splice(idx, 1);
+  saveCharacters();
+  renderSidebar();
+}
+
+function playAudio(url) {
+  new Audio(url).play().catch(e => console.error('播放失败:', e));
+}
+
+// ── Style CRUD ───────────────────────────────────────────────
+function openStyleModal(styleId) {
+  editingStyleId = styleId || null;
+  document.getElementById('styleModalTitle').textContent = styleId ? '编辑风格' : '新建风格';
+  const s = styleId ? styles.find(s => s.id === styleId) : null;
+  document.getElementById('styleNameInput').value = s ? s.name : '';
+  document.getElementById('stylePromptInput').value = s ? (s.prompt || '') : '';
+  document.getElementById('styleNegInput').value = s ? (s.negative_prompt || '') : '';
+  document.getElementById('styleUseImage').checked = s ? s.use_for_image !== false : true;
+  document.getElementById('styleUseVideo').checked = s ? s.use_for_video !== false : true;
+  const preview = document.getElementById('styleThumbPreview');
+  if (s && s.thumbnail_url) { preview.src = s.thumbnail_url; preview.style.display = 'block'; }
+  else { preview.style.display = 'none'; }
+  _styleThumbUrl = s ? (s.thumbnail_url || '') : '';
+  document.getElementById('styleModal').classList.add('show');
+  document.getElementById('styleNameInput').focus();
+}
+function closeStyleModal() { document.getElementById('styleModal').classList.remove('show'); editingStyleId = null; _styleThumbUrl = ''; }
+
+async function uploadStyleThumb(input) {
+  const f = input.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+  _styleThumbUrl = r.url;
+  document.getElementById('styleThumbPreview').src = r.url;
+  document.getElementById('styleThumbPreview').style.display = 'block';
+}
+
+async function saveStyle() {
+  const name = document.getElementById('styleNameInput').value.trim();
+  if (!name) return;
+  const style = {
+    id: editingStyleId || ('style_' + Date.now()),
+    name,
+    thumbnail_url: _styleThumbUrl,
+    prompt: document.getElementById('stylePromptInput').value.trim(),
+    negative_prompt: document.getElementById('styleNegInput').value.trim(),
+    use_for_image: document.getElementById('styleUseImage').checked,
+    use_for_video: document.getElementById('styleUseVideo').checked,
+    created_at: new Date().toISOString().slice(0, 16).replace('T', ' ')
+  };
+  if (editingStyleId) {
+    const idx = styles.findIndex(s => s.id === editingStyleId);
+    if (idx >= 0) styles[idx] = style;
+  } else {
+    styles.unshift(style);
+  }
+  await saveStyles();
+  closeStyleModal();
+  if (currentSideTab === 'styles') renderSidebar();
+}
+
+async function saveStyles() {
+  await fetch('/api/styles', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(styles) });
+}
+
+function deleteStyle(id) {
+  const s = styles.find(s => s.id === id);
+  if (!confirm('确认删除风格"' + (s ? s.name : '') + '"？')) return;
+  styles = styles.filter(s => s.id !== id);
+  saveStyles();
+  if (currentSideTab === 'styles') renderSidebar();
+}
+
+function selectStyleFromSidebar(idx) {
+  const s = styles[idx]; if (!s) return;
+  selectedStyleId = s.id;
+  videoStyleId = s.id;
+  updateImageStyleSlot();
+  updateVideoStyleSlot();
+}
+
+// ── Asset Library CRUD ───────────────────────────────────────
+function addAsset(cat) {
+  const isAudio = cat === 'audios';
+  const inp = document.getElementById(isAudio ? 'audioFileInput' : 'imgFileInput');
+  inp.multiple = true;
+  inp.onchange = async () => {
+    for (const f of inp.files) {
+      const fd = new FormData(); fd.append('file', f);
+      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      assets[cat].push({ url: r.url, name: f.name });
+    }
+    await fetch(`/api/assets/${cat}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(assets[cat])
+    });
+    renderSidebar();
+  };
+  inp.value = ''; inp.click();
+}
+
+function deleteAsset(cat, idx) {
+  assets[cat].splice(idx, 1);
+  fetch(`/api/assets/${cat}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(assets[cat])
+  });
+  renderSidebar();
+}
+
+// ── Direct Upload ────────────────────────────────────────────
+function openDirectUpload() {
+  const inp = document.getElementById('directFileInput');
+  inp.onchange = async () => {
+    const f = inp.files[0];
+    if (!f) return;
+    const fd = new FormData(); fd.append('file', f);
+    const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+    const isVideo = f.type.startsWith('video/');
+    selectRef({
+      url: r.url,
+      role_label: isVideo ? '参考视频' : '多图参考',
+      type: isVideo ? 'video' : 'image',
+      name: f.name
+    });
+  };
+  inp.value = ''; inp.click();
+}
+
+// ── Script Input / Editor ────────────────────────────────────
+const scriptInput = document.getElementById('scriptInput');
+
+function getEditorText() {
+  let text = '';
+  scriptInput.childNodes.forEach(node => {
+    if (node.nodeType === 3) {
+      text += node.textContent;
+    } else if (node.classList && (node.classList.contains('inline-ref') || node.classList.contains('inline-audio'))) {
+      return;
+    } else {
+      text += node.textContent || '';
+    }
+  });
+  return text;
+}
+
+scriptInput.addEventListener('paste', e => {
+  e.preventDefault();
+  const text = e.clipboardData.getData('text/plain');
+  document.execCommand('insertText', false, text);
+});
+
+scriptInput.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeAtPicker(); return; }
+  if (e.key === '@') {
+    const sel = window.getSelection();
+    if (sel.rangeCount) window._savedRange = sel.getRangeAt(0).cloneRange();
+    setTimeout(openAtPicker, 30);
+  }
+});
+
+scriptInput.addEventListener('input', () => {
+  const txt = getEditorText();
+  if (txt[txt.length - 1] === '@') {
+    const sel = window.getSelection();
+    if (sel.rangeCount) window._savedRange = sel.getRangeAt(0).cloneRange();
+    openAtPicker();
+  } else if (atPickerOpen && !txt.includes('@')) {
+    closeAtPicker();
+  }
+});
+
+scriptInput.addEventListener('compositionend', () => {
+  const txt = getEditorText();
+  if (txt[txt.length - 1] === '@') {
+    const sel = window.getSelection();
+    if (sel.rangeCount) window._savedRange = sel.getRangeAt(0).cloneRange();
+    openAtPicker();
+  }
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.script-wrap')) closeAtPicker();
+});
+
+// ── @ Picker ─────────────────────────────────────────────────
+function openAtPicker() {
+  atPickerOpen = true;
+  document.getElementById('atPicker').classList.add('show');
+  renderAtGrid();
+}
+
+function closeAtPicker() {
+  atPickerOpen = false;
+  document.getElementById('atPicker').classList.remove('show');
+}
+
+function renderAtGrid() {
+  const grid = document.getElementById('atGrid');
+  let html = '';
+  if (currentAtTab === 'chars') {
+    for (const [id, c] of Object.entries(characters)) {
+      const firstImg = (c.images || []).length > 0 ? c.images[0].url : '';
+      const cJson = JSON.stringify(c).replace(/'/g, "\\'");
+      html += `<div class="at-item" onclick='selectAllCharRef(${cJson})'>
+        ${firstImg ? `<img src="${firstImg}" loading="lazy">` : '<div class="at-audio"><div class="icon">👤</div></div>'}
+        <div class="at-label">${escHtml(c.name)}</div></div>`;
+    }
+  } else if (currentAtTab === 'outfits') {
+    assets.outfits.forEach((a, i) => {
+      html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"服装参考",type:"image",name:a.name||("服装"+i)})})'>
+        <img src="${a.url}" loading="lazy"><div class="at-label">${escHtml(a.name||'')}</div></div>`;
+    });
+  } else if (currentAtTab === 'scenes') {
+    assets.scenes.forEach((a, i) => {
+      html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"场景参考",type:"image",name:a.name||("场景"+i)})})'>
+        <img src="${a.url}" loading="lazy"><div class="at-label">${escHtml(a.name||'')}</div></div>`;
+    });
+  } else if (currentAtTab === 'audios') {
+    assets.audios.forEach((a, i) => {
+      html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"参考音频",type:"audio",name:a.name||("音频"+i)})})'>
+        <div class="at-audio"><div class="icon">🎵</div><div>${escHtml(a.name||'音频')}</div></div></div>`;
+    });
+  } else if (currentAtTab === 'history') {
+    history.slice(0, 10).forEach((h, i) => {
+      html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:h.video_url,role_label:"参考视频",type:"video",name:"历史"+(i+1)})})'>
+        <video src="${h.video_url}" muted></video><div class="at-label">${escHtml(h.time||'')}</div></div>`;
+    });
+    if (!history.length) html = `<div class="at-empty">暂无历史视频</div>`;
+  }
+  if (!html) html = `<div class="at-empty">暂无素材，请先上传</div>`;
+  grid.innerHTML = html;
+}
+
+// ── Inline Ref Insertion ─────────────────────────────────────
+function insertInlineRef(ref) {
+  scriptInput.focus();
+  const sel = window.getSelection();
+  let range;
+  if (window._savedRange) {
+    try { sel.removeAllRanges(); sel.addRange(window._savedRange); } catch (e) { /* ignore */ }
+    range = window._savedRange;
+    window._savedRange = null;
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(scriptInput);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  // Remove @ before cursor
+  const r = sel.getRangeAt(0);
+  const node = r.startContainer;
+  if (node.nodeType === 3) {
+    const txt = node.textContent;
+    const at = txt.lastIndexOf('@', r.startOffset);
+    if (at !== -1) {
+      node.textContent = txt.slice(0, at) + txt.slice(at + 1);
+      r.setStart(node, at); r.setEnd(node, at);
+      sel.removeAllRanges(); sel.addRange(r);
+    }
+  }
+
+  // Create inline element
+  let el;
+  if (ref.type === 'audio') {
+    el = document.createElement('span');
+    el.className = 'inline-audio';
+    el.contentEditable = 'false';
+    el.textContent = '🎵 ' + (ref.name || '');
+  } else {
+    el = document.createElement('img');
+    el.className = 'inline-ref';
+    el.src = ref.url;
+    el.alt = ref.role_label;
+    el.title = ref.role_label;
+    el.contentEditable = 'false';
+  }
+  const r2 = sel.getRangeAt(0);
+  r2.insertNode(el);
+  r2.setStartAfter(el); r2.collapse(true);
+  sel.removeAllRanges(); sel.addRange(r2);
+
+  // Zero-width space
+  const sp = document.createTextNode('\u200B');
+  sel.getRangeAt(0).insertNode(sp);
+  sel.getRangeAt(0).setStartAfter(sp); sel.getRangeAt(0).collapse(true);
+}
+
+// ── Remove inline elements for a ref ─────────────────────────
+function removeInlineRef(ref) {
+  scriptInput.querySelectorAll('.inline-ref, .inline-audio').forEach(el => {
+    if (el.tagName === 'IMG' && el.src) {
+      if (el.src === ref.url || el.src.includes(ref.url.split('/').pop())) {
+        el.remove();
+      }
+    } else if (el.classList.contains('inline-audio') && ref.type === 'audio') {
+      el.remove();
+    }
+  });
+}
+
+// ── selectRef (core) ─────────────────────────────────────────
+function selectRef(ref) {
+  closeAtPicker();
+
+  // Check limits
+  const imgCount = selectedRefs.filter(r => r.type === 'image').length;
+  if (ref.type === 'image' && imgCount >= 10) {
+    alert('图片参考已达上限10张');
+    return;
+  }
+  if (ref.type === 'audio' && selectedRefs.find(r => r.type === 'audio')) {
+    alert('已有音频参考，请先移除');
+    return;
+  }
+  if (ref.type === 'video' && selectedRefs.find(r => r.type === 'video')) {
+    alert('已有视频参考，请先移除');
+    return;
+  }
+
+  insertInlineRef(ref);
+  selectedRefs.push(ref);
+  updateRefSlots();
+}
+
+function selectAllCharRef(ch) {
+  closeAtPicker();
+  const existingImgs = selectedRefs.filter(r => r.type === 'image').length;
+  const slots = Math.max(0, 10 - existingImgs);
+  const toAddImgs = (ch.images || []).slice(0, slots);
+  toAddImgs.forEach((img, i) => {
+    const ref = { url: img.url, role_label: ch.name, type: 'image', name: ch.name + '图' + (existingImgs + i + 1) };
+    insertInlineRef(ref);
+    selectedRefs.push(ref);
+  });
+  if ((ch.images || []).length > slots) {
+    alert('图片参考已达上限10张，仅添加了前' + slots + '张');
+  }
+  if ((ch.audios || []).length > 0 && !selectedRefs.find(r => r.type === 'audio')) {
+    const a = ch.audios[0];
+    const ref = { url: a.url, role_label: ch.name + '声音', type: 'audio', name: ch.name + '音频' };
+    insertInlineRef(ref);
+    selectedRefs.push(ref);
+  }
+  updateRefSlots();
+}
+
+// ── Update Reference Slots UI ────────────────────────────────
+function updateRefSlots() {
+  // Categorize refs by role_label
+  const charRefs = selectedRefs.filter(r =>
+    r.type === 'image' &&
+    (r.role_label || '').indexOf('服装') === -1 &&
+    (r.role_label || '').indexOf('场景') === -1 &&
+    (r.role_label || '').indexOf('首帧') === -1 &&
+    (r.role_label || '').indexOf('尾帧') === -1 &&
+    (r.role_label || '').indexOf('多图') === -1 &&
+    (r.role_label || '').indexOf('分镜构图') === -1
+  );
+  const storyboardRef = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('分镜构图') >= 0);
+  const multiRefs = selectedRefs.filter(r =>
+    r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0
+  );
+  const outfitRefs = selectedRefs.filter(r =>
+    r.type === 'image' && (r.role_label || '').indexOf('服装') >= 0
+  );
+  const sceneRefs = selectedRefs.filter(r =>
+    r.type === 'image' && (r.role_label || '').indexOf('场景') >= 0
+  );
+  const firstFrameRef = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('首帧') >= 0);
+  const lastFrameRef = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('尾帧') >= 0);
+  const audioRef = selectedRefs.find(r => r.type === 'audio');
+  const videoRef = selectedRefs.find(r => r.type === 'video');
+
+  updateSlotUI('character', charRefs);
+  updateSlotUI('outfit', outfitRefs);
+  updateSlotUI('scene', sceneRefs);
+  updateSlotUI('storyboard', storyboardRef ? [storyboardRef] : []);
+  updateSlotUI('firstframe', firstFrameRef ? [firstFrameRef] : []);
+  updateSlotUI('lastframe', lastFrameRef ? [lastFrameRef] : []);
+  updateSlotUI('multiref', multiRefs);
+  updateSlotUI('audio', audioRef ? [audioRef] : []);
+  updateSlotUI('video', videoRef ? [videoRef] : []);
+
+  document.getElementById('imgCount').textContent = selectedRefs.length;
+}
+
+function updateSlotUI(slotName, refs) {
+  const slot = document.querySelector(`.ref-slot[data-slot="${slotName}"]`);
+  if (!slot) return;
+
+  // Map slot names to HTML element ID suffixes
+  const idSuffix = { character: 'Char', outfit: 'Outfit', scene: 'Scene', storyboard: 'Storyboard', audio: 'Audio', video: 'Video', firstframe: 'Firstframe', lastframe: 'Lastframe', multiref: 'Multiref' }[slotName] || slotName;
+  const countEl = document.getElementById('slotCount' + idSuffix);
+  const previewEl = document.getElementById('slotPreview' + idSuffix);
+
+  if (refs.length === 0) {
+    slot.classList.remove('filled', 'has-multiple');
+    if (countEl) { countEl.style.display = 'none'; countEl.textContent = '0'; }
+    if (previewEl) {
+      previewEl.style.display = 'none';
+      if (previewEl.tagName === 'VIDEO') previewEl.src = '';
+    }
+  } else {
+    slot.classList.add('filled');
+    if (countEl) {
+      countEl.textContent = refs.length;
+      countEl.style.display = refs.length > 1 ? 'flex' : 'none';
+    }
+    if (refs.length > 1) slot.classList.add('has-multiple');
+    else slot.classList.remove('has-multiple');
+
+    if (previewEl && refs[0]) {
+      if (slotName === 'video') {
+        previewEl.style.display = 'block';
+        previewEl.src = refs[0].url;
+      } else if (slotName === 'audio') {
+        previewEl.style.display = 'flex';
+        // Show audio filename
+        const nameEl = previewEl.querySelector('.audio-name');
+        if (nameEl) nameEl.textContent = refs[0].name || '音频';
+      } else {
+        previewEl.style.display = 'block';
+        previewEl.src = refs[0].url;
+      }
+    }
+  }
+}
+
+// ── Focus / Clear Slots ──────────────────────────────────────
+function focusSlot(slotName) {
+  const tabMap = { character: 'chars', outfit: 'outfits', scene: 'scenes', audio: 'audios', video: 'history' };
+  if (tabMap[slotName]) {
+    switchAtTab(tabMap[slotName]);
+    openAtPicker();
+  }
+}
+
+function clearSlot(slotName) {
+  // Categorize which refs to remove (mirrors updateRefSlots logic)
+  const isCharImg = (r) => r.type === 'image' && (r.role_label || '').indexOf('服装') === -1 && (r.role_label || '').indexOf('场景') === -1;
+  const isOutfit = (r) => r.type === 'image' && (r.role_label || '').indexOf('服装') >= 0;
+  const isScene  = (r) => r.type === 'image' && (r.role_label || '').indexOf('场景') >= 0;
+
+  let removed = [];
+  if (slotName === 'character') {
+    removed = selectedRefs.filter(r => isCharImg(r));
+    selectedRefs = selectedRefs.filter(r => !isCharImg(r));
+  } else if (slotName === 'outfit') {
+    removed = selectedRefs.filter(r => isOutfit(r));
+    selectedRefs = selectedRefs.filter(r => !isOutfit(r));
+  } else if (slotName === 'scene') {
+    removed = selectedRefs.filter(r => isScene(r));
+    selectedRefs = selectedRefs.filter(r => !isScene(r));
+  } else if (slotName === 'audio') {
+    removed = selectedRefs.filter(r => r.type === 'audio');
+    selectedRefs = selectedRefs.filter(r => r.type !== 'audio');
+  } else if (slotName === 'video') {
+    removed = selectedRefs.filter(r => r.type === 'video');
+    selectedRefs = selectedRefs.filter(r => r.type !== 'video');
+  } else if (slotName === 'firstframe') {
+    removed = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('首帧') >= 0);
+    selectedRefs = selectedRefs.filter(r => !(r.type === 'image' && (r.role_label || '').indexOf('首帧') >= 0));
+  } else if (slotName === 'lastframe') {
+    removed = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('尾帧') >= 0);
+    selectedRefs = selectedRefs.filter(r => !(r.type === 'image' && (r.role_label || '').indexOf('尾帧') >= 0));
+  } else if (slotName === 'storyboard') {
+    removed = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('分镜构图') >= 0);
+    selectedRefs = selectedRefs.filter(r => !(r.type === 'image' && (r.role_label || '').indexOf('分镜构图') >= 0));
+  } else if (slotName === 'multiref') {
+    removed = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0);
+    selectedRefs = selectedRefs.filter(r => !(r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0));
+  }
+
+  // Remove corresponding inline elements from editor
+  removed.forEach(ref => removeInlineRef(ref));
+
+  // Also clean any orphan inline elements (safety)
+  const remainingUrls = new Set(selectedRefs.map(r => r.url));
+  scriptInput.querySelectorAll('.inline-ref').forEach(img => {
+    let found = false;
+    for (const url of remainingUrls) {
+      if (img.src === url || (url && img.src.includes(url.split('/').pop()))) { found = true; break; }
+    }
+    if (!found) img.remove();
+  });
+  if (!selectedRefs.find(r => r.type === 'audio')) {
+    scriptInput.querySelectorAll('.inline-audio').forEach(span => span.remove());
+  }
+
+  updateRefSlots();
+}
+
+// ── removeRef by index (for external use) ────────────────────
+function removeRef(idx) {
+  if (idx < 0 || idx >= selectedRefs.length) return;
+  const ref = selectedRefs[idx];
+  removeInlineRef(ref);
+  selectedRefs.splice(idx, 1);
+  updateRefSlots();
+}
+
+// ── clearSelectedRefs (unified reset) ────────────────────────
+function clearSelectedRefs() {
+  // 1. Clear the array
+  selectedRefs = [];
+
+  // 2. Remove all inline ref elements from the editor
+  scriptInput.querySelectorAll('.inline-ref').forEach(el => el.remove());
+  scriptInput.querySelectorAll('.inline-audio').forEach(el => el.remove());
+
+  // 3. Reset all slot UIs (previews, counts, filled states)
+  updateRefSlots();
+
+  // 4. Reset imgCount
+  document.getElementById('imgCount').textContent = '0';
+}
+
+// ── Pre-Generation Check ──────────────────────────────────────
+let _checkCallback = null;
+
+function openCheckModal(title, items, warnings, skipVar, callback) {
+  document.getElementById('checkModalTitle').textContent = title;
+  document.getElementById('checkSkipCb').checked = false;
+  let html = '';
+  items.forEach(item => {
+    html += '<div style="display:flex;justify-content:space-between;"><span>' + item.label + '</span><span style="color:var(--text-muted);">' + item.value + '</span></div>';
+  });
+  if (warnings.length > 0) {
+    html += '<div style="margin-top:8px;color:var(--warning);font-size:11px;">⚠️ 风险提示：</div>';
+    warnings.forEach(w => { html += '<div style="color:var(--warning);font-size:11px;">· ' + w + '</div>'; });
+  }
+  document.getElementById('checkContent').innerHTML = html;
+  _checkCallback = function(proceed) {
+    if (proceed && document.getElementById('checkSkipCb').checked) {
+      if (skipVar === 'image') skipImageCheck = true;
+      else skipVideoCheck = true;
+    }
+    callback(proceed);
+  };
+  document.getElementById('checkModal').classList.add('show');
+}
+
+function closeCheckModal(proceed) {
+  document.getElementById('checkModal').classList.remove('show');
+  if (_checkCallback) _checkCallback(proceed);
+  _checkCallback = null;
+}
+
+function checkBeforeImageGen(callback) {
+  if (skipImageCheck) { callback(true); return; }
+  const promptText = document.getElementById('imagePrompt').value.trim();
+  const promptLen = promptText.length;
+  const items = [
+    { label: '图片模型', value: IMAGE_MODEL_LABELS[imageModel] || imageModel },
+    { label: '尺寸', value: imageRatio === 'custom' ? (imageCustomSize || '自定义') : imageRatio },
+    { label: '风格', value: selectedStyleId ? ((styles.find(s => s.id === selectedStyleId) || {}).name || '已选') : '未选择' },
+    { label: '参考图数量', value: imageRefs.length + ' 张' },
+    { label: 'prompt字数', value: promptLen + ' 字' + (promptLen < 10 ? ' ⚠️' : '') },
+  ];
+  const warnings = [];
+  if (!selectedStyleId) warnings.push('风格可能不统一（建议从左侧风格库选择风格）');
+  if (imageRefs.length > 0 && promptLen < 10) warnings.push('图生图但prompt太短，变化方向可能不明确');
+  if (imageRefs.length > 5) warnings.push('参考图超过5张，可能互相冲突');
+  if (selectedTemplate === 'char_turnaround' && !Object.keys(characters).length) warnings.push('生成三视图但没有角色参考，角色一致性可能差');
+  openCheckModal('图片生成前检查', items, warnings, 'image', callback);
+}
+
+function checkBeforeVideoGen(callback) {
+  if (skipVideoCheck) { callback(true); return; }
+  const script = getEditorText().replace(/\u200B/g, '').trim();
+  const promptLen = script.length;
+  const charRefs = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('服装') === -1 && (r.role_label || '').indexOf('场景') === -1 && (r.role_label || '').indexOf('分镜') === -1 && (r.role_label || '').indexOf('首帧') === -1 && (r.role_label || '').indexOf('尾帧') === -1 && (r.role_label || '').indexOf('多图') === -1 && (r.role_label || '').indexOf('风格') === -1);
+  const sceneRefs = selectedRefs.filter(r => (r.role_label || '').indexOf('场景') >= 0);
+  const storyRef = selectedRefs.find(r => (r.role_label || '').indexOf('分镜') >= 0);
+  const firstRef = selectedRefs.find(r => (r.role_label || '').indexOf('首帧') >= 0);
+  const items = [
+    { label: '视频模型', value: VIDEO_MODEL_LABELS[videoModel] || videoModel },
+    { label: '比例', value: selectedRatio },
+    { label: '时长', value: selectedDuration + 's' },
+    { label: '分辨率', value: selectedResolution },
+    { label: '角色参考', value: charRefs.length + ' 张' + (charRefs.length === 0 ? ' ⚠️' : '') },
+    { label: '场景参考', value: sceneRefs.length + ' 张' + (sceneRefs.length === 0 ? ' ⚠️' : '') },
+    { label: '分镜参考', value: storyRef ? '✅ 已选' : '未选择' },
+    { label: '首帧/尾帧', value: firstRef ? '✅ 已选' : '未选择' },
+    { label: '风格', value: videoStyleId ? ((styles.find(s => s.id === videoStyleId) || {}).name || '已选') : '未选择' },
+    { label: 'prompt字数', value: promptLen + ' 字' + (promptLen < 20 ? ' ⚠️' : '') },
+  ];
+  const warnings = [];
+  if (charRefs.length === 0) warnings.push('没有角色参考，角色脸可能不稳定');
+  if (sceneRefs.length === 0) warnings.push('没有场景参考，场景可能漂移');
+  if (!storyRef && !firstRef) warnings.push('没有分镜参考且没有首帧，构图可能随机');
+  if (promptLen < 20) warnings.push('prompt太短，动作和情绪可能不明确');
+  if (selectedRefs.length > 6) warnings.push('参考图超过6张，可能互相干扰');
+  if (videoModel === 'kling-v30-pro' || videoModel === 'vidu-q3') warnings.push('当前模型成本较高');
+  openCheckModal('视频生成前检查', items, warnings, 'video', callback);
+}
+
+// ── Generate ─────────────────────────────────────────────────
+async function generate() {
+  checkBeforeVideoGen(async function(proceed) {
+    if (!proceed) return;
+    await _doGenerate();
+  });
+}
+
+async function _doGenerate() {
+  const script = getEditorText().replace(/\u200B/g, '').trim();
+  if (!script && !selectedRefs.length) return;
+
+  const images = selectedRefs.filter(r => r.type === 'image').map(r => ({
+    url: r.url,
+    role_label: r.role_label
+  }));
+  const audio = selectedRefs.find(r => r.type === 'audio');
+  const video = selectedRefs.find(r => r.type === 'video');
+  const firstFrame = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('首帧') >= 0);
+  const lastFrame = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('尾帧') >= 0);
+  const storyboard = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('分镜构图') >= 0);
+
+  document.getElementById('sendBtn').disabled = true;
+  document.getElementById('projectStatus').textContent = '生成中...';
+  const currentRatio2 = selectedRatio;
+  const currentDuration2 = selectedDuration;
+  const currentResolution2 = selectedResolution;
+  const currentVModel2 = videoModel;
+  const currentPrompt2 = (getEditorText().replace(/\u200B/g, '').trim() || '无描述').substring(0, 80);
+  const currentRefCount2 = selectedRefs.length;
+  sessionVideoResults.push({ generating: true, time: new Date().toLocaleString(), ratio: currentRatio2, duration: currentDuration2, resolution: currentResolution2, model: currentVModel2, prompt: currentPrompt2, refCount: currentRefCount2, tags: [] });
+  renderVideoResults();
+
+  let res;
+  try {
+    res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        script,
+        images,
+        audio_url: audio ? audio.url : undefined,
+        video_url: video ? video.url : undefined,
+        first_frame_url: firstFrame ? firstFrame.url : undefined,
+        last_frame_url: lastFrame ? lastFrame.url : undefined,
+        storyboard_ref_url: storyboard ? storyboard.url : undefined,
+        ratio: selectedRatio,
+        duration: selectedDuration,
+        optimize_prompt: optimizePrompt,
+        video_model: videoModel,
+        style_id: videoStyleId || undefined,
+        resolution: selectedResolution
+      })
+    }).then(r => r.json());
+  } catch (e) {
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('projectStatus').textContent = '就绪';
+    document.getElementById('resultArea').innerHTML = `
+      <div class="error-state">
+        <div class="icon">⚠️</div>
+        <p>网络错误，请检查连接后重试</p>
+      </div>`;
+    return;
+  }
+
+  pollJob(res.job_id, {
+    ratio: currentRatio2, duration: currentDuration2, resolution: currentResolution2,
+    model: currentVModel2, prompt: currentPrompt2, refCount: currentRefCount2
+  });
+}
+
+async function pollJob(jobId, meta) {
+  const iv = setInterval(async () => {
+    let r;
+    try {
+      r = await fetch(`/api/status/${jobId}`).then(r => r.json());
+    } catch (e) { return; }
+
+    if (r.status === 'succeeded') {
+      clearInterval(iv);
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('projectStatus').textContent = '就绪';
+      try { history = await fetch('/api/history').then(r => r.json()); } catch (e) {}
+      sessionVideoResults = sessionVideoResults.filter(v => !v.generating);
+      sessionVideoResults.push({
+        url: r.video_url, time: new Date().toLocaleString(),
+        ratio: meta.ratio, duration: meta.duration, resolution: meta.resolution,
+        model: meta.model, prompt: meta.prompt, refCount: meta.refCount,
+        tags: ['原始']
+      });
+      clearSelectedRefs();
+      renderVideoResults();
+    } else if (r.status === 'failed') {
+      clearInterval(iv);
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('projectStatus').textContent = '就绪';
+      sessionVideoResults = sessionVideoResults.filter(v => !v.generating);
+      sessionVideoResults.push({ error: r.error || '生成失败', time: new Date().toLocaleString(), ratio: meta.ratio, duration: meta.duration, resolution: meta.resolution, model: meta.model, prompt: meta.prompt, tags: [] });
+      renderVideoResults();
+    }
+  }, 8000);
+}
+
+function renderVideoResults() {
+  const el = document.getElementById('resultArea');
+  let html = '';
+
+  // Section header
+  var totalOk = sessionVideoResults.filter(function(v) { return v.url && !v.generating; }).length;
+  if (totalOk > 0) {
+    html += '<div class="result-section-header" style="display:flex;align-items:center;gap:8px;padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:8px;">' +
+      '<span style="font-size:14px;">🎬</span>' +
+      '<span style="font-size:12px;font-weight:600;color:var(--text);">本次视频结果</span>' +
+      '<span style="font-size:10px;color:var(--text-muted);">共 ' + totalOk + ' 段</span>' +
+      '</div>';
+  }
+
+  sessionVideoResults.slice().reverse().forEach(function(v, revIdx) {
+    const idx = sessionVideoResults.length - 1 - revIdx;
+    if (v.generating) {
+      html += '<div class="generating" style="margin:8px 0;"><div class="spinner"></div>' +
+        '<div class="gen-info"><div class="gen-status">正在生成镜头</div>' +
+        '<div class="gen-meta">' + v.ratio + ' · ' + v.duration + 's · ' + (v.resolution || '720p') + ' · ' + (VIDEO_MODEL_LABELS[v.model] || v.model) + '</div></div>' +
+        '<div class="gen-hint">AI 正在根据分镜描述和参考素材生成漫剧视频…</div></div>';
+    } else if (v.error) {
+      html += '<div class="error-state" style="margin:4px 0;"><div class="icon">❌</div><p>' + escHtml(v.error) + '</p><div style="font-size:10px;color:var(--text-muted);">' + v.time + ' · ' + v.ratio + ' · ' + v.duration + 's</div></div>';
+    } else {
+      // Build status tags
+      var tagsHtml = '';
+      var tgs = v.tags || [];
+      if (tgs.indexOf('原始') >= 0) tagsHtml += '<span class="meta-badge" style="background:var(--accent-dim);color:#fff;font-size:9px;">📌 原始</span>';
+      if (tgs.indexOf('已转1080p') >= 0) tagsHtml += '<span class="meta-badge" style="background:#7c3aed;color:#fff;font-size:9px;">🆙 已转1080p</span>';
+      if (tgs.indexOf('已入历史') >= 0) tagsHtml += '<span class="meta-badge" style="background:#059669;color:#fff;font-size:9px;">📋 已入历史</span>';
+      if (tgs.indexOf('已设为上一段') >= 0) tagsHtml += '<span class="meta-badge" style="background:#d97706;color:#fff;font-size:9px;">🔗 已设为上一段</span>';
+
+      html += '<div class="result-card" style="margin:8px 0;" id="vcard_' + idx + '">' +
+        (tagsHtml ? '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 8px 0;">' + tagsHtml + '</div>' : '') +
+        '<video src="' + escAttr(v.url) + '" controls autoplay loop playsinline preload="metadata" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"></video>' +
+        '<div class="video-fallback" style="display:none;aspect-ratio:9/16;align-items:center;justify-content:center;background:var(--surface3);color:var(--text-muted);font-size:13px;gap:8px;flex-direction:column;min-height:150px;">' +
+        '<span style="font-size:28px;">🎬</span><span>视频加载失败</span>' +
+        '<a href="' + escAttr(v.url) + '" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a></div>' +
+        '<div class="result-meta"><div class="meta-left">' +
+        '<span class="meta-badge">' + (VIDEO_MODEL_LABELS[v.model] || v.model) + '</span>' +
+        '<span class="meta-badge">' + (v.ratio || '-') + '</span>' +
+        '<span class="meta-badge">' + (v.duration || '-') + 's</span>' +
+        '<span class="meta-badge">' + (v.resolution || '720p') + '</span>' +
+        '<span class="meta-badge" style="font-size:9px;color:var(--text-muted);">' + v.time + '</span>' +
+        '</div></div>' +
+        '<div style="font-size:10px;color:var(--text-muted);padding:0 8px 6px;">' + escHtml(v.prompt || '') + ' · 素材 ' + (v.refCount || 0) + '</div>' +
+        '<div class="result-actions" style="padding:0 8px 8px;display:flex;flex-wrap:wrap;gap:4px;">' +
+        '<button onclick="copyVideoLink(\'' + escAttr(v.url) + '\',this)" title="复制链接">📋 复制链接</button>' +
+        '<button onclick="window.open(\'' + escAttr(v.url) + '\')" title="下载视频">⬇ 下载</button>' +
+        '<button onclick="upscaleVideo(\'' + escAttr(v.url) + '\',\'' + (v.ratio || '9:16') + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' +
+        '<button onclick="extractAndSetFrame(\'' + escAttr(v.url) + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' +
+        '<button onclick="extractAndSetFrame(\'' + escAttr(v.url) + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' +
+        '<button class="primary-action" onclick="setAsPreviousVideo(\'' + escAttr(v.url) + '\',' + idx + ')" title="设为上一段视频">🔗 设为上一段</button>' +
+        '<button style="color:var(--danger);" onclick="deleteVideoResult(' + idx + ')" title="删除本次结果">🗑 删除</button>' +
+        '</div>' +
+        '<div id="frameMenu_' + idx + '" style="display:none;padding:6px 8px;background:var(--surface2);border-top:1px solid var(--border);"></div>' +
+        '</div>';
+    }
+  });
+  if (!html) {
+    html = '<div class="empty-state"><div class="icon">🎥</div><h3>开始创作你的漫剧镜头</h3><p>选择角色与素材，编写分镜描述，一键生成专业漫剧视频</p></div>';
+  }
+  el.innerHTML = html;
+}
+
+function showResult(url) {
+  renderVideoResults();
+}
+
+// ── Video Result Actions ──────────────────────────────────────
+function copyVideoLink(url, btn) {
+  navigator.clipboard.writeText(url).then(function() {
+    if (btn) { var orig = btn.textContent; btn.textContent = '✅ 已复制'; setTimeout(function() { btn.textContent = orig; }, 1500); }
+  }).catch(function() {
+    // Fallback
+    var ta = document.createElement('textarea');
+    ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    if (btn) { var orig2 = btn.textContent; btn.textContent = '✅ 已复制'; setTimeout(function() { btn.textContent = orig2; }, 1500); }
+  });
+}
+
+function deleteVideoResult(idx) {
+  if (idx < 0 || idx >= sessionVideoResults.length) return;
+  if (!confirm('确定删除第 ' + (sessionVideoResults.length - idx) + ' 条结果？')) return;
+  sessionVideoResults.splice(idx, 1);
+  renderVideoResults();
+}
+
+function setAsPreviousVideo(url, idx) {
+  clearSelectedRefs();
+  selectRef({ url: url, role_label: '参考视频', type: 'video', name: '上段视频' });
+  // Tag this result
+  if (idx >= 0 && idx < sessionVideoResults.length) {
+    var tgs = sessionVideoResults[idx].tags || [];
+    if (tgs.indexOf('已设为上一段') < 0) { tgs.push('已设为上一段'); }
+    sessionVideoResults[idx].tags = tgs;
+    renderVideoResults();
+  }
+}
+
+async function extractAndSetFrame(videoUrl, position, cardIdx) {
+  var hint = document.createElement('div');
+  hint.className = 'generating';
+  hint.innerHTML = '<div class="spinner"></div><div class="gen-status" style="margin-top:8px;">截取' + (position === 'first' ? '首' : '尾') + '帧中...</div>';
+  hint.style.margin = '6px 0';
+  var resultArea = document.getElementById('resultArea');
+  // Insert hint before the frame menu of this card
+  var menuEl = document.getElementById('frameMenu_' + cardIdx);
+  if (menuEl) {
+    menuEl.style.display = 'block';
+    menuEl.appendChild(hint);
+  } else {
+    resultArea.appendChild(hint);
+  }
+  try {
+    var r = await fetch('/api/extract-frame', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_url: videoUrl, position })
+    }).then(function(rr) { return rr.json(); });
+    hint.remove();
+    if (r.error) { alert(r.error); return; }
+
+    // Store the extracted frame URL temporarily for the sub-menu
+    var frameUrl = r.url;
+    var posLabel = position === 'first' ? '首帧' : '尾帧';
+
+    // Show sub-menu
+    if (menuEl) {
+      menuEl.innerHTML = '<div style="font-size:10px;color:var(--success);margin-bottom:6px;">✅ ' + posLabel + '已截取</div>' +
+        '<div style="display:flex;flex-wrap:wrap;gap:4px;">' +
+        '<button onclick="useExtractedFrame(\'' + escAttr(frameUrl) + '\',\'firstframe\',' + cardIdx + ')" style="font-size:10px;">📸 设为首帧</button>' +
+        '<button onclick="useExtractedFrame(\'' + escAttr(frameUrl) + '\',\'lastframe\',' + cardIdx + ')" style="font-size:10px;">📸 设为尾帧</button>' +
+        '<button onclick="useExtractedFrame(\'' + escAttr(frameUrl) + '\',\'storyboard\',' + cardIdx + ')" style="font-size:10px;">🎬 设为分镜参考</button>' +
+        '<button onclick="useExtractedFrame(\'' + escAttr(frameUrl) + '\',\'ref\',' + cardIdx + ')" style="font-size:10px;">➕ 加入参考素材</button>' +
+        '<button onclick="document.getElementById(\'frameMenu_' + cardIdx + '\').style.display=\'none\'" style="font-size:10px;color:var(--text-muted);">✕ 关闭</button>' +
+        '</div>';
+    }
+  } catch (e) { hint.remove(); if (menuEl) { menuEl.style.display = 'none'; } alert('截帧失败'); }
+}
+
+function useExtractedFrame(frameUrl, target, cardIdx) {
+  if (target === 'firstframe') {
+    clearSlot('firstframe');
+    selectRef({ url: frameUrl, role_label: '首帧参考', type: 'image', name: '首帧' });
+  } else if (target === 'lastframe') {
+    clearSlot('lastframe');
+    selectRef({ url: frameUrl, role_label: '尾帧参考', type: 'image', name: '尾帧' });
+  } else if (target === 'storyboard') {
+    clearSlot('storyboard');
+    selectRef({ url: frameUrl, role_label: '分镜构图参考', type: 'image', name: '分镜构图' });
+  } else if (target === 'ref') {
+    selectRef({ url: frameUrl, role_label: '多图参考', type: 'image', name: '参考素材' });
+  }
+  // Hide the menu after action
+  var menuEl = document.getElementById('frameMenu_' + cardIdx);
+  if (menuEl) { menuEl.style.display = 'none'; }
+}
+
+async function upscaleVideo(videoUrl, ratio, origIdx) {
+  var hint = document.createElement('div');
+  hint.className = 'generating';
+  hint.innerHTML = '<div class="spinner"></div><div class="gen-status" style="margin-top:8px;">转1080p中...</div>';
+  hint.style.margin = '6px 0';
+  var resultArea = document.getElementById('resultArea');
+  resultArea.appendChild(hint);
+  try {
+    var r = await fetch('/api/upscale-local', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ video_url: videoUrl, ratio: ratio })
+    }).then(function(rr) { return rr.json(); });
+    hint.remove();
+    if (r.error) { alert(r.error); return; }
+    // Add new 1080p entry, do NOT replace original
+    sessionVideoResults.push({
+      url: r.url, time: new Date().toLocaleString(),
+      ratio: r.ratio || ratio, duration: '-', resolution: '1080p',
+      model: 'upscale', prompt: '本地放大 → 1080p (' + (r.width || '?') + 'x' + (r.height || '?') + ')',
+      refCount: 0,
+      tags: ['已转1080p']
+    });
+    // Tag the original as being upscaled
+    if (origIdx >= 0 && origIdx < sessionVideoResults.length) {
+      var origTgs = sessionVideoResults[origIdx].tags || [];
+      // Don't add duplicate tag — "原始" stays, we just note it has a 1080p sibling
+      // Actually keep original status as-is per requirement
+      sessionVideoResults[origIdx].tags = origTgs;
+    }
+    renderVideoResults();
+  } catch (e) { hint.remove(); alert('转换失败'); }
+}
+
+// ── Script Workspace ─────────────────────────────────────────
+async function uploadScriptFile(input) {
+  const f = input.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append('file', f);
+  try {
+    const r = await fetch('/api/script/import', { method: 'POST', body: fd }).then(r => r.json());
+    if (r.error) { alert(r.error); return; }
+    document.getElementById('scriptWSText').value = r.text;
+  } catch (e) { alert('上传失败'); }
+}
+
+async function brainstormScript() {
+  const text = document.getElementById('scriptWSText').value.trim();
+  const topic = text ? text.substring(0, 100) : '';
+  if (!topic) { alert('请先在输入框写一个主题或关键词'); return; }
+  switchMainTab('scriptWS');
+  document.getElementById('scriptWSText').value = '生成中...';
+  try {
+    const r = await fetch('/api/script/brainstorm', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic, script_model: scriptModel })
+    }).then(r => r.json());
+    if (r.error) { alert(r.error); document.getElementById('scriptWSText').value = ''; return; }
+    document.getElementById('scriptWSText').value = r.text;
+  } catch (e) { alert('生成失败'); }
+}
+
+async function splitScript() {
+  const script = document.getElementById('scriptWSText').value.trim();
+  if (!script) { alert('请先输入或上传剧本'); return; }
+  switchMainTab('scriptWS');
+  const btn = document.querySelector('#scriptWSTab .send-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '拆分中...'; }
+  try {
+    const r = await fetch('/api/script/split', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel })
+    }).then(r => r.json());
+    if (r.error) { alert(r.error); return; }
+    renderShots(r.shots || []);
+    // Refresh history cache
+    fetch('/api/history').then(r => r.json()).then(d => { history = d || []; }).catch(() => {});
+  } catch (e) { console.error('splitScript error:', e); alert('拆分失败: ' + e.message); }
+  if (btn) { btn.disabled = false; btn.textContent = '拆成分镜'; }
+}
+
+function setSplitMode(mode, btn) {
+  splitMode = mode;
+  document.querySelectorAll('#modeSmart,#modeShort,#modeLong').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setScriptModel(model, btn) {
+  scriptModel = model;
+  document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function renderShots(segments) {
+  const el = document.getElementById('scriptShots');
+  el.innerHTML = segments.map(s => {
+    const no = s.segment_no || s.shot_no;
+    const beats = s.beats || [];
+    const chars = Array.isArray(s.characters) ? s.characters.join('、') : (s.characters || '');
+    const beatsHtml = beats.length > 0 ? `
+      <div style="margin-top:6px;">
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">🎥 镜头变化 (${beats.length} beat${beats.length>1?'s':''})</div>
+        ${beats.map(b => `
+          <div style="font-size:10px;color:var(--text-dim);padding:3px 6px;margin:2px 0;background:var(--surface2);border-radius:4px;line-height:1.5;">
+            <span style="color:var(--accent);">${escHtml(b.time || '')}</span> ${escHtml(b.shot || '')} · ${escHtml(b.camera || '')}<br>${escHtml(b.action || '')}
+          </div>`).join('')}
+      </div>` : '';
+    const vp = s.video_prompt || s.visual_prompt || s.prompt || s.story_action || s.action || '';
+    return `
+    <div class="shot-card" id="shot_${no}">
+      <div class="shot-header">
+        <span class="shot-no">段落 ${no}</span>
+        <span style="font-size:10px;color:var(--text-muted);">${s.duration || 5}s</span>
+      </div>
+      <div class="shot-meta">
+        <span>🏠 ${escHtml(s.scene || '')}</span>
+        <span>👤 ${escHtml(chars)}</span>
+      </div>
+      ${s.emotion ? `<div class="shot-prompt"><b>情绪：</b>${escHtml(s.emotion)}</div>` : ''}
+      ${s.story_action || s.action ? `<div class="shot-prompt"><b>剧情：</b>${escHtml(s.story_action || s.action)}</div>` : ''}
+      ${s.dialogue ? `<div class="shot-prompt"><b>台词：</b>${escHtml(s.dialogue)}</div>` : ''}
+      ${beatsHtml}
+      <div class="shot-prompt" style="color:var(--accent-dim);margin-top:6px;">${escHtml(vp)}</div>
+      <div class="shot-actions">
+        <button onclick="fillShotPrompt('${escAttr(vp)}')">填入当前镜头</button>
+        <button onclick="fillImagePrompt('${escAttr(vp)}','${escAttr(s.story_action || s.action || '')}')">填入图片生成</button>
+        <button onclick="markShotGenerated('${no}')">标记已生成</button>
+      </div>
+    </div>`;
+  }).join('');
+  updateShotProgress();
+}
+
+function fillShotPrompt(prompt) {
+  switchMainTab('studio');
+  scriptInput.textContent = prompt;
+  scriptInput.focus();
+}
+
+function fillImagePrompt(videoPrompt, actionDesc) {
+  switchMainTab('imageGen');
+  // Use action/story as supplement since template handles structure
+  var desc = (actionDesc || videoPrompt || '').replace(/\n/g, ' ').substring(0, 120).trim();
+  document.getElementById('imagePrompt').value = desc;
+  document.getElementById('imagePrompt').focus();
+}
+
+function markShotGenerated(no) {
+  const el = document.getElementById('shot_' + no);
+  if (!el) return;
+  const wasGen = el.classList.contains('generated');
+  el.classList.toggle('generated');
+  const btn = el.querySelector('.shot-actions button:last-child');
+  if (btn) btn.textContent = wasGen ? '标记已生成' : '✅ 已生成';
+  updateShotProgress();
+}
+
+function updateShotProgress() {
+  const cards = document.querySelectorAll('.shot-card');
+  const done = document.querySelectorAll('.shot-card.generated').length;
+  const total = cards.length;
+  let badge = document.getElementById('shotProgress');
+  if (!badge && total > 0) {
+    badge = document.createElement('div');
+    badge.id = 'shotProgress';
+    badge.style.cssText = 'margin-top:8px;font-size:11px;color:var(--text-muted);';
+    document.getElementById('scriptShots').prepend(badge);
+  }
+  if (badge) badge.textContent = total > 0 ? `📊 ${done}/${total} 段落已生成` : '';
+}
+
+// ── History ──────────────────────────────────────────────────
+function renderHistory() {
+  const el = document.getElementById('historyPanel');
+  if (!history || !history.length) {
+    el.innerHTML = `
+      <div class="history-header">
+        <h3>生成历史</h3>
+        <p>每次生成的视频和图片都会记录在这里</p>
+      </div>
+      <div class="history-empty">
+        <div class="icon">📋</div>
+        <p>暂无历史记录</p>
+        <p style="font-size:12px;color:var(--text-muted);margin-top:4px;">生成第一个镜头后，记录将显示在此处</p>
+      </div>`;
+    return;
+  }
+
+  let html = `
+    <div class="history-header">
+      <h3>生成历史</h3>
+      <p>共 ${history.length} 条记录，点击「接续此段」可将视频添加为参考素材</p>
+    </div>
+    <div class="timeline">`;
+
+  history.forEach((h, i) => {
+    const isImage = h.type === 'image';
+    const isScript = h.type === 'script';
+    if (isScript) {
+      html += `
+      <div class="timeline-item">
+        <div class="timeline-dot" style="background:var(--accent);"></div>
+        <div class="timeline-card">
+          <div style="padding:10px 12px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:10px;color:var(--text-muted);">${escHtml(h.time || '')}</span>
+              <span style="font-size:10px;color:var(--accent);background:var(--accent-glow);padding:1px 6px;border-radius:3px;">📜 剧本拆分</span>
+              <span style="font-size:10px;color:var(--text-muted);">${h.segment_count || h.shot_count || 0}个段落</span>
+            </div>
+            <div style="font-size:12px;color:var(--text-dim);margin-top:6px;line-height:1.5;white-space:pre-wrap;">${escHtml(h.script_text || h.original_script || '')}</div>
+          </div>
+          <div class="timeline-card-body">
+            <div class="timeline-actions">
+              <button class="primary" onclick="reeditScriptHistory(${i})">查看分镜</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+      return;
+    }
+    const mediaUrl = isImage ? h.image_url : h.video_url;
+    const safeUrl = escAttr(mediaUrl || '');
+    const wasOptimized = h.original_script && h.refined_script && h.original_script !== h.refined_script;
+    const displayScript = h.script || h.original_script || '无描述';
+    const reeditText = h.original_script || h.script || '';
+    const typeBadge = isImage ? ' <span style="font-size:10px;color:var(--warning);background:rgba(240,184,101,0.15);padding:1px 6px;border-radius:3px;">图片</span>' : '';
+    html += `
+      <div class="timeline-item">
+        <div class="timeline-dot" ${isImage ? 'style="background:var(--warning)"' : ''}></div>
+        <div class="timeline-card">
+          ${isImage
+            ? `<img src="${safeUrl}" style="width:100%;max-height:200px;object-fit:contain;background:var(--surface3);display:block;" loading="lazy">`
+            : `<video src="${safeUrl}" muted controls playsinline preload="metadata" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"></video>
+          <div class="video-fallback" style="display:none;aspect-ratio:16/9;align-items:center;justify-content:center;background:var(--surface3);color:var(--text-muted);font-size:13px;gap:8px;flex-direction:column;">
+            <span style="font-size:28px;">🎬</span>
+            <span>视频缩略图加载失败</span>
+            <a href="${safeUrl}" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a>
+          </div>`}
+          <div class="timeline-card-body">
+            <div class="info">
+              <div class="time">${escHtml(h.time || '')}${typeBadge}${wasOptimized ? ' <span style="font-size:10px;color:var(--accent);background:var(--accent-glow);padding:1px 6px;border-radius:3px;">AI优化</span>' : ''}</div>
+              <div class="script" title="${escHtml((h.original_script || displayScript) + (wasOptimized ? '\n\n--- AI优化后 ---\n' + h.refined_script : ''))}">${escHtml(displayScript)}</div>
+            </div>
+            <div class="timeline-actions">
+              <button onclick="window.open('${safeUrl}')">下载</button>
+              ${!isImage ? `<button class="primary" onclick="useHistoryVideo('${safeUrl}')">接续此段</button>` : ''}
+              <button onclick="reeditScript('${escAttr(reeditText)}',${isImage})">重新编辑</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  });
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+function useHistoryVideo(url) {
+  switchMainTab('studio');
+  setTimeout(() => {
+    clearSelectedRefs();
+    selectRef({ url, role_label: '参考视频', type: 'video', name: '历史视频' });
+  }, 100);
+}
+
+function reeditScript(scriptText, isImage) {
+  if (isImage) {
+    switchMainTab('imageGen');
+    setTimeout(() => {
+      document.getElementById('imagePrompt').value = scriptText;
+      document.getElementById('imagePrompt').focus();
+    }, 100);
+  } else {
+    switchMainTab('studio');
+    setTimeout(() => {
+      scriptInput.textContent = scriptText;
+      scriptInput.focus();
+    }, 100);
+  }
+}
+
+function reeditScriptHistory(idx) {
+  const h = history[idx];
+  if (!h || h.type !== 'script') return;
+  switchMainTab('scriptWS');
+  setTimeout(() => {
+    document.getElementById('scriptWSText').value = h.original_script || '';
+    renderShots(h.shots || []);
+  }, 100);
+}
+
+// ── Start ────────────────────────────────────────────────────
+(function() {
+  try {
+    _debugLog('START', '调用 init()...');
+    init().catch(function(e) {
+      console.error('init() 异步失败:', e);
+      _debugLog('INIT', 'init() rejected: ' + (e && e.message || String(e)));
+      _showInitError(e && e.message || '初始化过程中发生异步错误');
+    });
+  } catch (e) {
+    console.error('init() 同步失败:', e);
+    _debugLog('INIT', 'init() threw: ' + (e && e.message || String(e)));
+    _showInitError(e && e.message || '初始化脚本执行失败');
+  }
+})();
+
+function _showInitError(msg) {
+  // Hide normal UI content
+  var mainEl = document.querySelector('.main-layout') || document.querySelector('body > div');
+  var topbar = document.querySelector('.topbar');
+  if (topbar) topbar.style.display = 'none';
+  if (mainEl) mainEl.style.display = 'none';
+  // Show init error
+  var el = document.getElementById('initError');
+  if (el) {
+    el.style.display = 'block';
+    document.getElementById('initErrorMsg').textContent = msg || '未知错误';
+  }
+}
+</script>
+</body>
+</html>
