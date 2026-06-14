@@ -1728,6 +1728,58 @@ function _showApiErrorBanner() {
   _debugLog('API', '接口加载失败提示已显示');
 }
 
+function showTempBanner(message, type) {
+  var banner = document.getElementById('apiErrorBanner');
+  if (!banner) return;
+  banner.textContent = message;
+  banner.style.display = 'block';
+  banner.style.background = type === 'ok' ? '#1f7a45' : (type === 'warn' ? '#8a5a16' : '#c0392b');
+}
+
+function hideTempBannerSoon(delay) {
+  setTimeout(function() {
+    var banner = document.getElementById('apiErrorBanner');
+    if (banner) banner.style.display = 'none';
+  }, delay || 1600);
+}
+
+async function uploadFile(file) {
+  if (!file) throw new Error('没有选择文件');
+  showTempBanner('正在上传：' + file.name, 'warn');
+  var fd = new FormData();
+  fd.append('file', file);
+  var controller = new AbortController();
+  var timer = setTimeout(function() { controller.abort(); }, 180000);
+  try {
+    var res = await fetch('/api/upload', {
+      method: 'POST',
+      body: fd,
+      credentials: 'same-origin',
+      signal: controller.signal
+    });
+    var text = await res.text();
+    var data;
+    try { data = text ? JSON.parse(text) : {}; }
+    catch (e) { throw new Error('上传接口返回异常：' + text.slice(0, 120)); }
+    if (!res.ok || data.error) {
+      if (res.status === 401) throw new Error('登录已失效，请刷新页面重新输入密码');
+      if (res.status === 413) throw new Error('文件太大，超过上传限制');
+      throw new Error(data.error || ('上传失败 HTTP ' + res.status));
+    }
+    if (!data.url) throw new Error('上传成功但没有返回图片地址');
+    showTempBanner('上传成功：' + (data.storage || 'unknown'), 'ok');
+    hideTempBannerSoon();
+    return data;
+  } catch (e) {
+    var msg = e.name === 'AbortError' ? '上传超时，请换小图或稍后重试' : (e.message || '上传失败');
+    showTempBanner(msg, 'error');
+    alert(msg);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Safe fetch wrapper: console.error + UI banner on failure.
  * Usage: safeFetch('/api/xxx').then(...).catch(...)
@@ -2274,8 +2326,7 @@ async function addImageRefFromUpload() {
   inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = true;
   inp.onchange = async () => {
     for (const f of inp.files) {
-      const fd = new FormData(); fd.append('file', f);
-      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      const r = await uploadFile(f);
       addImageRef(r.url, f.name);
     }
   };
@@ -2477,8 +2528,7 @@ function addCharImg(id) {
   inp.multiple = true;
   inp.onchange = async () => {
     for (const f of inp.files) {
-      const fd = new FormData(); fd.append('file', f);
-      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      const r = await uploadFile(f);
       characters[id].images = characters[id].images || [];
       characters[id].images.push({ url: r.url, name: f.name });
     }
@@ -2498,8 +2548,7 @@ function addCharAudio(id) {
   const inp = document.getElementById('audioFileInput');
   inp.onchange = async () => {
     for (const f of inp.files) {
-      const fd = new FormData(); fd.append('file', f);
-      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      const r = await uploadFile(f);
       characters[id].audios = characters[id].audios || [];
       characters[id].audios.push({ url: r.url, name: f.name });
     }
@@ -2540,8 +2589,7 @@ function closeStyleModal() { document.getElementById('styleModal').classList.rem
 
 async function uploadStyleThumb(input) {
   const f = input.files[0]; if (!f) return;
-  const fd = new FormData(); fd.append('file', f);
-  const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+  const r = await uploadFile(f);
   _styleThumbUrl = r.url;
   document.getElementById('styleThumbPreview').src = r.url;
   document.getElementById('styleThumbPreview').style.display = 'block';
@@ -2598,8 +2646,7 @@ function addAsset(cat) {
   inp.multiple = true;
   inp.onchange = async () => {
     for (const f of inp.files) {
-      const fd = new FormData(); fd.append('file', f);
-      const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+      const r = await uploadFile(f);
       assets[cat].push({ url: r.url, name: f.name });
     }
     await fetch(`/api/assets/${cat}`, {
@@ -2628,8 +2675,7 @@ function openDirectUpload() {
   inp.onchange = async () => {
     const f = inp.files[0];
     if (!f) return;
-    const fd = new FormData(); fd.append('file', f);
-    const r = await fetch('/api/upload', { method: 'POST', body: fd }).then(r => r.json());
+    const r = await uploadFile(f);
     const isVideo = f.type.startsWith('video/');
     selectRef({
       url: r.url,
