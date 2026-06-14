@@ -1,6 +1,5 @@
 import os, json, uuid, time, threading, requests, functools
 import tos
-from tos.enum import HttpMethodType
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, redirect, session
 from werkzeug.utils import secure_filename
@@ -201,6 +200,7 @@ def tos_presign():
     object_key = f"uploads/{date_prefix}/{uuid.uuid4().hex}{ext}"
     try:
         client = get_tos_client()
+        from tos.enum import HttpMethodType
         signed = client.pre_signed_url(
             HttpMethodType.Http_Method_Put,
             TOS_BUCKET,
