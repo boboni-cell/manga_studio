@@ -586,16 +586,33 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 continue
 
             st = pd.get('status', '')
-            # TEMP DEBUG: log every poll response
-            print(f'[nano-poll] status={st!r} all_keys={list(pd.keys())} raw={json.dumps(pd, ensure_ascii=False)[:400]}', flush=True)
+            # Store raw poll response in job for frontend debugging
+            JOBS[job_id]['_last_poll'] = {'status': st, 'keys': list(pd.keys()), 'raw': pd}
+            sys.stdout.write(f'[nano-poll] status={st!r} keys={list(pd.keys())} raw={json.dumps(pd, ensure_ascii=False)[:500]}\n')
+            sys.stdout.flush()
 
-            # Try to find video URL anywhere in response
-            vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url')
-            if not vurl:
-                for k, v in pd.items():
-                    if isinstance(v, str) and v.startswith('http') and ('video' in v.lower() or '.mp4' in v.lower() or 'output' in k.lower()):
-                        vurl = v
-                        break
+            # Try to find video URL anywhere in response (flat or nested)
+            def _find_url(obj, depth=0):
+                if depth > 4:
+                    return None
+                if isinstance(obj, str) and obj.startswith('http') and ('.mp4' in obj or 'video' in obj.lower()):
+                    return obj
+                if isinstance(obj, dict):
+                    for key in ('video_url', 'videoUrl', 'url', 'mp4', 'output_url', 'result_url', 'download_url'):
+                        if obj.get(key) and isinstance(obj[key], str) and obj[key].startswith('http'):
+                            return obj[key]
+                    for v in obj.values():
+                        found = _find_url(v, depth + 1)
+                        if found:
+                            return found
+                if isinstance(obj, list):
+                    for item in obj:
+                        found = _find_url(item, depth + 1)
+                        if found:
+                            return found
+                return None
+
+            vurl = _find_url(pd)
 
             if st.lower() in ('completed', 'succeeded', 'done', 'success', 'complete') or vurl:
                 if vurl:
@@ -1082,7 +1099,8 @@ def generate():
 @app.route('/api/status/<job_id>')
 @login_required
 def status(job_id):
-    return jsonify(JOBS.get(job_id, {'status':'not_found'}))
+    job = JOBS.get(job_id, {'status': 'not_found'})
+    return jsonify(job)
 
 @app.route('/api/model-caps')
 @login_required
