@@ -55,7 +55,7 @@ TEXT_MODEL_ID = "doubao-seed-character-251128"
 # Script text models (for brainstorm + split)
 SCRIPT_MODELS = {
     "doubao": {"label": "豆包", "provider": "volcengine", "model_id": "doubao-seed-character-251128"},
-    "glm46": {"label": "GLM4.6", "provider": "nano", "model_id": "z-ai/glm-4.6"},
+    "glm46": {"label": "GPT-4.1 Mini", "provider": "nano", "model_id": "openai/gpt-4.1-mini"},
     "claude46": {"label": "Claude4.6", "provider": "nano", "model_id": "anthropic/claude-opus-4.6"}
 }
 SCRIPT_MODEL_DEFAULT = "doubao"
