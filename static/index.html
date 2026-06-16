@@ -4253,7 +4253,7 @@ function renderShots(segments) {
   const el = document.getElementById('scriptShots');
   el.innerHTML = segments.map(s => {
     const no = s.segment_no || s.shot_no;
-    const beats = s.beats || [];
+    const beats = Array.isArray(s.beats) ? s.beats : [];
     const chars = Array.isArray(s.characters) ? s.characters.join('、') : (s.characters || '');
     const beatsHtml = beats.length > 0 ? `
       <div style="margin-top:6px;">
