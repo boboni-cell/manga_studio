@@ -119,6 +119,7 @@ QUALITY_PROMPT = """【画面质量强制要求】
 """
 
 JOBS = {}
+SCRIPT_JOBS = {}
 
 def load_json(path, default):
     try:
@@ -1095,12 +1096,56 @@ def script_brainstorm():
 @app.route('/api/script/split', methods=['POST'])
 @login_required
 def script_split():
-    body = request.json
+    body = request.json or {}
+    script_text = body.get('script', '').strip()
+    if not script_text:
+        return jsonify(error='请输入剧本文本'), 400
+
+    job_id = uuid.uuid4().hex
+    SCRIPT_JOBS[job_id] = {
+        'status': 'running',
+        'created_at': time.time()
+    }
+
+    def worker():
+        try:
+            shots = build_script_shots(body)
+            SCRIPT_JOBS[job_id].update({
+                'status': 'done',
+                'shots': shots,
+                'count': len(shots),
+                'finished_at': time.time()
+            })
+        except Exception as e:
+            SCRIPT_JOBS[job_id].update({
+                'status': 'error',
+                'error': str(e),
+                'finished_at': time.time()
+            })
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify(job_id=job_id, status='running')
+
+
+@app.route('/api/script/split/<job_id>', methods=['GET'])
+@login_required
+def script_split_status(job_id):
+    now = time.time()
+    for old_id, job in list(SCRIPT_JOBS.items()):
+        if now - job.get('created_at', now) > 3600:
+            SCRIPT_JOBS.pop(old_id, None)
+    job = SCRIPT_JOBS.get(job_id)
+    if not job:
+        return jsonify(error='分镜任务不存在或已过期'), 404
+    return jsonify(job)
+
+
+def build_script_shots(body):
     script_text = body.get('script', '').strip()
     mode = body.get('mode', 'smart')  # smart | short | long
     script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
     if not script_text:
-        return jsonify(error='请输入剧本文本'), 400
+        raise Exception('请输入剧本文本')
 
     mode_instructions = {
         'short': '\n当前模式：短镜头模式。每个输出项只包含 1 个 beat，时长 4-6 秒，适合快速反应、特写、动作切点。',
@@ -1150,11 +1195,11 @@ def script_split():
             'shots': shots
         })
         save_json(history_path(), hist[:50])
-        return jsonify(shots=shots, count=len(shots))
+        return shots
     except json.JSONDecodeError as e:
-        return jsonify(error=f'解析分镜结果失败: {str(e)}', raw=raw), 500
+        raise Exception(f'解析分镜结果失败: {str(e)}\n模型原文：{raw[:800]}')
     except Exception as e:
-        return jsonify(error=f'拆分失败: {str(e)}'), 500
+        raise Exception(f'拆分失败: {str(e)}')
 
 
 if __name__ == '__main__':

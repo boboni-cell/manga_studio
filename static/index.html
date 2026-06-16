@@ -3891,6 +3891,10 @@ async function readApiJson(res, label) {
   return data;
 }
 
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function uploadScriptFile(input) {
   const f = input.files[0]; if (!f) return;
   const fd = new FormData(); fd.append('file', f);
@@ -3929,7 +3933,18 @@ async function splitScript() {
       body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel })
     }).then(res => readApiJson(res, '拆分'));
     if (r.error) { alert(r.error); return; }
-    renderShots(r.shots || []);
+    let result = r;
+    if (r.job_id) {
+      for (let i = 0; i < 90; i++) {
+        if (btn) btn.textContent = `拆分中...${i ? ' ' + i * 2 + 's' : ''}`;
+        await wait(2000);
+        result = await fetch('/api/script/split/' + encodeURIComponent(r.job_id)).then(res => readApiJson(res, '查询分镜'));
+        if (result.status === 'done') break;
+        if (result.status === 'error') throw new Error(result.error || '拆分失败');
+      }
+      if (result.status !== 'done') throw new Error('拆分超时，请换更短剧本或改用豆包/GLM');
+    }
+    renderShots(result.shots || []);
     // Refresh history cache
     fetch('/api/history').then(r => r.json()).then(d => { history = d || []; }).catch(() => {});
   } catch (e) { console.error('splitScript error:', e); alert('拆分失败: ' + e.message); }
