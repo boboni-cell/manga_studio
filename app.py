@@ -575,7 +575,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             try:
                 pd = pr.json()
             except Exception:
-                time.sleep(10)
+                time.sleep(5)
                 continue
             status = pd.get('status', '')
             if status in ('completed', 'succeeded', 'done'):
@@ -600,7 +600,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 生成失败: {err}'}
                 return
             else:
-                time.sleep(10)
+                time.sleep(5)
 
     except Exception as e:
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 异常: {str(e)}'}
@@ -692,7 +692,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方生成失败: {err}'}
                 return
             else:
-                time.sleep(10)
+                time.sleep(5)
 
     except Exception as e:
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方异常: {str(e)}'}
@@ -1056,7 +1056,7 @@ def generate():
                     JOBS[job_id] = {'status':'failed','video_url':None,'error':str(r.error)}
                     break
                 else:
-                    time.sleep(10)
+                    time.sleep(5)
         except Exception as e:
             JOBS[job_id] = {'status':'failed','video_url':None,'error':str(e)}
 
