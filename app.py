@@ -550,13 +550,11 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
         }
 
         JOBS[job_id]['status'] = 'running'
-        sys.stderr.write(f'[nano-start] model={model_key} runId={task_id}\n')
-        sys.stderr.flush()
+        print(f'[nano-start] model={model_key} runId={task_id}', flush=True)
 
         # Submit generation task
         r = requests.post('https://nano-gpt.com/api/generate-video', headers=headers, json=payload, timeout=30)
-        sys.stderr.write(f'[nano-submit] status={r.status_code} body={r.text[:200]}\n')
-        sys.stderr.flush()
+        print(f'[nano-submit] status={r.status_code} body={r.text[:200]}', flush=True)
         if r.status_code not in (200, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 提交失败: {r.status_code} {r.text[:200]}'}
             return
@@ -569,8 +567,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
         # Poll: GET /api/generate-video/status/{runId}?modelSlug=xxx
         poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}?modelSlug={model_real}'
-        sys.stderr.write(f'[nano-poll] url={poll_url}\n')
-        sys.stderr.flush()
+        print(f'[nano-poll] url={poll_url}', flush=True)
         for _ in range(240):  # 20 minutes max
             try:
                 pr = requests.get(poll_url, headers=headers, timeout=30)
@@ -590,8 +587,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
             st = pd.get('status', '')
             # TEMP DEBUG: log every poll response
-            sys.stderr.write(f'[nano-poll] status={st!r} all_keys={list(pd.keys())} raw={json.dumps(pd, ensure_ascii=False)[:400]}\n')
-            sys.stderr.flush()
+            print(f'[nano-poll] status={st!r} all_keys={list(pd.keys())} raw={json.dumps(pd, ensure_ascii=False)[:400]}', flush=True)
 
             # Try to find video URL anywhere in response
             vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url')
