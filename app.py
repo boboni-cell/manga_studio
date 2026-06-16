@@ -583,6 +583,8 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 continue
 
             st = pd.get('status', '')
+            # Update job status so frontend shows live progress
+            JOBS[job_id]['status'] = f'generating-{st}' if st else 'generating'
             if st.lower() in ('completed', 'succeeded', 'done', 'success', 'complete'):
                 vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url') or pd.get('output', {}).get('video_url')
                 if vurl:
