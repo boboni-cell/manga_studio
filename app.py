@@ -583,7 +583,9 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 continue
 
             st = pd.get('status', '')
-            if st in ('completed', 'succeeded', 'done'):
+            # Debug: log actual response structure
+            print(f'[nano-gpt] status={st!r} keys={list(pd.keys())} sample={str(pd)[:300]}', flush=True)
+            if st.lower() in ('completed', 'succeeded', 'done', 'success', 'complete'):
                 vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url') or pd.get('output', {}).get('video_url')
                 if vurl:
                     save_video_history(
@@ -594,7 +596,10 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                         resolution=resolution, ref_count=len(images))
                     JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
                     return
-            elif st in ('failed', 'error', 'cancelled'):
+                else:
+                    JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 成功但找不到视频URL，返回字段: {list(pd.keys())}'}
+                    return
+            elif st.lower() in ('failed', 'error', 'cancelled'):
                 err = pd.get('error') or pd.get('message', '未知错误')
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 失败: {err}'}
                 return
