@@ -154,7 +154,7 @@ def init_data():
         (assets_path('scenes'), []),
         (assets_path('audios'), []),
     ]:
-        if not os.path.exists(path):
+        if not os.path.exists(path) or os.path.getsize(path) < 10:
             save_json(path, default)
 
 init_data()
