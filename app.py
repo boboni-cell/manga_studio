@@ -550,7 +550,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
         }
 
         JOBS[job_id]['status'] = 'running'
-        print(f'[nano-start] model={model_key} runId={task_id}', flush=True)
+        print(f'[nano-start] model={model_key}', flush=True)
 
         # Submit generation task
         r = requests.post('https://nano-gpt.com/api/generate-video', headers=headers, json=payload, timeout=30)
