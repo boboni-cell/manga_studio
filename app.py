@@ -559,69 +559,80 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
         data = r.json()
         task_id = data.get('runId') or data.get('id')
+        events_url = data.get('eventsUrl', '')
         if not task_id:
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Poll for completion — use id-based query, eventsUrl is unreliable
-        poll_url = f'https://nano-gpt.com/api/generate-video?id={task_id}'
-        max_attempts = 120  # 10 minutes max
-        for attempt in range(max_attempts):
-            try:
-                pr = requests.get(poll_url, headers=headers, timeout=30)
-            except requests.RequestException:
-                time.sleep(5)
-                continue
-
+        # Poll via SSE eventsUrl with stream
+        poll_url = f'https://nano-gpt.com{events_url}' if events_url.startswith('/') else events_url
+        if not poll_url:
+            poll_url = f'https://nano-gpt.com/api/generate-video?id={task_id}'
+        try:
+            pr = requests.get(poll_url, headers=headers, stream=True, timeout=600)
             if pr.status_code not in (200, 202):
-                time.sleep(5)
-                continue
-
-            text = pr.text.strip()
-            if not text:
-                time.sleep(5)
-                continue
-
-            # Parse JSON (SSE or direct)
-            vurl = None
-            status = None
-            err = None
-            for line in text.split('\n'):
-                line = line.strip()
-                if line.startswith('data:'):
-                    line = line[5:].strip()
-                if not line or line.startswith(':'):
-                    continue
-                try:
-                    pd = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                status = pd.get('status', status)
-                if pd.get('video_url') or pd.get('videoUrl') or pd.get('url'):
-                    vurl = vurl or (pd.get('video_url') or pd.get('videoUrl') or pd.get('url'))
-                if pd.get('error') or pd.get('message'):
-                    err = err or (pd.get('error') or pd.get('message'))
-                vurl = vurl or (pd.get('output', {}) or {}).get('video_url')
-
-            if vurl:
-                save_video_history(
-                    vurl, script,
-                    original_script=original_script or script,
-                    refined_script=script if optimize else (original_script or script),
-                    model=model_key,
-                    ratio=ratio,
-                    duration=duration,
-                    resolution=resolution,
-                    ref_count=len(images)
-                )
-                JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
+                # Fallback: poll id-based endpoint
+                for _ in range(120):
+                    try:
+                        pr2 = requests.get(f'https://nano-gpt.com/api/generate-video?id={task_id}', headers=headers, timeout=30)
+                        if pr2.status_code == 200:
+                            text = pr2.text.strip()
+                            if text:
+                                pd = json.loads(text)
+                                vurl2 = pd.get('video_url') or pd.get('videoUrl')
+                                if vurl2:
+                                    save_video_history(
+                                        vurl2, script,
+                                        original_script=original_script or script,
+                                        refined_script=script if optimize else (original_script or script),
+                                        model=model_key, ratio=ratio, duration=duration,
+                                        resolution=resolution, ref_count=len(images))
+                                    JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl2, 'error': None}
+                                    return
+                    except Exception:
+                        pass
+                    time.sleep(5)
+                JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 轮询超时（10分钟）'}
                 return
-            elif status in ('failed', 'error', 'cancelled'):
-                JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 生成失败: {err or "未知错误"}'}
-                return
-            time.sleep(5)
 
-        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 轮询超时（10分钟未完成）'}
+            # Read SSE stream
+            buffer = ''
+            for chunk in pr.iter_content(chunk_size=1, decode_unicode=True):
+                if chunk is None:
+                    break
+                if isinstance(chunk, bytes):
+                    chunk = chunk.decode('utf-8', errors='ignore')
+                buffer += chunk
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    line = line.strip()
+                    if line.startswith('data:'):
+                        line = line[5:].strip()
+                    if not line or line.startswith(':'):
+                        continue
+                    try:
+                        pd = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url')
+                    if vurl:
+                        save_video_history(
+                            vurl, script,
+                            original_script=original_script or script,
+                            refined_script=script if optimize else (original_script or script),
+                            model=model_key, ratio=ratio, duration=duration,
+                            resolution=resolution, ref_count=len(images))
+                        JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
+                        return
+                    st = pd.get('status', '')
+                    if st in ('failed', 'error', 'cancelled'):
+                        err = pd.get('error') or pd.get('message', '未知错误')
+                        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 失败: {err}'}
+                        return
+        except Exception:
+            pass
+
+        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT SSE 流中断'}
 
     except Exception as e:
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 异常: {str(e)}'}
