@@ -1458,6 +1458,10 @@ import io
 import requests
 from PIL import Image, ImageFilter, ImageEnhance
 
+def wash_seedance_image_by_url(url):
+    """Pass-through for now, can add image processing later."""
+    return url
+
 def wash_tos_image(tos_url):
     """
     黑箱洗图机：输入火山 TOS 链接，在内存里洗完后，上传一个处理后的临时字节流
