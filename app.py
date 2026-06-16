@@ -553,32 +553,29 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
         # Submit generation task
         r = requests.post('https://nano-gpt.com/api/generate-video', headers=headers, json=payload, timeout=30)
-        if r.status_code != 200:
+        if r.status_code not in (200, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 提交失败: {r.status_code} {r.text[:200]}'}
             return
 
         data = r.json()
-        task_id = data.get('task_id') or data.get('id')
+        task_id = data.get('runId') or data.get('id')
+        events_url = data.get('eventsUrl', '')
         if not task_id:
-            # Maybe returned video directly
-            vurl = data.get('video_url') or data.get('url') or data.get('output', {}).get('video_url')
-            if vurl:
-                JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
-            else:
-                JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 task_id: {data}'}
+            JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Poll for completion
+        # Poll for completion using eventsUrl
+        poll_url = f'https://nano-gpt.com{events_url}' if events_url.startswith('/') else events_url
         while True:
-            pr = requests.get(f'{NANO_GPT_BASE}/video/status/{task_id}', headers=headers, timeout=30)
-            if pr.status_code != 200:
+            pr = requests.get(poll_url, headers=headers, timeout=30)
+            if pr.status_code not in (200, 202):
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 查询失败: {pr.status_code}'}
                 return
 
             pd = pr.json()
             status = pd.get('status', '')
             if status in ('completed', 'succeeded', 'done'):
-                vurl = pd.get('video_url') or pd.get('url') or pd.get('output', {}).get('video_url')
+                vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url') or pd.get('output', {}).get('video_url')
                 if not vurl:
                     JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 完成但无 video_url'}
                     return
