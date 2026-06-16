@@ -136,12 +136,20 @@ def history_path():    return os.path.join(DATA, 'history.json')
 def styles_path():     return os.path.join(DATA, 'styles.json')
 
 # Ensure data directory and files exist (for fresh Volume mounts)
+DEFAULT_STYLES = [
+    {"id":"style_1","name":"真人短剧","thumbnail_url":"https://movie1.tos-cn-beijing.volces.com/6765e87c2c4540c09f4ede7be5e2bb2b","prompt":"整体呈现真人短剧剧照风格，画面像真实拍摄的竖屏短剧或网络剧。人物外貌自然好看，五官清晰稳定，皮肤真实不过度磨皮，不要塑料感和廉价网红滤镜。服装、发型、妆容符合现实生活审美，表情有戏但不过分夸张。光线以柔和自然光或室内影视灯为主，面部受光清楚，背景不过曝不死黑。构图服务剧情，人物关系明确，画面干净，情绪直接，适合连续生成真人AI短剧视频。","negative_prompt":"低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，字幕，水印，文字，Logo，边框，拼贴，多格漫画","use_for_image":True,"use_for_video":True,"created_at":"2026-06-14 12:00"},
+    {"id":"style_2","name":"电影写实","thumbnail_url":"https://movie1.tos-cn-beijing.volces.com/d338bd0fb5654fb1879044fa0fa918c0","prompt":"整体呈现电影级写实风格，画面像高质量实拍电影剧照。光影有层次，色彩克制统一，环境材质真实可信，人物与场景融合自然。镜头语言稳重，构图有明确视觉中心，前景、中景、背景层次清楚。人物表情自然，动作真实，避免过度摆拍和广告感。画面保留真实摄影的细节、景深、光线方向和空间质感，适合严肃剧情、情绪戏和高质感叙事镜头。","negative_prompt":"低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，字幕，水印，文字，Logo，边框，拼贴，多格漫画","use_for_image":True,"use_for_video":True,"created_at":"2026-06-14 12:00"},
+    {"id":"style_3","name":"都市偶像剧","thumbnail_url":"https://movie1.tos-cn-beijing.volces.com/897b8b73295647678b55ca7293f43df7","prompt":"整体呈现现代都市偶像剧风格，画面明亮、干净、精致，人物外貌清爽好看，服装时尚但不夸张。场景具有现代城市生活质感，如咖啡馆、公寓、办公室、街道、商场等，环境整洁有设计感。光线柔和通透，肤色自然，色彩偏温暖或清新，画面浪漫但不过度梦幻。人物互动自然，情绪细腻，适合暧昧、重逢、误会、告白、职场和日常情节。","negative_prompt":"低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，字幕，水印，文字，Logo，边框，拼贴，多格漫画","use_for_image":True,"use_for_video":True,"created_at":"2026-06-14 12:00"},
+    {"id":"style_4","name":"悬疑冷色","thumbnail_url":"https://movie1.tos-cn-beijing.volces.com/c884c1315ae449fa809b5cc9878ea72c","prompt":"整体呈现悬疑剧冷色调风格，画面低饱和、冷蓝灰、阴影层次明显，氛围紧张压抑。光线方向明确，常带有窗外冷光、走廊灯、监控感顶光或局部硬光，形成强烈明暗对比。场景保持真实可信，细节克制，不夸张恐怖怪诞。人物表情内敛、警觉、压抑或怀疑，镜头构图留有适当空白和不安感。适合秘密、追踪、对峙、调查、背叛和反转情节。","negative_prompt":"低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，字幕，水印，文字，Logo，边框，拼贴，多格漫画","use_for_image":True,"use_for_video":True,"created_at":"2026-06-14 12:00"},
+    {"id":"style_5","name":"古风权谋","thumbnail_url":"https://movie1.tos-cn-beijing.volces.com/67b94fcde64046a58233c4523acad92d","prompt":"整体呈现古风影视剧权谋风格，画面庄重、精致、克制，具有中式建筑、古代服饰、木质结构、屏风、烛火、庭院、宫殿或书房等视觉元素。色彩以暖金、墨色、深红、青灰、木色为主，光影层次丰富，氛围沉稳大气。人物服装完整考究，发型、配饰、妆容符合古装审美，表情含蓄有张力。构图讲究人物站位和权力关系，适合对峙、密谈、审问、谋划和情感压抑的戏。","negative_prompt":"低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，字幕，水印，文字，Logo，边框，拼贴，多格漫画","use_for_image":True,"use_for_video":True,"created_at":"2026-06-14 12:00"},
+]
+
 def init_data():
     os.makedirs(DATA, exist_ok=True)
     for path, default in [
         (characters_path(), {}),
         (history_path(), []),
-        (styles_path(), []),
+        (styles_path(), DEFAULT_STYLES),
         (assets_path('outfits'), []),
         (assets_path('scenes'), []),
         (assets_path('audios'), []),
