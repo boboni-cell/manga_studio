@@ -3924,10 +3924,17 @@ function renderVideoResults() {
   sessionVideoResults.slice().reverse().forEach(function(v, revIdx) {
     const idx = sessionVideoResults.length - 1 - revIdx;
     if (v.generating) {
-      html += '<div class="generating" style="padding:8px 0;align-self:flex-start;"><div class="spinner"></div>' +
-        '<div class="gen-status" style="margin-top:8px;">正在生成镜头</div>' +
-        '<div class="gen-meta">' + (v.ratio || '') + ' · ' + (v.duration || '') + 's · ' + (v.resolution || '720p') + ' · ' + ((VIDEO_MODEL_LABELS[v.model] || v.model)) + '</div>' +
-        '<div class="gen-hint" style="margin-top:4px;">AI 正在根据分镜描述和参考素材生成漫剧视频…</div></div>';
+      var ar = (v.ratio || '9:16').replace(':', '/');
+      html += '<div class="result-card" style="margin:0;">' +
+        '<div style="aspect-ratio:' + ar + ';background:var(--surface3);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:200px;position:relative;overflow:hidden;">' +
+        '<div style="position:absolute;top:8px;left:8px;font-size:10px;color:var(--text-muted);background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:4px;">' + (v.ratio || '9:16') + '</div>' +
+        '<div class="spinner"></div>' +
+        '<div style="text-align:center;">' +
+        '<div class="gen-status">正在生成镜头</div>' +
+        '<div class="gen-meta" style="margin-top:4px;">' + (v.duration || '') + 's · ' + (v.resolution || '720p') + ' · ' + ((VIDEO_MODEL_LABELS[v.model] || v.model)) + '</div>' +
+        '</div></div>' +
+        '<div style="padding:8px;font-size:10px;color:var(--text-muted);">' + escHtml(v.prompt || '准备中...') + '</div>' +
+        '</div>';
     } else if (v.error) {
       html += '<div class="result-card" style="margin:0;"><div class="error-state" style="padding:16px;text-align:left;">' +
         '<p>' + escHtml(v.error) + '</p><div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' + v.time + ' · ' + v.ratio + ' · ' + v.duration + 's</div></div></div>';
