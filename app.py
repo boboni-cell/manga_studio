@@ -143,11 +143,13 @@ def upload_to_tos(file_data, object_key, content_type='application/octet-stream'
     try:
         client = get_tos_client()
         if hasattr(file_data, 'read'):
-            # Stream: use put_object with streaming body
-            client.put_object(TOS_BUCKET, object_key,
-                              content=file_data,
-                              content_type=content_type,
-                              content_length=content_length)
+            kwargs = {
+                'content': file_data,
+                'content_type': content_type,
+            }
+            if content_length:
+                kwargs['content_length'] = content_length
+            client.put_object(TOS_BUCKET, object_key, **kwargs)
         else:
             client.put_object(TOS_BUCKET, object_key,
                               content=file_data,
@@ -224,20 +226,27 @@ def upload():
     f = request.files.get('file')
     if not f: return jsonify(error='no file'), 400
     ext  = os.path.splitext(secure_filename(f.filename))[1].lower()
-    name = uuid.uuid4().hex + ext
+    date_prefix = datetime.now().strftime('%Y%m%d')
+    name = f"uploads/{date_prefix}/{uuid.uuid4().hex}{ext}"
     ct = f.content_type or 'application/octet-stream'
-    file_bytes = f.read()
 
-    # Upload to TOS
-    public_url, ok = upload_to_tos(file_bytes, name, ct)
+    # Upload to TOS without buffering the whole file in Railway memory.
+    file_length = getattr(f, 'content_length', None) or None
+    public_url, ok = upload_to_tos(f.stream, name, ct, content_length=file_length)
     if ok:
         return jsonify(url=public_url, name=name, storage='tos')
 
     # Fallback to local
-    path = os.path.join(UPLOAD, name)
+    local_name = uuid.uuid4().hex + ext
+    path = os.path.join(UPLOAD, local_name)
+    f.stream.seek(0)
     with open(path, 'wb') as fw:
-        fw.write(file_bytes)
-    return jsonify(url=f'/static/uploads/{name}', name=name, storage='local')
+        while True:
+            chunk = f.stream.read(1024 * 1024)
+            if not chunk:
+                break
+            fw.write(chunk)
+    return jsonify(url=f'/static/uploads/{local_name}', name=local_name, storage='local')
 
 # ── characters ────────────────────────────────────────────────
 @app.route('/api/characters', methods=['GET'])

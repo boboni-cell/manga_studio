@@ -1963,39 +1963,93 @@ function hideTempBannerSoon(delay) {
 async function uploadFile(file) {
   if (!file) throw new Error('没有选择文件');
 
-  // ── Upload via backend proxy (Railway → TOS) ──
-  showTempBanner('正在上传：' + file.name, 'warn');
-  var fd = new FormData();
-  fd.append('file', file);
-  var fbController = new AbortController();
-  var fbTimer = setTimeout(function() { fbController.abort(); }, 180000);
-  try {
-    var res = await fetch('/api/upload', {
-      method: 'POST',
-      body: fd,
-      credentials: 'same-origin',
-      signal: fbController.signal
-    });
-    var text = await res.text();
-    var data;
-    try { data = text ? JSON.parse(text) : {}; }
-    catch (e) { throw new Error('上传接口返回异常：' + text.slice(0, 120)); }
-    if (!res.ok || data.error) {
-      if (res.status === 401) throw new Error('登录已失效，请刷新页面重新输入密码');
-      if (res.status === 413) throw new Error('文件太大，超过上传限制');
-      throw new Error(data.error || ('上传失败 HTTP ' + res.status));
+  var contentType = file.type || 'application/octet-stream';
+
+  async function uploadViaServer() {
+    showTempBanner('直传失败，改用服务器上传：' + file.name, 'warn');
+    var fd = new FormData();
+    fd.append('file', file);
+    var fbController = new AbortController();
+    var fbTimer = setTimeout(function() { fbController.abort(); }, 180000);
+    try {
+      var res = await fetch('/api/upload', {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+        signal: fbController.signal
+      });
+      var text = await res.text();
+      var data;
+      try { data = text ? JSON.parse(text) : {}; }
+      catch (e) { throw new Error('上传接口返回异常：' + text.slice(0, 120)); }
+      if (!res.ok || data.error) {
+        if (res.status === 401) throw new Error('登录已失效，请刷新页面重新输入密码');
+        if (res.status === 413) throw new Error('文件太大，超过上传限制');
+        throw new Error(data.error || ('上传失败 HTTP ' + res.status));
+      }
+      if (!data.url) throw new Error('上传成功但没有返回图片地址');
+      showTempBanner('上传成功：' + (data.storage || 'unknown'), 'ok');
+      hideTempBannerSoon();
+      return data;
+    } finally {
+      clearTimeout(fbTimer);
     }
-    if (!data.url) throw new Error('上传成功但没有返回图片地址');
-    showTempBanner('上传成功：' + (data.storage || 'unknown'), 'ok');
+  }
+
+  try {
+    showTempBanner('正在获取上传签名：' + file.name, 'warn');
+    var signRes = await fetch('/api/tos-presign', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, content_type: contentType })
+    });
+
+    if (signRes.status === 401) throw new Error('登录已失效，请刷新页面重新输入密码');
+    if (!signRes.ok) throw new Error('获取直传签名失败 HTTP ' + signRes.status);
+
+    var signData = await signRes.json();
+    if (!signData.upload_url || !signData.public_url) {
+      throw new Error(signData.error || '直传签名缺少上传地址');
+    }
+
+    showTempBanner('正在直传 TOS：' + file.name, 'warn');
+    var putController = new AbortController();
+    var putTimer = setTimeout(function() { putController.abort(); }, 180000);
+    try {
+      var putRes = await fetch(signData.upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': contentType },
+        body: file,
+        signal: putController.signal
+      });
+      if (!putRes.ok) throw new Error('TOS 直传失败 HTTP ' + putRes.status);
+    } finally {
+      clearTimeout(putTimer);
+    }
+
+    showTempBanner('上传成功：tos-direct', 'ok');
     hideTempBannerSoon();
-    return data;
+    return {
+      url: signData.public_url,
+      name: signData.object_key || file.name,
+      storage: 'tos-direct'
+    };
   } catch (e) {
-    var msg = e.name === 'AbortError' ? '上传超时，请换小图或稍后重试' : (e.message || '上传失败');
-    showTempBanner(msg, 'error');
-    alert(msg);
-    throw e;
-  } finally {
-    clearTimeout(fbTimer);
+    if (e.message && e.message.indexOf('登录已失效') >= 0) {
+      showTempBanner(e.message, 'error');
+      alert(e.message);
+      throw e;
+    }
+    console.warn('TOS direct upload failed, falling back to server upload:', e);
+    try {
+      return await uploadViaServer();
+    } catch (fallbackError) {
+      var msg = fallbackError.name === 'AbortError' ? '上传超时，请换小图或稍后重试' : (fallbackError.message || e.message || '上传失败');
+      showTempBanner(msg, 'error');
+      alert(msg);
+      throw fallbackError;
+    }
   }
 }
 
