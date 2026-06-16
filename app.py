@@ -563,9 +563,9 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Poll: GET /api/generate-video/status?modelSlug=xxx&runId=xxx
-        poll_url = f'https://nano-gpt.com/api/generate-video/status?modelSlug={model_real}&runId={task_id}'
-        for _ in range(120):  # 10 minutes max
+        # Poll: GET /api/generate-video/status/{runId}
+        poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}'
+        for _ in range(240):  # 20 minutes max
             try:
                 pr = requests.get(poll_url, headers=headers, timeout=30)
             except requests.RequestException:
@@ -600,7 +600,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 return
             time.sleep(5)
 
-        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 轮询超时（10分钟）'}
+        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 轮询超时（20分钟）'}
 
     except Exception as e:
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 异常: {str(e)}'}
