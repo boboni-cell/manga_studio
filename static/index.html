@@ -3936,7 +3936,7 @@ async function splitScript() {
     let result = r;
     if (r.job_id) {
       for (let i = 0; i < 90; i++) {
-        if (btn) btn.textContent = `拆分中...${i ? ' ' + i * 2 + 's' : ''}`;
+        if (btn) btn.textContent = `${scriptModel === 'claude46' ? 'Claude较慢 ' : '拆分中...'}${i ? i * 2 + 's' : ''}`;
         await wait(2000);
         result = await fetch('/api/script/split/' + encodeURIComponent(r.job_id)).then(res => readApiJson(res, '查询分镜'));
         if (result.status === 'done') break;

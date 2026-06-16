@@ -1146,6 +1146,7 @@ def build_script_shots(body):
     script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
     if not script_text:
         raise Exception('请输入剧本文本')
+    compact_request = len(script_text) < 120 and mode != 'long'
 
     mode_instructions = {
         'short': '\n当前模式：短镜头模式。每个输出项只包含 1 个 beat，时长 4-6 秒，适合快速反应、特写、动作切点。',
@@ -1153,33 +1154,45 @@ def build_script_shots(body):
         'smart': '\n当前模式：智能段落模式（默认）。能合并就合并，该拆才拆，同一场景、同一情绪、同一动作线尽量合成一个段落。'
     }
 
-    system_prompt = (
-        '你是专业真人AI短剧分镜导演。用户会提供剧本、剧情梗概或灵感，你要把它拆成"可直接生成的视频段落"，而不是机械拆成单个镜头。\n\n'
-        '核心目标：\n'
-        '每个输出项是一段可直接交给视频生成模型生成的视频段落，时长 4-15 秒。一个视频段落内部可以包含 1-3 个连续镜头变化或运镜阶段，但必须发生在同一场景、同一时间、同一情绪推进中，保证场景统一、人物连续、动作连贯。\n\n'
-        '拆分原则：\n'
-        '1. 优先按"剧情动作段落"拆分，不按句子拆分。\n'
-        '2. 同一场景、同一人物、同一情绪连续推进的内容，尽量合成一个视频段落。\n'
-        '3. 一个视频段落内部允许包含 1-3 个镜头 beat。\n'
-        '4. 只有在场景改变、时间跳跃、人物关系改变、情绪爆点需要单独强调、动作无法在一个连续视频里自然完成、需要明显转场时才拆成独立短段落。\n'
-        '5. 不要把简单动作拆成多个独立视频段落。不要为了凑数量拆分。\n'
-        '6. 每段默认 6-10 秒；动作简单可 4-6 秒；信息密集或包含 2-3 个 beat 可 10-15 秒。\n'
-        '7. 每段必须能单独生成，不依赖上一段才能看懂画面。\n'
-        '8. 台词要短，符合短剧口语，不能像旁白作文。\n\n'
-        '每个视频段落必须包含：segment_no、duration、scene、characters（数组）、emotion、story_action、beats（1-3个）、dialogue、video_prompt。\n\n'
-        'beats 写法：每个 beat 写清楚时间比例（如"前3秒"）、景别、机位/运镜、人物动作、画面重点。\n\n'
-        'video_prompt 写法：\n'
-        '1. 必须把 beats 融合成一段连续视频指令，使用直接命令式。\n'
-        '2. 写清楚机位如何变化、人物如何运动、台词什么时候说。\n'
-        '3. 同一场景内多个 beat 要强调"同一连续镜头感"或"自然剪辑感"。\n'
-        '4. 保持人物、服装、场景一致。\n'
-        '5. 质量约束放在最后：真人短剧质感，真实摄影风格，人物五官稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。\n\n'
-        '如果用户输入很短或没灵感：自动补成一个短剧冲突片段，优先使用强冲突场景：误会、重逢、隐瞒、摊牌、反转、救场、背叛、追问。\n\n'
-        + mode_instructions.get(mode, mode_instructions['smart']) + '\n\n'
-        '输出格式必须是 JSON 数组，不要 Markdown，不要解释，只输出 JSON 数组。'
-    )
+    if compact_request:
+        system_prompt = (
+            '你是AI短剧分镜导演。把用户短句扩成1个可直接生成的视频段落，不要过度拆分。\n'
+            '只输出 JSON 数组，数组内只放1个对象。字段必须有：segment_no、duration、scene、characters、emotion、story_action、beats、dialogue、video_prompt。\n'
+            'duration 用6-8秒。beats 只写1-2个，写清时间、景别、运镜、动作重点。\n'
+            'video_prompt 必须是直接命令式，融合成一段连续视频指令，保留用户原意，适当补环境和情绪，不写废话。\n'
+            'video_prompt 结尾固定加：真人短剧质感，真实摄影风格，人物五官稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。\n'
+            '不要 Markdown，不要解释，只输出 JSON 数组。'
+        )
+        max_tokens = 1200
+    else:
+        system_prompt = (
+            '你是专业真人AI短剧分镜导演。用户会提供剧本、剧情梗概或灵感，你要把它拆成"可直接生成的视频段落"，而不是机械拆成单个镜头。\n\n'
+            '核心目标：\n'
+            '每个输出项是一段可直接交给视频生成模型生成的视频段落，时长 4-15 秒。一个视频段落内部可以包含 1-3 个连续镜头变化或运镜阶段，但必须发生在同一场景、同一时间、同一情绪推进中，保证场景统一、人物连续、动作连贯。\n\n'
+            '拆分原则：\n'
+            '1. 优先按"剧情动作段落"拆分，不按句子拆分。\n'
+            '2. 同一场景、同一人物、同一情绪连续推进的内容，尽量合成一个视频段落。\n'
+            '3. 一个视频段落内部允许包含 1-3 个镜头 beat。\n'
+            '4. 只有在场景改变、时间跳跃、人物关系改变、情绪爆点需要单独强调、动作无法在一个连续视频里自然完成、需要明显转场时才拆成独立短段落。\n'
+            '5. 不要把简单动作拆成多个独立视频段落。不要为了凑数量拆分。\n'
+            '6. 每段默认 6-10 秒；动作简单可 4-6 秒；信息密集或包含 2-3 个 beat 可 10-15 秒。\n'
+            '7. 每段必须能单独生成，不依赖上一段才能看懂画面。\n'
+            '8. 台词要短，符合短剧口语，不能像旁白作文。\n\n'
+            '每个视频段落必须包含：segment_no、duration、scene、characters（数组）、emotion、story_action、beats（1-3个）、dialogue、video_prompt。\n\n'
+            'beats 写法：每个 beat 写清楚时间比例（如"前3秒"）、景别、机位/运镜、人物动作、画面重点。\n\n'
+            'video_prompt 写法：\n'
+            '1. 必须把 beats 融合成一段连续视频指令，使用直接命令式。\n'
+            '2. 写清楚机位如何变化、人物如何运动、台词什么时候说。\n'
+            '3. 同一场景内多个 beat 要强调"同一连续镜头感"或"自然剪辑感"。\n'
+            '4. 保持人物、服装、场景一致。\n'
+            '5. 质量约束放在最后：真人短剧质感，真实摄影风格，人物五官稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。\n\n'
+            '如果用户输入很短或没灵感：自动补成一个短剧冲突片段，优先使用强冲突场景：误会、重逢、隐瞒、摊牌、反转、救场、背叛、追问。\n\n'
+            + mode_instructions.get(mode, mode_instructions['smart']) + '\n\n'
+            '输出格式必须是 JSON 数组，不要 Markdown，不要解释，只输出 JSON 数组。'
+        )
+        max_tokens = 2600 if len(script_text) < 800 else 4000
     try:
-        raw = call_script_text_model(script_model, system_prompt, script_text, temperature=0.7, max_tokens=4000)
+        raw = call_script_text_model(script_model, system_prompt, script_text, temperature=0.6, max_tokens=max_tokens)
         # Strip markdown code fences if present
         if raw.startswith('```'): raw = raw.split('\n', 1)[1]
         if raw.endswith('```'): raw = raw.rsplit('\n', 1)[0]
