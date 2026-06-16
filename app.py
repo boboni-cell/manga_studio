@@ -1188,13 +1188,16 @@ def upscale_local():
         r = requests.get(video_url, timeout=120, stream=True)
         if r.status_code != 200:
             return jsonify(error=f'下载视频失败: {r.status_code}'), 500
+        ct = r.headers.get('Content-Type', '')
         total = 0
         with open(tmp_input, 'wb') as f:
             for chunk in r.iter_content(8192):
                 f.write(chunk)
                 total += len(chunk)
         if total < 1024:
-            return jsonify(error=f'下载的视频太小（{total}字节），可能链接已过期'), 500
+            return jsonify(error=f'下载的视频太小（{total}字节，Content-Type: {ct}），链接可能已过期'), 500
+        if 'html' in ct.lower() or (total < 1000 and not ct.startswith('video/')):
+            return jsonify(error=f'视频链接无效（{total}字节，Content-Type: {ct}），可能是HTML页面'), 500
 
         # ffmpeg: lanczos scale + unsharp sharpen + re-encode h264
         cmd = [
