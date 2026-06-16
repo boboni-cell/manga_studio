@@ -1188,8 +1188,13 @@ def upscale_local():
         r = requests.get(video_url, timeout=120, stream=True)
         if r.status_code != 200:
             return jsonify(error=f'下载视频失败: {r.status_code}'), 500
+        total = 0
         with open(tmp_input, 'wb') as f:
-            for chunk in r.iter_content(8192): f.write(chunk)
+            for chunk in r.iter_content(8192):
+                f.write(chunk)
+                total += len(chunk)
+        if total < 1024:
+            return jsonify(error=f'下载的视频太小（{total}字节），可能链接已过期'), 500
 
         # ffmpeg: lanczos scale + unsharp sharpen + re-encode h264
         cmd = [
@@ -1202,7 +1207,8 @@ def upscale_local():
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
-            return jsonify(error=f'ffmpeg 处理失败: {result.stderr[-300:]}'), 500
+            err = result.stderr[-500:] if result.stderr else '无输出'
+            return jsonify(error=f'ffmpeg 处理失败: {err}'), 500
 
         # Upload to TOS
         name = uuid.uuid4().hex + '.mp4'
