@@ -108,6 +108,14 @@ RATIO_TO_SIZE_NANO = {
     "9:16": "768x1344", "16:9": "1344x768",
     "4:5": "1536x1920", "5:4": "1920x1536"
 }
+# GPT Image style models sometimes ignore uncommon size strings and fall back
+# to 1024x1024, so use stricter/common dimensions plus aspect_ratio below.
+RATIO_TO_SIZE_GPT_IMAGE = {
+    "1:1": "1024x1024", "2:3": "1024x1536", "3:2": "1536x1024",
+    "3:4": "1024x1365", "4:3": "1365x1024",
+    "9:16": "864x1536", "16:9": "1536x864",
+    "4:5": "1024x1280", "5:4": "1280x1024"
+}
 # Ratio → pixel size for Seedream (requires ≥3.6M pixels)
 RATIO_TO_SIZE_VOLC = {
     "1:1": "1920x1920", "2:3": "2048x3072", "3:2": "3072x2048",
@@ -194,14 +202,29 @@ def save_video_history(video_url, script, original_script=None, refined_script=N
 def ensure_default_styles(styles):
     if not isinstance(styles, list):
         styles = []
-    existing_ids = {s.get('id') for s in styles if isinstance(s, dict)}
-    existing_names = {s.get('name') for s in styles if isinstance(s, dict)}
     merged = list(styles)
     changed = False
+    existing_ids = {s.get('id') for s in merged if isinstance(s, dict)}
+    existing_names = {s.get('name') for s in merged if isinstance(s, dict)}
     for style in DEFAULT_STYLES:
         if style.get('id') not in existing_ids and style.get('name') not in existing_names:
             merged.append(style)
             changed = True
+            existing_ids.add(style.get('id'))
+            existing_names.add(style.get('name'))
+    default_by_id = {s.get('id'): s for s in DEFAULT_STYLES}
+    for i, style in enumerate(merged):
+        if not isinstance(style, dict):
+            continue
+        default = default_by_id.get(style.get('id'))
+        if not default:
+            continue
+        refreshed = dict(style)
+        for key in ('name', 'thumbnail_url', 'prompt', 'negative_prompt', 'use_for_image', 'use_for_video'):
+            if refreshed.get(key) != default.get(key):
+                refreshed[key] = default.get(key)
+                changed = True
+        merged[i] = refreshed
     return merged, changed
 
 # Ensure data directory and files exist (for fresh Volume mounts)
@@ -272,8 +295,8 @@ DEFAULT_STYLES = [{'id': 'style_1',
  {'id': 'style_9',
   'name': '韩漫短剧',
   'thumbnail_url': 'https://movie1.tos-cn-beijing.volces.com/16e04c823639433e8d83f7cec108c588',
-  'prompt': '整体呈现韩漫短剧风格，画面具有精致韩系网络漫画审美，同时适合改编成AI短剧视频。人物五官清秀立体，脸型干净，眼神细腻，发型和服装时尚精致，整体气质偏都市、浪漫、清冷或财阀感。色彩干净柔和，光线明亮通透，画面有高级感但不过度写实，不要变成真实摄影，也不要变成低幼卡通。场景常见现代公寓、咖啡馆、办公室、豪宅、街道、学校、医院等，空间整洁、有设计感。人物情绪表达细腻，适合暧昧、误会、重逢、追妻、契约恋爱、财阀、复仇、职场和都市情感剧情。构图清爽，人物关系明确，背景精致但不抢主体，整体像高质量韩系条漫关键帧或动态漫分镜。',
-  'negative_prompt': '真人摄影质感，欧美脸，厚重油画感，低幼Q版，粗糙线条，夸张表情包风格，低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，字幕，水印，文字，Logo，边框，拼贴，多格漫画',
+  'prompt': '【强制画风：韩漫 / 韩国 Webtoon 2D 插画】画面必须是精致韩系网络漫画、恋爱条漫、动态漫关键帧风格，不是真人照片，不是3D渲染，不是AI真人写真，不是服装商品图。人物使用干净细腻的黑色或深棕线稿，柔和赛璐璐上色，半透明皮肤阴影，精致眼睫和眼神高光，薄唇，清爽脸型，细腻发丝分束，整体有韩漫男主/女主的修长肩颈、小脸、挺拔身形和高级感。色彩偏粉白、浅蓝、奶油光或清透暖光，背景可以是校园、樱花、都市街道、咖啡馆、公寓、办公室、医院、豪宅等韩漫场景，浅景深、柔光、花瓣或细腻空气感可以使用。构图像高质量韩国恋爱漫画封面或单格大画面，人物情绪细腻，适合暧昧、重逢、误会、追妻、契约恋爱、财阀、复仇、职场和都市情感剧情。即使生成角色三视图、服装设定或分镜构图，也必须保持同一个韩漫2D插画画风，不能变成写实模特照、3D人偶、棚拍白底商品图。可参考韩国条漫的细线稿、柔和阴影、清透肤色、精致五官和浪漫氛围，但不要生成文字、对白框、字幕或水印。',
+  'negative_prompt': '真人照片，真实摄影，AI真人写真，写实皮肤纹理，3D渲染，CG人偶，塑料感，服装商品图，模特棚拍，白底真人设定照，证件照，欧美漫画，厚涂油画，低幼Q版，粗糙线条，夸张表情包风格，韩文文字，对白框，字幕，水印，Logo，低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，边框，拼贴，多格漫画',
   'use_for_image': True,
   'use_for_video': True,
   'created_at': '2026-06-14 12:00'}]
@@ -712,18 +735,51 @@ def build_image_content(prompt, input_images, host_url):
     return content
 
 
+def parse_image_size(size):
+    try:
+        w, h = size.lower().split('x', 1)
+        return int(w), int(h)
+    except Exception:
+        return None, None
+
+
+def image_size_for_nano(model_id, ratio, custom_size=''):
+    if ratio == 'custom' and custom_size:
+        return custom_size
+    if model_id == 'gpt-image-2':
+        return RATIO_TO_SIZE_GPT_IMAGE.get(ratio, "1024x1024")
+    return RATIO_TO_SIZE_NANO.get(ratio, "1024x1024")
+
+
+def image_ratio_instruction(ratio, size):
+    if ratio == 'custom' and size:
+        return f"【画幅强制】最终图片必须严格输出为 {size} 像素，不要输出 1:1 正方形。"
+    if ratio and ratio != "1:1":
+        return f"【画幅强制】最终图片必须严格输出为 {ratio} 画幅，不要输出 1:1 正方形，不要自动裁成方图。"
+    return "【画幅强制】最终图片使用 1:1 正方形画幅。"
+
+
 # ── Nano image generation ─────────────────────────────────────
 def nano_image_generate(prompt, model_id, ratio, custom_size=''):
     """Call Nano-GPT images/generations API."""
-    if ratio == 'custom' and custom_size:
-        size = custom_size
-    else:
-        size = RATIO_TO_SIZE_NANO.get(ratio, "1024x1024")
+    size = image_size_for_nano(model_id, ratio, custom_size)
+    width, height = parse_image_size(size)
+    final_prompt = image_ratio_instruction(ratio, size) + "\n" + prompt
     headers = {
         'Content-Type': 'application/json',
         'x-api-key': NANO_GPT_API_KEY
     }
-    payload = {'model': model_id, 'prompt': prompt, 'size': size}
+    payload = {
+        'model': model_id,
+        'prompt': final_prompt,
+        'size': size,
+        'dimensions': size
+    }
+    if ratio != 'custom':
+        payload['aspect_ratio'] = ratio
+    if width and height:
+        payload['width'] = width
+        payload['height'] = height
     r = requests.post(f'{NANO_GPT_BASE}/images/generations', headers=headers, json=payload, timeout=120)
     if r.status_code not in (200, 201):
         raise Exception(f'Nano 图片生成失败: {r.status_code} {r.text[:200]}')
@@ -794,7 +850,9 @@ def generate_image():
 
     # Inject style
     if style_id:
-        styles = load_json(styles_path(), [])
+        styles, changed = ensure_default_styles(load_json(styles_path(), []))
+        if changed:
+            save_json(styles_path(), styles)
         style = next((s for s in styles if s.get('id') == style_id), None)
         if style:
             prompt = style.get('prompt', '') + '\n' + prompt
@@ -867,7 +925,9 @@ def generate():
 
     # Inject style
     if style_id:
-        styles = load_json(styles_path(), [])
+        styles, changed = ensure_default_styles(load_json(styles_path(), []))
+        if changed:
+            save_json(styles_path(), styles)
         style = next((s for s in styles if s.get('id') == style_id), None)
         if style:
             # add thumbnail as reference
