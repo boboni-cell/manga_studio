@@ -548,6 +548,20 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             'generateAudio': True,
             'camera_fixed': False,
         }
+        ref_images = []
+        for img in images:
+            url = img.get('url', '')
+            if url.startswith('/static/'):
+                url = host_url + url
+            if url:
+                ref_images.append({'url': url, 'label': img.get('role_label', 'reference')})
+        if ref_images:
+            payload['reference_images'] = ref_images
+            payload['image_urls'] = [img['url'] for img in ref_images]
+            payload['images'] = [img['url'] for img in ref_images]
+        if video_url:
+            payload['reference_video'] = video_url
+            payload['video_url'] = video_url
 
         JOBS[job_id]['status'] = 'running'
         print(f'[nano-start] model={model_key}', flush=True)
@@ -565,27 +579,53 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Poll: GET /api/generate-video/status/{runId}?modelSlug=xxx
-        poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}?modelSlug={model_real}'
+        # Use eventsUrl from response if available, otherwise construct poll URL
+        events_url_path = data.get('eventsUrl', '')
+        if events_url_path and events_url_path.startswith('/'):
+            poll_url = f'https://nano-gpt.com{events_url_path}'
+        else:
+            poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}?modelSlug={model_real}'
         print(f'[nano-poll] url={poll_url}', flush=True)
         for _ in range(240):  # 20 minutes max
             try:
                 pr = requests.get(poll_url, headers=headers, timeout=30)
-            except requests.RequestException:
+            except requests.RequestException as e:
+                print(f'[nano-poll] request error: {e}', flush=True)
                 time.sleep(5)
                 continue
 
             if pr.status_code not in (200, 202):
+                print(f'[nano-poll] http {pr.status_code} body={pr.text[:200]}', flush=True)
+                JOBS[job_id]['_last_poll'] = {'http_status': pr.status_code, 'body': pr.text[:500]}
                 time.sleep(5)
                 continue
 
-            try:
-                pd = pr.json()
-            except json.JSONDecodeError:
-                time.sleep(5)
-                continue
+            def _parse_poll_response(resp):
+                try:
+                    return resp.json()
+                except json.JSONDecodeError:
+                    pass
 
-            st = pd.get('status', '')
+                # Nano may return text/event-stream from eventsUrl. Use the latest JSON data event.
+                last_data = None
+                for line in resp.text.splitlines():
+                    line = line.strip()
+                    if not line.startswith('data:'):
+                        continue
+                    data_text = line[5:].strip()
+                    if not data_text or data_text == '[DONE]':
+                        continue
+                    last_data = data_text
+                if last_data:
+                    try:
+                        return json.loads(last_data)
+                    except json.JSONDecodeError:
+                        return {'status': 'running', 'raw_event': last_data}
+                return {'status': 'running', 'raw_text': resp.text[:1000]}
+
+            pd = _parse_poll_response(pr)
+
+            st = str(pd.get('status') or pd.get('state') or pd.get('stage') or '').lower()
             # Store raw poll response in job for frontend debugging
             JOBS[job_id]['_last_poll'] = {'status': st, 'keys': list(pd.keys()), 'raw': pd}
             sys.stdout.write(f'[nano-poll] status={st!r} keys={list(pd.keys())} raw={json.dumps(pd, ensure_ascii=False)[:500]}\n')
@@ -593,14 +633,26 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
             # Try to find video URL anywhere in response (flat or nested)
             def _find_url(obj, depth=0):
-                if depth > 4:
+                if depth > 8:
                     return None
-                if isinstance(obj, str) and obj.startswith('http') and ('.mp4' in obj or 'video' in obj.lower()):
+                if isinstance(obj, str) and obj.startswith('http') and (
+                    '.mp4' in obj.lower() or '.webm' in obj.lower() or '.mov' in obj.lower()
+                ):
                     return obj
                 if isinstance(obj, dict):
-                    for key in ('video_url', 'videoUrl', 'url', 'mp4', 'output_url', 'result_url', 'download_url'):
+                    preferred_keys = (
+                        'video_url', 'videoUrl', 'video', 'fileUrl', 'file_url', 'assetUrl', 'asset_url',
+                        'mp4', 'output_url', 'outputUrl', 'result_url', 'resultUrl', 'download_url',
+                        'downloadUrl', 'media_url', 'mediaUrl', 'url'
+                    )
+                    for key in preferred_keys:
                         if obj.get(key) and isinstance(obj[key], str) and obj[key].startswith('http'):
                             return obj[key]
+                    for key, value in obj.items():
+                        if isinstance(value, str) and value.startswith('http'):
+                            key_l = str(key).lower()
+                            if any(x in key_l for x in ('video', 'output', 'result', 'download', 'file', 'asset', 'media')):
+                                return value
                     for v in obj.values():
                         found = _find_url(v, depth + 1)
                         if found:
@@ -614,20 +666,21 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
             vurl = _find_url(pd)
 
-            if st.lower() in ('completed', 'succeeded', 'done', 'success', 'complete') or vurl:
+            if st in ('completed', 'succeeded', 'done', 'success', 'complete', 'finished') or vurl:
                 if vurl:
+                    stored_vurl, _ = download_and_save_video(vurl)
                     save_video_history(
-                        vurl, script,
+                        stored_vurl, script,
                         original_script=original_script or script,
                         refined_script=script if optimize else (original_script or script),
                         model=model_key, ratio=ratio, duration=duration,
                         resolution=resolution, ref_count=len(images))
-                    JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
+                    JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_vurl, 'source_video_url': vurl, 'error': None}
                     return
                 else:
-                    JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 成功但找不到视频URL，返回字段: {list(pd.keys())}'}
+                    JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 成功但找不到视频URL，返回字段: {list(pd.keys())}，最后返回: {json.dumps(pd, ensure_ascii=False)[:500]}'}
                     return
-            elif st.lower() in ('failed', 'error', 'cancelled'):
+            elif st in ('failed', 'error', 'cancelled', 'canceled'):
                 err = pd.get('error') or pd.get('message', '未知错误')
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 失败: {err}'}
                 return
@@ -756,6 +809,43 @@ def download_and_save_image(image_url):
     with open(path, 'wb') as f:
         f.write(img_bytes)
     return f'/static/uploads/{name}', name
+
+
+def download_and_save_video(video_url):
+    """Download a remote generated video, upload it to TOS, fallback to original URL."""
+    if not video_url or not video_url.startswith('http'):
+        return video_url, None
+    if TOS_PUBLIC_BASE and video_url.startswith(TOS_PUBLIC_BASE):
+        return video_url, os.path.basename(video_url.split('?', 1)[0])
+
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        r = requests.get(video_url, headers=headers, timeout=180, stream=True)
+        if r.status_code != 200:
+            print(f'[video-cache] download failed: {r.status_code} {r.text[:120]}', flush=True)
+            return video_url, None
+
+        ct = r.headers.get('Content-Type', 'video/mp4').split(';', 1)[0] or 'video/mp4'
+        ext = '.mp4'
+        if 'webm' in ct:
+            ext = '.webm'
+        elif 'quicktime' in ct or 'mov' in ct:
+            ext = '.mov'
+        name = f"{uuid.uuid4().hex}{ext}"
+        content_length = r.headers.get('Content-Length')
+        content_length = int(content_length) if content_length and content_length.isdigit() else None
+
+        if content_length:
+            public_url, ok = upload_to_tos(r.raw, name, ct, content_length=content_length)
+        else:
+            public_url, ok = upload_to_tos(r.content, name, ct)
+        if ok:
+            print(f'[video-cache] cached to TOS: {public_url}', flush=True)
+            return public_url, name
+    except Exception as e:
+        print(f'[video-cache] failed: {e}', flush=True)
+
+    return video_url, None
 
 
 def build_image_content(prompt, input_images, host_url):
