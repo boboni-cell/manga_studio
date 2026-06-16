@@ -1,2 +1,3 @@
 [phases.setup]
 nixPkgs = ["...", "ffmpeg"]
+cmds = ["pip install --retries 10 -r requirements.txt"]
