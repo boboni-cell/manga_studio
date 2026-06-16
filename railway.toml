@@ -1,0 +1,12 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+numReplicas = 1
+
+[service]
+port = 5001
+
+[volumes]
+# 持久化数据目录，部署重启后不丢失
+data = "/app/data"
