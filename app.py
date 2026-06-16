@@ -550,9 +550,13 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
         }
 
         JOBS[job_id]['status'] = 'running'
+        sys.stderr.write(f'[nano-start] model={model_key} runId={task_id}\n')
+        sys.stderr.flush()
 
         # Submit generation task
         r = requests.post('https://nano-gpt.com/api/generate-video', headers=headers, json=payload, timeout=30)
+        sys.stderr.write(f'[nano-submit] status={r.status_code} body={r.text[:200]}\n')
+        sys.stderr.flush()
         if r.status_code not in (200, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 提交失败: {r.status_code} {r.text[:200]}'}
             return
@@ -563,8 +567,10 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Poll: GET /api/generate-video/status/{runId}
-        poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}'
+        # Poll: GET /api/generate-video/status/{runId}?modelSlug=xxx
+        poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}?modelSlug={model_real}'
+        sys.stderr.write(f'[nano-poll] url={poll_url}\n')
+        sys.stderr.flush()
         for _ in range(240):  # 20 minutes max
             try:
                 pr = requests.get(poll_url, headers=headers, timeout=30)
