@@ -559,21 +559,23 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
         data = r.json()
         task_id = data.get('runId') or data.get('id')
-        events_url = data.get('eventsUrl', '')
         if not task_id:
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Poll for completion
-        # Try eventsUrl first; fall back to id-based polling
-        poll_url = f'https://nano-gpt.com{events_url}' if events_url.startswith('/') else events_url
-        if not poll_url:
-            poll_url = f'https://nano-gpt.com/api/generate-video?id={task_id}'
-        while True:
-            pr = requests.get(poll_url, headers=headers, timeout=30)
+        # Poll for completion — use id-based query, eventsUrl is unreliable
+        poll_url = f'https://nano-gpt.com/api/generate-video?id={task_id}'
+        max_attempts = 120  # 10 minutes max
+        for attempt in range(max_attempts):
+            try:
+                pr = requests.get(poll_url, headers=headers, timeout=30)
+            except requests.RequestException:
+                time.sleep(5)
+                continue
+
             if pr.status_code not in (200, 202):
-                JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 查询失败: {pr.status_code}'}
-                return
+                time.sleep(5)
+                continue
 
             text = pr.text.strip()
             if not text:
@@ -601,10 +603,6 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                     err = err or (pd.get('error') or pd.get('message'))
                 vurl = vurl or (pd.get('output', {}) or {}).get('video_url')
 
-            if status == 'pending':
-                time.sleep(5)
-                continue
-
             if vurl:
                 save_video_history(
                     vurl, script,
@@ -621,8 +619,9 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             elif status in ('failed', 'error', 'cancelled'):
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 生成失败: {err or "未知错误"}'}
                 return
-            else:
-                time.sleep(5)
+            time.sleep(5)
+
+        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 轮询超时（10分钟未完成）'}
 
     except Exception as e:
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 异常: {str(e)}'}
