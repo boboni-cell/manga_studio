@@ -565,8 +565,6 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
         # Poll: GET /api/generate-video/status/{runId}
         poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}'
-        sys.stderr.write(f'[nano-gpt] polling {poll_url}\n')
-        sys.stderr.flush()
         for _ in range(240):  # 20 minutes max
             try:
                 pr = requests.get(poll_url, headers=headers, timeout=30)
@@ -585,9 +583,6 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 continue
 
             st = pd.get('status', '')
-            # Debug: log actual response structure
-            sys.stderr.write(f'[nano-gpt] status={st!r} keys={list(pd.keys())} sample={str(pd)[:300]}\n')
-            sys.stderr.flush()
             if st.lower() in ('completed', 'succeeded', 'done', 'success', 'complete'):
                 vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url') or pd.get('output', {}).get('video_url')
                 if vurl:
