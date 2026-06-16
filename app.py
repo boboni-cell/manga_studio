@@ -120,6 +120,7 @@ QUALITY_PROMPT = """【画面质量强制要求】
 
 JOBS = {}
 SCRIPT_JOBS = {}
+HISTORY_LOCK = threading.Lock()
 
 def load_json(path, default):
     try:
@@ -134,6 +135,31 @@ def characters_path(): return os.path.join(DATA, 'characters.json')
 def assets_path(cat):  return os.path.join(DATA, f'{cat}.json')
 def history_path():    return os.path.join(DATA, 'history.json')
 def styles_path():     return os.path.join(DATA, 'styles.json')
+
+def insert_history(entry, limit=100):
+    with HISTORY_LOCK:
+        hist = load_json(history_path(), [])
+        hist.insert(0, entry)
+        save_json(history_path(), hist[:limit])
+
+def save_video_history(video_url, script, original_script=None, refined_script=None,
+                       model=None, ratio=None, duration=None, resolution=None,
+                       ref_count=None):
+    entry = {
+        'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
+        'type': 'video',
+        'video_url': video_url,
+        'script': (script or '')[:80],
+        'original_script': original_script or script or '',
+        'refined_script': refined_script or script or ''
+    }
+    if model: entry['model'] = model
+    if ratio: entry['ratio'] = ratio
+    if duration: entry['duration'] = duration
+    if resolution: entry['resolution'] = resolution
+    if ref_count is not None: entry['ref_count'] = ref_count
+    insert_history(entry)
+    return entry
 
 # ── TOS upload helper ─────────────────────────────────────────
 def get_tos_client():
@@ -349,7 +375,8 @@ def refine_prompt(script, images, ratio, duration):
 
 
 # ── Nano-GPT video generation adapter ─────────────────────────
-def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, ratio, duration, host_url, resolution='720p'):
+def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, ratio, duration, host_url,
+                      resolution='720p', original_script=None, optimize=False):
     """Generate video via Nano-GPT API. Runs in a background thread."""
     try:
         if not NANO_GPT_API_KEY:
@@ -412,6 +439,16 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 if not vurl:
                     JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 完成但无 video_url'}
                     return
+                save_video_history(
+                    vurl, script,
+                    original_script=original_script or script,
+                    refined_script=script if optimize else (original_script or script),
+                    model=model_key,
+                    ratio=ratio,
+                    duration=duration,
+                    resolution=resolution,
+                    ref_count=len(images)
+                )
                 JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
                 return
             elif status in ('failed', 'error', 'cancelled'):
@@ -426,7 +463,9 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
 
 # ── Third-party generic video adapter ─────────────────────────
-def third_party_video_adapter(job_id, script, images, audio_url, video_url, ratio, duration, host_url):
+def third_party_video_adapter(job_id, script, images, audio_url, video_url, ratio, duration, host_url,
+                              model_key=THIRD_PARTY_MODEL_ID, resolution='720p',
+                              original_script=None, optimize=False):
     """Generic adapter for any third-party video generation API.
     Reads api_base and api_key from env vars. Sends prompt + refs, polls for result."""
     try:
@@ -492,6 +531,16 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
                 if not vurl:
                     JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': '第三方完成但无 video_url'}
                     return
+                save_video_history(
+                    vurl, script,
+                    original_script=original_script or script,
+                    refined_script=script if optimize else (original_script or script),
+                    model=model_key,
+                    ratio=ratio,
+                    duration=duration,
+                    resolution=resolution,
+                    ref_count=len(images)
+                )
                 JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
                 return
             elif status in ('failed', 'error', 'cancelled'):
@@ -648,9 +697,7 @@ def generate_image():
                 JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'不支持的图片模型: {image_model}'}
                 return
 
-            # save history
-            hist = load_json(history_path(), [])
-            hist.insert(0, {
+            insert_history({
                 'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
                 'type': 'image',
                 'image_url': local_url,
@@ -659,7 +706,6 @@ def generate_image():
                 'model': image_model,
                 'ratio': ratio
             })
-            save_json(history_path(), hist[:50])
             JOBS[job_id] = {'status': 'succeeded', 'url': local_url, 'name': filename,
                              'model': image_model, 'ratio': ratio, 'mode': mode}
         except Exception as e:
@@ -728,7 +774,8 @@ def generate():
                             'error': 'NANO_GPT_API_KEY 未设置。请 export NANO_GPT_API_KEY=sk-nano-xxx 后重启服务'}
             return jsonify(job_id=job_id)
         threading.Thread(target=nano_gpt_generate, args=(
-            job_id, video_model, script, images, audio_url, video_url, ratio, duration, host_url, resolution
+            job_id, video_model, script, images, audio_url, video_url, ratio, duration, host_url,
+            resolution, original_script, optimize
         ), daemon=True).start()
         return jsonify(job_id=job_id)
 
@@ -739,7 +786,8 @@ def generate():
                             'error': '第三方模型未配置。请设置 THIRD_PARTY_API_BASE 和 THIRD_PARTY_API_KEY 环境变量后重启服务'}
             return jsonify(job_id=job_id)
         threading.Thread(target=third_party_video_adapter, args=(
-            job_id, script, images, audio_url, video_url, ratio, duration, host_url
+            job_id, script, images, audio_url, video_url, ratio, duration, host_url,
+            video_model, resolution, original_script, optimize
         ), daemon=True).start()
         return jsonify(job_id=job_id)
 
@@ -811,19 +859,17 @@ def generate():
                 r = client.content_generation.tasks.get(task_id=task_id)
                 if r.status == 'succeeded':
                     vurl = r.content.video_url
+                    save_video_history(
+                        vurl, script,
+                        original_script=original_script,
+                        refined_script=script if optimize else original_script,
+                        model=video_model,
+                        ratio=ratio,
+                        duration=duration,
+                        resolution=resolution,
+                        ref_count=len(images)
+                    )
                     JOBS[job_id] = {'status':'succeeded','video_url':vurl,'error':None}
-                    # save history
-                    hist = load_json(history_path(), [])
-                    entry = {
-                        'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
-                        'type': 'video',
-                        'video_url': vurl,
-                        'script': script[:80],
-                        'original_script': original_script,
-                        'refined_script': script if optimize else original_script
-                    }
-                    hist.insert(0, entry)
-                    save_json(history_path(), hist[:50])
                     break
                 elif r.status == 'failed':
                     JOBS[job_id] = {'status':'failed','video_url':None,'error':str(r.error)}
@@ -1197,9 +1243,7 @@ def build_script_shots(body):
         if raw.startswith('```'): raw = raw.split('\n', 1)[1]
         if raw.endswith('```'): raw = raw.rsplit('\n', 1)[0]
         shots = json.loads(raw)
-        # save to history
-        hist = load_json(history_path(), [])
-        hist.insert(0, {
+        insert_history({
             'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
             'type': 'script',
             'script_text': script_text[:200],
@@ -1207,7 +1251,6 @@ def build_script_shots(body):
             'segment_count': len(shots),
             'shots': shots
         })
-        save_json(history_path(), hist[:50])
         return shots
     except json.JSONDecodeError as e:
         raise Exception(f'解析分镜结果失败: {str(e)}\n模型原文：{raw[:800]}')
