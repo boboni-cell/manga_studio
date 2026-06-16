@@ -3870,14 +3870,35 @@ async function upscaleVideo(videoUrl, ratio, origIdx) {
 }
 
 // ── Script Workspace ─────────────────────────────────────────
+async function readApiJson(res, label) {
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (e) {
+    const plain = text
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160);
+    throw new Error(`${label}接口返回异常 HTTP ${res.status}${plain ? '：' + plain : ''}`);
+  }
+  if (!res.ok) {
+    throw new Error(data.error || `${label}失败 HTTP ${res.status}`);
+  }
+  return data;
+}
+
 async function uploadScriptFile(input) {
   const f = input.files[0]; if (!f) return;
   const fd = new FormData(); fd.append('file', f);
   try {
-    const r = await fetch('/api/script/import', { method: 'POST', body: fd }).then(r => r.json());
+    const r = await fetch('/api/script/import', { method: 'POST', body: fd }).then(res => readApiJson(res, '上传剧本'));
     if (r.error) { alert(r.error); return; }
     document.getElementById('scriptWSText').value = r.text;
-  } catch (e) { alert('上传失败'); }
+  } catch (e) { alert(e.message || '上传失败'); }
 }
 
 async function brainstormScript() {
@@ -3890,10 +3911,10 @@ async function brainstormScript() {
     const r = await fetch('/api/script/brainstorm', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ topic, script_model: scriptModel })
-    }).then(r => r.json());
+    }).then(res => readApiJson(res, '生成灵感'));
     if (r.error) { alert(r.error); document.getElementById('scriptWSText').value = ''; return; }
     document.getElementById('scriptWSText').value = r.text;
-  } catch (e) { alert('生成失败'); }
+  } catch (e) { alert(e.message || '生成失败'); }
 }
 
 async function splitScript() {
@@ -3906,7 +3927,7 @@ async function splitScript() {
     const r = await fetch('/api/script/split', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel })
-    }).then(r => r.json());
+    }).then(res => readApiJson(res, '拆分'));
     if (r.error) { alert(r.error); return; }
     renderShots(r.shots || []);
     // Refresh history cache
