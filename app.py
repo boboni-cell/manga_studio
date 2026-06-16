@@ -4,6 +4,13 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, redirect, session
 from werkzeug.utils import secure_filename
 from volcenginesdkarkruntime import Ark
+try:
+    from supabase import create_client
+    SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
+    SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
+    _supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
+except Exception:
+    _supabase = None
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 
@@ -121,14 +128,30 @@ QUALITY_PROMPT = """【画面质量强制要求】
 JOBS = {}
 
 def load_json(path, default):
+    """Load data from Supabase or local JSON file."""
+    key = os.path.basename(path).replace('.json', '')
+    if _supabase:
+        try:
+            r = _supabase.table('kv_store').select('data').eq('key', key).execute()
+            if r.data:
+                return r.data[0]['data']
+        except Exception:
+            pass
     try:
         with open(path, 'r', encoding='utf-8') as f: return json.load(f)
     except: return default
 
 def save_json(path, data):
+    """Save data to Supabase and local JSON file."""
+    key = os.path.basename(path).replace('.json', '')
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    if _supabase:
+        try:
+            _supabase.table('kv_store').upsert({'key': key, 'data': data, 'updated_at': 'now()'}, on_conflict='key').execute()
+        except Exception:
+            pass
 
 def characters_path(): return os.path.join(DATA, 'characters.json')
 def assets_path(cat):  return os.path.join(DATA, f'{cat}.json')
