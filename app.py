@@ -135,6 +135,22 @@ def assets_path(cat):  return os.path.join(DATA, f'{cat}.json')
 def history_path():    return os.path.join(DATA, 'history.json')
 def styles_path():     return os.path.join(DATA, 'styles.json')
 
+# Ensure data directory and files exist (for fresh Volume mounts)
+def init_data():
+    os.makedirs(DATA, exist_ok=True)
+    for path, default in [
+        (characters_path(), {}),
+        (history_path(), []),
+        (styles_path(), []),
+        (assets_path('outfits'), []),
+        (assets_path('scenes'), []),
+        (assets_path('audios'), []),
+    ]:
+        if not os.path.exists(path):
+            save_json(path, default)
+
+init_data()
+
 # ── TOS upload helper ─────────────────────────────────────────
 def get_tos_client():
     return tos.TosClientV2(TOS_AK, TOS_SK, TOS_ENDPOINT, TOS_REGION)
