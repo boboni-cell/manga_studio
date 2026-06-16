@@ -572,7 +572,11 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 查询失败: {pr.status_code}'}
                 return
 
-            pd = pr.json()
+            try:
+                pd = pr.json()
+            except Exception:
+                time.sleep(10)
+                continue
             status = pd.get('status', '')
             if status in ('completed', 'succeeded', 'done'):
                 vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url') or pd.get('output', {}).get('video_url')
