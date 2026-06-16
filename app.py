@@ -583,8 +583,9 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 continue
 
             st = pd.get('status', '')
-            # Update job status so frontend shows live progress
-            JOBS[job_id]['status'] = f'generating-{st}' if st else 'generating'
+            # TEMP DEBUG: log every poll response
+            sys.stderr.write(f'[nano-poll] status={st!r} all_keys={list(pd.keys())} raw={json.dumps(pd, ensure_ascii=False)[:400]}\n')
+            sys.stderr.flush()
 
             # Try to find video URL anywhere in response
             vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url')
