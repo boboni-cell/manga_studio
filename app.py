@@ -564,25 +564,48 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Poll for completion using eventsUrl
+        # Poll for completion
+        # Try eventsUrl first; fall back to id-based polling
         poll_url = f'https://nano-gpt.com{events_url}' if events_url.startswith('/') else events_url
+        if not poll_url:
+            poll_url = f'https://nano-gpt.com/api/generate-video?id={task_id}'
         while True:
             pr = requests.get(poll_url, headers=headers, timeout=30)
             if pr.status_code not in (200, 202):
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 查询失败: {pr.status_code}'}
                 return
 
-            try:
-                pd = pr.json()
-            except Exception:
+            text = pr.text.strip()
+            if not text:
                 time.sleep(5)
                 continue
-            status = pd.get('status', '')
-            if status in ('completed', 'succeeded', 'done'):
-                vurl = pd.get('video_url') or pd.get('videoUrl') or pd.get('url') or pd.get('output', {}).get('video_url')
-                if not vurl:
-                    JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'Nano-GPT 完成但无 video_url'}
-                    return
+
+            # Parse JSON (SSE or direct)
+            vurl = None
+            status = None
+            err = None
+            for line in text.split('\n'):
+                line = line.strip()
+                if line.startswith('data:'):
+                    line = line[5:].strip()
+                if not line or line.startswith(':'):
+                    continue
+                try:
+                    pd = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                status = pd.get('status', status)
+                if pd.get('video_url') or pd.get('videoUrl') or pd.get('url'):
+                    vurl = vurl or (pd.get('video_url') or pd.get('videoUrl') or pd.get('url'))
+                if pd.get('error') or pd.get('message'):
+                    err = err or (pd.get('error') or pd.get('message'))
+                vurl = vurl or (pd.get('output', {}) or {}).get('video_url')
+
+            if status == 'pending':
+                time.sleep(5)
+                continue
+
+            if vurl:
                 save_video_history(
                     vurl, script,
                     original_script=original_script or script,
@@ -596,8 +619,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
                 return
             elif status in ('failed', 'error', 'cancelled'):
-                err = pd.get('error') or pd.get('message', '未知错误')
-                JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 生成失败: {err}'}
+                JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 生成失败: {err or "未知错误"}'}
                 return
             else:
                 time.sleep(5)
