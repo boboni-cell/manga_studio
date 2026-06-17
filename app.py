@@ -580,29 +580,19 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             return
 
         # The submit response may include an eventsUrl, but Nano can return only
-        # {"reason":"snapshot_complete"} there. Always keep the status endpoint
-        # as the authoritative result poller.
-        status_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}?modelSlug={model_real}'
+        # {"reason":"snapshot_complete"} there. Use the official status endpoint
+        # as the authoritative result poller, with a legacy fallback.
+        status_endpoints = [
+            ('https://nano-gpt.com/api/video/status', {'requestId': task_id}),
+            ('https://nano-gpt.com/api/generate-video/status', {'runId': task_id, 'model': model_real, 'modelSlug': model_real}),
+        ]
         events_url_path = data.get('eventsUrl', '')
         if events_url_path and events_url_path.startswith('/'):
             events_url = f'https://nano-gpt.com{events_url_path}'
         else:
             events_url = None
-        print(f'[nano-poll] status_url={status_url} events_url={events_url}', flush=True)
+        print(f'[nano-poll] status_endpoints={status_endpoints} events_url={events_url}', flush=True)
         for _ in range(240):  # 20 minutes max
-            try:
-                pr = requests.get(status_url, headers=headers, timeout=30)
-            except requests.RequestException as e:
-                print(f'[nano-poll] request error: {e}', flush=True)
-                time.sleep(5)
-                continue
-
-            if pr.status_code not in (200, 202):
-                print(f'[nano-poll] http {pr.status_code} body={pr.text[:200]}', flush=True)
-                JOBS[job_id]['_last_poll'] = {'http_status': pr.status_code, 'body': pr.text[:500]}
-                time.sleep(5)
-                continue
-
             def _parse_poll_response(resp):
                 try:
                     return resp.json()
@@ -626,16 +616,31 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                         return {'status': 'running', 'raw_event': last_data}
                 return {'status': 'running', 'raw_text': resp.text[:1000]}
 
-            pd = _parse_poll_response(pr)
-            if pd.get('reason') == 'snapshot_complete' and events_url:
+            pd = None
+            last_http_error = None
+            for status_url, params in status_endpoints:
                 try:
-                    fallback = requests.get(status_url, headers=headers, timeout=30)
-                    if fallback.status_code in (200, 202):
-                        pd = _parse_poll_response(fallback)
-                except requests.RequestException:
-                    pass
+                    pr = requests.get(status_url, headers=headers, params=params, timeout=30)
+                except requests.RequestException as e:
+                    print(f'[nano-poll] request error: {e}', flush=True)
+                    last_http_error = {'request_error': str(e), 'url': status_url, 'params': params}
+                    continue
 
-            st = str(pd.get('status') or pd.get('state') or pd.get('stage') or '').lower()
+                if pr.status_code in (200, 202):
+                    pd = _parse_poll_response(pr)
+                    if pd.get('reason') != 'snapshot_complete':
+                        break
+                else:
+                    print(f'[nano-poll] http {pr.status_code} url={status_url} body={pr.text[:200]}', flush=True)
+                    last_http_error = {'http_status': pr.status_code, 'url': status_url, 'params': params, 'body': pr.text[:500]}
+
+            if pd is None:
+                JOBS[job_id]['_last_poll'] = last_http_error or {'error': 'no poll response'}
+                time.sleep(5)
+                continue
+
+            status_obj = pd.get('data') if isinstance(pd.get('data'), dict) else pd
+            st = str(status_obj.get('status') or status_obj.get('state') or status_obj.get('stage') or '').lower()
             # Store raw poll response in job for frontend debugging
             JOBS[job_id]['_last_poll'] = {'status': st, 'keys': list(pd.keys()), 'raw': pd}
             sys.stdout.write(f'[nano-poll] status={st!r} keys={list(pd.keys())} raw={json.dumps(pd, ensure_ascii=False)[:500]}\n')
@@ -691,7 +696,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                     JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 成功但找不到视频URL，返回字段: {list(pd.keys())}，最后返回: {json.dumps(pd, ensure_ascii=False)[:500]}'}
                     return
             elif st in ('failed', 'error', 'cancelled', 'canceled'):
-                err = pd.get('error') or pd.get('message', '未知错误')
+                err = status_obj.get('error') or status_obj.get('message') or pd.get('error') or pd.get('message') or '未知错误'
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 失败: {err}'}
                 return
             time.sleep(5)
