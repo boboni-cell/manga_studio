@@ -579,16 +579,19 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 返回无 runId: {data}'}
             return
 
-        # Use eventsUrl from response if available, otherwise construct poll URL
+        # The submit response may include an eventsUrl, but Nano can return only
+        # {"reason":"snapshot_complete"} there. Always keep the status endpoint
+        # as the authoritative result poller.
+        status_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}?modelSlug={model_real}'
         events_url_path = data.get('eventsUrl', '')
         if events_url_path and events_url_path.startswith('/'):
-            poll_url = f'https://nano-gpt.com{events_url_path}'
+            events_url = f'https://nano-gpt.com{events_url_path}'
         else:
-            poll_url = f'https://nano-gpt.com/api/generate-video/status/{task_id}?modelSlug={model_real}'
-        print(f'[nano-poll] url={poll_url}', flush=True)
+            events_url = None
+        print(f'[nano-poll] status_url={status_url} events_url={events_url}', flush=True)
         for _ in range(240):  # 20 minutes max
             try:
-                pr = requests.get(poll_url, headers=headers, timeout=30)
+                pr = requests.get(status_url, headers=headers, timeout=30)
             except requests.RequestException as e:
                 print(f'[nano-poll] request error: {e}', flush=True)
                 time.sleep(5)
@@ -624,6 +627,13 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                 return {'status': 'running', 'raw_text': resp.text[:1000]}
 
             pd = _parse_poll_response(pr)
+            if pd.get('reason') == 'snapshot_complete' and events_url:
+                try:
+                    fallback = requests.get(status_url, headers=headers, timeout=30)
+                    if fallback.status_code in (200, 202):
+                        pd = _parse_poll_response(fallback)
+                except requests.RequestException:
+                    pass
 
             st = str(pd.get('status') or pd.get('state') or pd.get('stage') or '').lower()
             # Store raw poll response in job for frontend debugging
