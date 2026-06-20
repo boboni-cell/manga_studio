@@ -4132,17 +4132,33 @@ function useExtractedFrame(frameUrl, target, cardIdx) {
 async function upscaleVideo(videoUrl, ratio, origIdx) {
   var hint = document.createElement('div');
   hint.className = 'generating';
-  hint.innerHTML = '<div class="spinner"></div><div class="gen-status" style="margin-top:8px;">转1080p中...</div>';
+  hint.innerHTML = '<div class="spinner"></div><div class="gen-status" style="margin-top:8px;">准备转1080p...</div>';
   hint.style.margin = '6px 0';
   var resultArea = document.getElementById('resultArea');
   resultArea.appendChild(hint);
   try {
-    var r = await fetch('/api/upscale-local', {
+    var start = await fetch('/api/upscale-local', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ video_url: videoUrl, ratio: ratio })
-    }).then(function(rr) { return rr.json(); });
+    }).then(function(res) { return readApiJson(res, '转1080p'); });
+
+    if (!start.job_id) {
+      throw new Error(start.error || '转1080p未返回任务ID');
+    }
+
+    var r = null;
+    for (var i = 0; i < 240; i++) {
+      await wait(3000);
+      r = await fetch('/api/upscale-status/' + start.job_id)
+        .then(function(res) { return readApiJson(res, '查询转码'); });
+      var statusText = r.progress || (r.status === 'running' ? '转1080p中...' : '等待转码...');
+      hint.innerHTML = '<div class="spinner"></div><div class="gen-status" style="margin-top:8px;">' + escHtml(statusText) + '</div>';
+      if (r.status === 'succeeded' || r.status === 'failed') break;
+    }
+
     hint.remove();
     if (r.error) { alert(r.error); return; }
+    if (!r || r.status !== 'succeeded' || !r.url) { alert('转1080p超时，请稍后看历史或重试'); return; }
     // Add new 1080p entry, do NOT replace original
     sessionVideoResults.push({
       url: r.url, time: new Date().toLocaleString(),
@@ -4159,7 +4175,7 @@ async function upscaleVideo(videoUrl, ratio, origIdx) {
       sessionVideoResults[origIdx].tags = origTgs;
     }
     renderVideoResults();
-  } catch (e) { hint.remove(); alert('转换失败'); }
+  } catch (e) { hint.remove(); alert(e.message || '转换失败'); }
 }
 
 // ── Script Workspace ─────────────────────────────────────────

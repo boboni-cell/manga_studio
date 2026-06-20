@@ -1288,20 +1288,18 @@ def extract_frame():
         return jsonify(error=f'截帧异常: {str(e)}'), 500
 
 
-# ── Local upscale to 1080p ───────────────────────────────────
-@app.route('/api/upscale-local', methods=['POST'])
-@login_required
-def upscale_local():
+def run_upscale_job(job_id, video_url, ratio):
     import subprocess, shutil
-    body = request.json
-    video_url = body.get('video_url', '')
-    ratio = body.get('ratio', '9:16')
-    if not video_url:
-        return jsonify(error='video_url required'), 400
+    JOBS[job_id] = {'status': 'running', 'url': None, 'error': None, 'progress': '检查 ffmpeg'}
 
     # Check ffmpeg
-    if not shutil.which('ffmpeg'):
-        return jsonify(error='未检测到 ffmpeg，请先安装 ffmpeg'), 500
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        JOBS[job_id] = {
+            'status': 'failed',
+            'url': None,
+            'error': '未检测到 ffmpeg/ffprobe。Railway 需要部署包含 ffmpeg 的 nixpacks.toml；本机需要先安装 ffmpeg。'
+        }
+        return
 
     # Ratio → target resolution (1080p)
     RATIO_SIZE = {
@@ -1321,21 +1319,28 @@ def upscale_local():
 
     try:
         # Download input
-        r = requests.get(video_url, timeout=120, stream=True)
+        JOBS[job_id]['progress'] = '下载原视频'
+        r = requests.get(video_url, timeout=180, stream=True, headers={'User-Agent': 'Mozilla/5.0'})
         if r.status_code != 200:
-            return jsonify(error=f'下载视频失败: {r.status_code}'), 500
+            JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'下载视频失败: {r.status_code}'}
+            return
         ct = r.headers.get('Content-Type', '')
         total = 0
         with open(tmp_input, 'wb') as f:
             for chunk in r.iter_content(8192):
+                if not chunk:
+                    continue
                 f.write(chunk)
                 total += len(chunk)
         if total < 1024:
-            return jsonify(error=f'下载的视频太小（{total}字节，Content-Type: {ct}），链接可能已过期'), 500
+            JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'下载的视频太小（{total}字节，Content-Type: {ct}），链接可能已过期'}
+            return
         if 'html' in ct.lower() or (total < 1000 and not ct.startswith('video/')):
-            return jsonify(error=f'视频链接无效（{total}字节，Content-Type: {ct}），可能是HTML页面'), 500
+            JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'视频链接无效（{total}字节，Content-Type: {ct}），可能是HTML页面'}
+            return
 
         # ffmpeg: lanczos scale + unsharp sharpen + re-encode h264
+        JOBS[job_id]['progress'] = 'ffmpeg 转码到 1080p'
         cmd = [
             'ffmpeg', '-y', '-i', tmp_input,
             '-vf', f'scale={tw}:{th}:flags=lanczos,unsharp=5:5:0.5:3:3:0.25',
@@ -1347,9 +1352,11 @@ def upscale_local():
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             err = result.stderr[-500:] if result.stderr else '无输出'
-            return jsonify(error=f'ffmpeg 处理失败: {err}'), 500
+            JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'ffmpeg 处理失败: {err}'}
+            return
 
         # Upload to TOS
+        JOBS[job_id]['progress'] = '上传 1080p 视频'
         name = uuid.uuid4().hex + '.mp4'
         with open(tmp_output, 'rb') as f:
             vid_bytes = f.read()
@@ -1361,10 +1368,18 @@ def upscale_local():
             shutil.copy(tmp_output, out_path)
             out_url = f'/static/uploads/{name}'
 
-        return jsonify(url=out_url, width=tw, height=th, ratio=ratio, target='1080p')
+        JOBS[job_id] = {
+            'status': 'succeeded',
+            'url': out_url,
+            'width': tw,
+            'height': th,
+            'ratio': ratio,
+            'target': '1080p',
+            'error': None
+        }
 
     except Exception as e:
-        return jsonify(error=str(e)), 500
+        JOBS[job_id] = {'status': 'failed', 'url': None, 'error': str(e)}
     finally:
         import shutil as _shutil
         for f in [tmp_input, tmp_output]:
@@ -1372,6 +1387,28 @@ def upscale_local():
             except: pass
         try: _shutil.rmtree(tmp_dir, ignore_errors=True)
         except: pass
+
+
+# ── Local upscale to 1080p ───────────────────────────────────
+@app.route('/api/upscale-local', methods=['POST'])
+@login_required
+def upscale_local():
+    body = request.json
+    video_url = body.get('video_url', '')
+    ratio = body.get('ratio', '9:16')
+    if not video_url:
+        return jsonify(error='video_url required'), 400
+
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = {'status': 'pending', 'url': None, 'error': None}
+    threading.Thread(target=run_upscale_job, args=(job_id, video_url, ratio), daemon=True).start()
+    return jsonify(job_id=job_id)
+
+
+@app.route('/api/upscale-status/<job_id>')
+@login_required
+def upscale_status(job_id):
+    return jsonify(JOBS.get(job_id, {'status': 'not_found'}))
 
 
 # ── Script text model helper ─────────────────────────────────
