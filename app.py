@@ -89,7 +89,7 @@ ALL_MODELS = ["seedance"] + sorted(NANO_GPT_NAMES) + ([THIRD_PARTY_MODEL_ID] if 
 # Model capabilities
 MODEL_CAPS = {
     "seedance": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
-    "kling-v30-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
+    "kling-v30-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["720p","1080p"]},
     "grok-imagine-video": {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "vidu-q3": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "seedance-v15-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
@@ -1249,16 +1249,33 @@ def extract_frame():
     if not video_url:
         return jsonify(error='video_url required'), 400
 
-    import subprocess, tempfile
+    import shutil, subprocess
+    if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
+        return jsonify(error='未检测到 ffmpeg/ffprobe，无法截帧。Railway 需要重新部署包含 ffmpeg 的版本。'), 500
+
+    if video_url.startswith('/'):
+        video_url = request.host_url.rstrip('/') + video_url
+
     name = uuid.uuid4().hex + '.png'
     out_path = os.path.join(UPLOAD, name)
+    tmp_dir = os.path.join(BASE, 'tmp_frames')
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp_input = os.path.join(tmp_dir, uuid.uuid4().hex + '.mp4')
 
     try:
+        r = requests.get(video_url, timeout=180, stream=True, headers={'User-Agent': 'Mozilla/5.0'})
+        if r.status_code != 200:
+            return jsonify(error=f'下载视频失败: {r.status_code}'), 500
+        with open(tmp_input, 'wb') as f:
+            for chunk in r.iter_content(8192):
+                if chunk:
+                    f.write(chunk)
+
         # Use ffmpeg to extract frame
         if position == 'last':
             # Get video duration first, extract from near end
             probe = subprocess.run(['ffprobe', '-v', 'quiet', '-print_format', 'json',
-                                    '-show_format', video_url],
+                                    '-show_format', tmp_input],
                                     capture_output=True, text=True, timeout=30)
             duration = 5
             if probe.returncode == 0:
@@ -1266,13 +1283,17 @@ def extract_frame():
                 info = _json.loads(probe.stdout)
                 duration = float(info.get('format', {}).get('duration', 5))
             seek_time = max(0, duration - 2)
-            subprocess.run(['ffmpeg', '-y', '-ss', str(seek_time), '-i', video_url,
-                            '-vframes', '1', '-q:v', '2', out_path],
-                        capture_output=True, timeout=60)
+            result = subprocess.run(['ffmpeg', '-y', '-ss', str(seek_time), '-i', tmp_input,
+                                     '-vframes', '1', '-q:v', '2', out_path],
+                                    capture_output=True, text=True, timeout=60)
         else:
-            subprocess.run(['ffmpeg', '-y', '-i', video_url, '-vframes', '1',
-                            '-q:v', '2', out_path],
-                        capture_output=True, timeout=60)
+            result = subprocess.run(['ffmpeg', '-y', '-i', tmp_input, '-vframes', '1',
+                                     '-q:v', '2', out_path],
+                                    capture_output=True, text=True, timeout=60)
+
+        if result.returncode != 0:
+            err = result.stderr[-500:] if result.stderr else '无输出'
+            return jsonify(error=f'截帧失败: {err}'), 500
 
         if not os.path.exists(out_path):
             return jsonify(error='截帧失败'), 500
@@ -1287,6 +1308,12 @@ def extract_frame():
 
     except Exception as e:
         return jsonify(error=f'截帧异常: {str(e)}'), 500
+    finally:
+        try:
+            if os.path.exists(tmp_input):
+                os.remove(tmp_input)
+        except Exception:
+            pass
 
 
 def run_upscale_job(job_id, video_url, ratio):
@@ -1399,6 +1426,8 @@ def upscale_local():
     ratio = body.get('ratio', '9:16')
     if not video_url:
         return jsonify(error='video_url required'), 400
+    if video_url.startswith('/'):
+        video_url = request.host_url.rstrip('/') + video_url
 
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {'status': 'pending', 'url': None, 'error': None}
