@@ -1178,8 +1178,9 @@ def generate():
                 r = client.content_generation.tasks.get(task_id=task_id)
                 if r.status == 'succeeded':
                     vurl = r.content.video_url
+                    stored_vurl, _ = download_and_save_video(vurl)
                     save_video_history(
-                        vurl, script,
+                        stored_vurl, script,
                         original_script=original_script,
                         refined_script=script if optimize else original_script,
                         model=video_model,
@@ -1188,7 +1189,7 @@ def generate():
                         resolution=resolution,
                         ref_count=len(images)
                     )
-                    JOBS[job_id] = {'status':'succeeded','video_url':vurl,'error':None}
+                    JOBS[job_id] = {'status':'succeeded','video_url':stored_vurl,'source_video_url':vurl,'error':None}
                     break
                 elif r.status == 'failed':
                     JOBS[job_id] = {'status':'failed','video_url':None,'error':str(r.error)}
