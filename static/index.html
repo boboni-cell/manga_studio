@@ -2252,10 +2252,10 @@ let sessionVideoResults = [];
 let skipImageCheck = false;
 let skipVideoCheck = false;
 const IMAGE_MODEL_LABELS = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'volc-seedream-4-5': 'Seedream 4.5' };
-const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
+const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
 
 // Mirror of app.py NANO_GPT_NAMES for frontend model filtering
-const NANO_GPT_NAMES = new Set(['grok-imagine-video','vidu-q3','seedance-v15-pro']);
+const NANO_GPT_NAMES = new Set(['kling-v30-std','grok-imagine-video','vidu-q3','seedance-v15-pro']);
 
 // ── Init ─────────────────────────────────────────────────────
 let _initDone = false;
@@ -2361,6 +2361,7 @@ async function buildModelSelect() {
     sel.innerHTML = '';
     const labels = {
       'seedance': 'Seedance (火山)',
+      'kling-v30-std': 'Kling v3.0 Std',
       'grok-imagine-video': 'Grok Imagine',
       'vidu-q3': 'Vidu Q3',
       'seedance-v15-pro': 'Seedance v1.5 Pro',
@@ -3799,7 +3800,7 @@ function checkBeforeVideoGen(callback) {
   if (!storyRef && !firstRef) warnings.push('没有分镜参考且没有首帧，构图可能随机');
   if (promptLen < 20) warnings.push('prompt太短，动作和情绪可能不明确');
   if (selectedRefs.length > 6) warnings.push('参考图超过6张，可能互相干扰');
-  if (videoModel === 'vidu-q3') warnings.push('当前模型成本较高');
+  if (videoModel === 'kling-v30-std' || videoModel === 'vidu-q3') warnings.push('当前模型成本较高');
   openCheckModal('视频生成前检查', items, warnings, 'video', callback);
 }
 

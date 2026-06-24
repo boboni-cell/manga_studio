@@ -72,6 +72,7 @@ SCRIPT_MODEL_DEFAULT = "doubao"
 # Nano-GPT adapter
 NANO_GPT_BASE = "https://nano-gpt.com/api/v1"
 NANO_GPT_MODELS = {
+    "kling-v30-std": "kling-v30-std",
     "grok-imagine-video": "grok-imagine-video-reference-to-video",
     "vidu-q3": "vidu-q3",
     "seedance-v15-pro": "bytedance-seedance-v1.5-pro",
@@ -88,6 +89,7 @@ ALL_MODELS = ["seedance"] + sorted(NANO_GPT_NAMES) + ([THIRD_PARTY_MODEL_ID] if 
 # Model capabilities
 MODEL_CAPS = {
     "seedance": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
+    "kling-v30-std": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["720p"]},
     "grok-imagine-video": {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "vidu-q3": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "seedance-v15-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
