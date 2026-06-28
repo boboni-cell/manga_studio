@@ -1487,6 +1487,36 @@ def call_script_text_model(model_key, system_prompt, user_content, temperature=0
         raise Exception(f'不支持的剧本模型: {model_key}')
 
 
+def _extract_json_array(text):
+    raw = (text or '').strip()
+    if raw.startswith('```'):
+        raw = raw.split('\n', 1)[1] if '\n' in raw else raw
+    if raw.endswith('```'):
+        raw = raw.rsplit('\n', 1)[0]
+    start = raw.find('[')
+    end = raw.rfind(']')
+    if start >= 0 and end > start:
+        raw = raw[start:end + 1]
+    return raw.strip()
+
+
+def parse_script_shots_json(raw, script_model):
+    candidate = _extract_json_array(raw)
+    try:
+        shots = json.loads(candidate)
+    except json.JSONDecodeError:
+        repair_prompt = (
+            '你是 JSON 修复器。用户会给你一段本应为 JSON 数组的文本，'
+            '请只修复语法错误，保留原字段和中文内容，不要改写剧情。'
+            '只输出合法 JSON 数组，不要 Markdown，不要解释。'
+        )
+        fixed = call_script_text_model(script_model, repair_prompt, raw, temperature=0, max_tokens=4000)
+        shots = json.loads(_extract_json_array(fixed))
+    if not isinstance(shots, list):
+        raise ValueError('模型输出不是 JSON 数组')
+    return shots
+
+
 # ── Script workspace endpoints ────────────────────────────────
 @app.route('/api/script/import', methods=['POST'])
 @login_required
@@ -1642,7 +1672,7 @@ def build_script_shots(body):
             raw = raw.split('\n', 1)[1]
         if raw.endswith('```'):
             raw = raw.rsplit('\n', 1)[0]
-        shots = json.loads(raw)
+        shots = parse_script_shots_json(raw, script_model)
         insert_history({
             'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
             'type': 'script',
