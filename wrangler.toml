@@ -1,0 +1,20 @@
+name = "manga-studio"
+main = "src/index.js"
+compatibility_date = "2026-07-15"
+
+[observability]
+enabled = true
+
+[[containers]]
+class_name = "MangaStudioContainer"
+image = "./Dockerfile"
+max_instances = 1
+instance_type = "basic"
+
+[[durable_objects.bindings]]
+name = "MANGA_STUDIO"
+class_name = "MangaStudioContainer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MangaStudioContainer"]

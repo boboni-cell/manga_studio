@@ -1,0 +1,8 @@
+.git
+.venv
+__pycache__/
+*.pyc
+.env
+tmp_frames/
+tmp_upscale/
+static/uploads/
