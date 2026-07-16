@@ -1,6 +1,7 @@
 import os, json, uuid, time, threading, requests, functools, sys
 import tos
 from datetime import datetime
+from urllib.parse import quote
 from flask import Flask, request, jsonify, send_from_directory, redirect, session
 from werkzeug.utils import secure_filename
 from volcenginesdkarkruntime import Ark
@@ -58,6 +59,13 @@ TOS_ENDPOINT = "tos-cn-beijing.volces.com"
 TOS_REGION   = "cn-beijing"
 TOS_BUCKET   = "movie1"
 TOS_PUBLIC_BASE = f"https://{TOS_BUCKET}.{TOS_ENDPOINT}"
+
+# Cloudflare R2 config. If these are set, new media is saved to R2 first.
+R2_ACCOUNT_ID = os.environ.get('R2_ACCOUNT_ID', '')
+R2_ACCESS_KEY_ID = os.environ.get('R2_ACCESS_KEY_ID', '')
+R2_SECRET_ACCESS_KEY = os.environ.get('R2_SECRET_ACCESS_KEY', '')
+R2_BUCKET = os.environ.get('R2_BUCKET', 'image-web-storage')
+R2_PUBLIC_BASE = os.environ.get('R2_PUBLIC_BASE', '').rstrip('/')
 MODEL_ID = "doubao-seedance-2-0-fast-260128"
 TEXT_MODEL_ID = "doubao-seed-character-251128"
 
@@ -316,12 +324,59 @@ def init_data():
 
 init_data()
 
-# ── TOS upload helper ─────────────────────────────────────────
+# ── Object storage upload helper ──────────────────────────────
 def get_tos_client():
     return tos.TosClientV2(TOS_AK, TOS_SK, TOS_ENDPOINT, TOS_REGION)
 
+def r2_configured():
+    return all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE])
+
+def get_r2_client():
+    import boto3
+    return boto3.client(
+        's3',
+        endpoint_url=f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com',
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        region_name='auto',
+    )
+
+def r2_public_url(object_key):
+    return f"{R2_PUBLIC_BASE}/{quote(object_key, safe='/')}"
+
+def upload_to_r2(file_data, object_key, content_type='application/octet-stream', content_length=None):
+    """Upload bytes or stream to R2, return (public_url, success)."""
+    if not r2_configured():
+        return None, False
+    try:
+        kwargs = {
+            'Bucket': R2_BUCKET,
+            'Key': object_key,
+            'Body': file_data,
+            'ContentType': content_type,
+        }
+        if content_length:
+            kwargs['ContentLength'] = content_length
+        get_r2_client().put_object(**kwargs)
+        return r2_public_url(object_key), True
+    except Exception as e:
+        print(f'[R2] upload failed: {e}', flush=True)
+        return None, False
+
+def is_persistent_storage_url(url):
+    return bool(
+        url and (
+            (R2_PUBLIC_BASE and url.startswith(R2_PUBLIC_BASE)) or
+            (TOS_PUBLIC_BASE and url.startswith(TOS_PUBLIC_BASE))
+        )
+    )
+
 def upload_to_tos(file_data, object_key, content_type='application/octet-stream', content_length=None):
-    """Upload bytes or stream to TOS, return (public_url, success)."""
+    """Upload bytes or stream to durable object storage, return (public_url, success)."""
+    public_url, ok = upload_to_r2(file_data, object_key, content_type, content_length)
+    if ok:
+        return public_url, True
+
     try:
         client = get_tos_client()
         if hasattr(file_data, 'read'):
@@ -381,6 +436,19 @@ def tos_presign():
     date_prefix = datetime.now().strftime('%Y%m%d')
     object_key = f"uploads/{date_prefix}/{uuid.uuid4().hex}{ext}"
     try:
+        if r2_configured():
+            upload_url = get_r2_client().generate_presigned_url(
+                'put_object',
+                Params={'Bucket': R2_BUCKET, 'Key': object_key, 'ContentType': content_type},
+                ExpiresIn=3600,
+            )
+            return jsonify({
+                'upload_url': upload_url,
+                'public_url': r2_public_url(object_key),
+                'object_key': object_key,
+                'storage': 'r2'
+            })
+
         client = get_tos_client()
         from tos.enum import HttpMethodType
         signed = client.pre_signed_url(
@@ -394,7 +462,8 @@ def tos_presign():
         return jsonify({
             'upload_url': upload_url,
             'public_url': f"{TOS_PUBLIC_BASE}/{object_key}",
-            'object_key': object_key
+            'object_key': object_key,
+            'storage': 'tos'
         })
     except Exception as e:
         print(f'[TOS] presign failed: {e}')
@@ -801,7 +870,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
 
 # ── Image generation helpers ──────────────────────────────────
 def download_and_save_image(image_url):
-    """Download image from URL, upload to TOS, fallback to local."""
+    """Download image from URL, upload to object storage, fallback to local."""
     r = requests.get(image_url, timeout=120)
     if r.status_code != 200:
         raise Exception(f'下载图片失败: {r.status_code}')
@@ -814,7 +883,7 @@ def download_and_save_image(image_url):
     name = uuid.uuid4().hex + ext
     img_bytes = r.content
 
-    # Try TOS
+    # Try durable object storage
     public_url, ok = upload_to_tos(img_bytes, name, ct)
     if ok:
         return public_url, name
@@ -827,10 +896,10 @@ def download_and_save_image(image_url):
 
 
 def download_and_save_video(video_url):
-    """Download a remote generated video, upload it to TOS, fallback to original URL."""
+    """Download a remote generated video, upload it to object storage, fallback to original URL."""
     if not video_url or not video_url.startswith('http'):
         return video_url, None
-    if TOS_PUBLIC_BASE and video_url.startswith(TOS_PUBLIC_BASE):
+    if is_persistent_storage_url(video_url):
         return video_url, os.path.basename(video_url.split('?', 1)[0])
 
     headers = {'User-Agent': 'Mozilla/5.0'}
