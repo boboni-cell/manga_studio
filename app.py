@@ -1,5 +1,4 @@
-import os, json, uuid, time, threading, requests, functools, sys
-import re
+import os, json, uuid, time, threading, requests, functools, sys, re, secrets
 import tos
 from datetime import datetime
 from urllib.parse import quote
@@ -197,6 +196,8 @@ def history_path(user_id=None): return user_data_path('history', user_id)
 def styles_path(user_id=None): return user_data_path('styles', user_id)
 def settings_path(user_id=None): return user_data_path('api_settings', user_id)
 def users_path(): return os.path.join(DATA, 'users.json')
+def admin_settings_path(): return os.path.join(DATA, 'admin_settings.json')
+def invitations_path(): return os.path.join(DATA, 'invitations.json')
 
 def insert_history(entry, limit=100, user_id=None):
     with HISTORY_LOCK:
@@ -330,6 +331,8 @@ def init_data():
     os.makedirs(DATA, exist_ok=True)
     for path, default in [
         (users_path(), {}),
+        (admin_settings_path(), {}),
+        (invitations_path(), []),
     ]:
         if not os.path.exists(path) or os.path.getsize(path) < 10:
             save_json(path, default)
@@ -410,13 +413,29 @@ def upload_to_tos(file_data, object_key, content_type='application/octet-stream'
 # ── User authentication ──────────────────────────────────────
 USERS_LOCK = threading.Lock()
 
+API_DEFAULTS = {
+    'text': {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': TEXT_MODEL_ID},
+    'image': {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': 'gpt-image-2'},
+    'video': {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': MODEL_ID},
+}
+
+def get_platform_api(kind):
+    saved = load_json(admin_settings_path(), {}).get('apis', {}).get(kind, {})
+    cfg = dict(API_DEFAULTS[kind])
+    cfg.update({k: v for k, v in saved.items() if v not in (None, '')})
+    cfg['base_url'] = (cfg.get('base_url') or '').rstrip('/')
+    return cfg
+
 def get_user_api_settings(user_id=None):
+    text_cfg = get_platform_api('text')
+    image_cfg = get_platform_api('image')
+    video_cfg = get_platform_api('video')
     saved = load_json(settings_path(user_id), {})
     return {
-        'ark_api_key': saved.get('ark_api_key') or ARK_API_KEY,
-        'nano_api_key': saved.get('nano_api_key') or NANO_GPT_API_KEY,
-        'third_party_api_base': saved.get('third_party_api_base') or THIRD_PARTY_API_BASE,
-        'third_party_api_key': saved.get('third_party_api_key') or THIRD_PARTY_API_KEY,
+        'ark_api_key': next((c['api_key'] for c in (text_cfg, image_cfg, video_cfg) if c.get('provider') == 'ark' and c.get('api_key')), ARK_API_KEY),
+        'nano_api_key': next((c['api_key'] for c in (text_cfg, image_cfg, video_cfg) if c.get('provider') in ('nano', 'openai') and c.get('api_key')), NANO_GPT_API_KEY),
+        'third_party_api_base': video_cfg['base_url'] if video_cfg.get('provider') == 'generic' else THIRD_PARTY_API_BASE,
+        'third_party_api_key': video_cfg['api_key'] if video_cfg.get('provider') == 'generic' else THIRD_PARTY_API_KEY,
     }
 
 def is_admin(user_id=None):
@@ -427,19 +446,28 @@ def is_admin(user_id=None):
 def admin_required(f):
     @functools.wraps(f)
     def wrap(*a, **kw):
-        if not current_user_id():
-            return jsonify(error='unauthorized'), 401
-        if not is_admin():
-            return jsonify(error='forbidden'), 403
+        if not current_user_id(): return jsonify(error='unauthorized'), 401
+        if not is_admin(): return jsonify(error='forbidden'), 403
         return f(*a, **kw)
     return wrap
+
+def model_access_required(kind):
+    def decorator(f):
+        @functools.wraps(f)
+        def wrap(*a, **kw):
+            if is_admin(): return f(*a, **kw)
+            user = load_json(users_path(), {}).get(current_user_id(), {})
+            if kind not in user.get('model_permissions', []):
+                return jsonify(error=f'当前账号未开放{kind}模型权限，请联系管理员获取邀请码'), 403
+            return f(*a, **kw)
+        return wrap
+    return decorator
 
 def login_required(f):
     @functools.wraps(f)
     def wrap(*a, **kw):
         user_id = current_user_id()
-        if not user_id:
-            return jsonify(error='unauthorized'), 401
+        if not user_id: return jsonify(error='unauthorized'), 401
         if load_json(users_path(), {}).get(user_id, {}).get('disabled'):
             session.clear()
             return jsonify(error='账号已停用'), 403
@@ -452,11 +480,18 @@ def index():
         return send_from_directory('static', 'login.html')
     return send_from_directory('static', 'index.html')
 
+@app.route('/admin')
+def admin_page():
+    if not current_user_id(): return redirect('/')
+    if not is_admin(): return '<h2 style="text-align:center;margin-top:100px">无管理员权限</h2>', 403
+    return send_from_directory('static', 'admin.html')
+
 @app.route('/api/auth/register', methods=['POST'])
 def register():
     body = request.json or {}
     username = (body.get('username') or '').strip()
     password = body.get('password') or ''
+    invite_code = (body.get('invite_code') or '').strip().upper()
     valid_name = 3 <= len(username) <= 120 and re.fullmatch(r'[A-Za-z0-9._@+-]+', username)
     valid_email = '@' not in username or re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', username)
     if not valid_name or not valid_email:
@@ -468,8 +503,14 @@ def register():
         users = load_json(users_path(), {})
         if user_id in users:
             return jsonify(error='用户名已存在'), 409
-        users[user_id] = {'username': username, 'password_hash': generate_password_hash(password, method='pbkdf2:sha256'), 'created_at': datetime.utcnow().isoformat()}
+        invitations = load_json(invitations_path(), [])
+        invite = next((item for item in invitations if item.get('code') == invite_code and item.get('active', True) and item.get('used', 0) < item.get('max_uses', 1)), None)
+        if not invite:
+            return jsonify(error='邀请码无效或已用完'), 400
+        invite['used'] = invite.get('used', 0) + 1
+        users[user_id] = {'username': username, 'password_hash': generate_password_hash(password, method='pbkdf2:sha256'), 'created_at': datetime.utcnow().isoformat(), 'model_permissions': invite.get('permissions', []), 'points': invite.get('points', 0), 'invite_code': invite_code}
         save_json(users_path(), users)
+        save_json(invitations_path(), invitations)
     session.clear()
     session['user_id'] = user_id
     return jsonify(ok=True, username=username)
@@ -496,41 +537,7 @@ def logout():
 @login_required
 def auth_me():
     user = load_json(users_path(), {}).get(current_user_id(), {})
-    return jsonify(username=user.get('username', current_user_id()), is_admin=is_admin())
-
-@app.route('/api/admin/users', methods=['GET'])
-@admin_required
-def admin_users():
-    users = load_json(users_path(), {})
-    result = []
-    for user_id, user in users.items():
-        history = load_json(history_path(user_id), [])
-        settings = load_json(settings_path(user_id), {})
-        result.append({
-            'id': user_id,
-            'username': user.get('username', user_id),
-            'created_at': user.get('created_at', ''),
-            'disabled': bool(user.get('disabled')),
-            'is_admin': is_admin(user_id),
-            'history_count': len(history) if isinstance(history, list) else 0,
-            'api_configured': bool(settings.get('ark_api_key') or settings.get('nano_api_key') or settings.get('third_party_api_key'))
-        })
-    result.sort(key=lambda item: item['created_at'], reverse=True)
-    return jsonify(users=result, total=len(result))
-
-@app.route('/api/admin/users/<user_id>/status', methods=['POST'])
-@admin_required
-def admin_user_status(user_id):
-    user_id = user_id.lower()
-    body = request.json or {}
-    users = load_json(users_path(), {})
-    if user_id not in users:
-        return jsonify(error='用户不存在'), 404
-    if is_admin(user_id) and body.get('disabled'):
-        return jsonify(error='不能停用管理员账号'), 400
-    users[user_id]['disabled'] = bool(body.get('disabled'))
-    save_json(users_path(), users)
-    return jsonify(ok=True, disabled=users[user_id]['disabled'])
+    return jsonify(username=user.get('username', current_user_id()), is_admin=is_admin(), model_permissions=user.get('model_permissions', []), points=user.get('points', 0))
 
 @app.route('/api/settings', methods=['GET', 'POST'])
 @login_required
@@ -552,6 +559,90 @@ def api_settings():
         'third_party_configured': bool(cfg['third_party_api_key'] and cfg['third_party_api_base']),
         'third_party_api_base': load_json(settings_path(), {}).get('third_party_api_base', '')
     })
+
+@app.route('/api/admin/users')
+@admin_required
+def admin_users():
+    users = load_json(users_path(), {})
+    result = []
+    for user_id, user in users.items():
+        history = load_json(history_path(user_id), [])
+        result.append({'id': user_id, 'username': user.get('username', user_id), 'created_at': user.get('created_at', ''), 'disabled': bool(user.get('disabled')), 'is_admin': is_admin(user_id), 'history_count': len(history) if isinstance(history, list) else 0, 'permissions': user.get('model_permissions', []), 'points': user.get('points', 0)})
+    result.sort(key=lambda item: item['created_at'], reverse=True)
+    return jsonify(users=result, total=len(result))
+
+@app.route('/api/admin/users/<user_id>/status', methods=['POST'])
+@admin_required
+def admin_user_status(user_id):
+    user_id = user_id.lower()
+    users = load_json(users_path(), {})
+    if user_id not in users: return jsonify(error='用户不存在'), 404
+    disabled = bool((request.json or {}).get('disabled'))
+    if is_admin(user_id) and disabled: return jsonify(error='不能停用管理员账号'), 400
+    users[user_id]['disabled'] = disabled
+    save_json(users_path(), users)
+    return jsonify(ok=True)
+
+@app.route('/api/admin/invitations', methods=['GET', 'POST'])
+@admin_required
+def admin_invitations():
+    invitations = load_json(invitations_path(), [])
+    if request.method == 'POST':
+        body = request.json or {}
+        permissions = [kind for kind in ('text', 'image', 'video') if kind in body.get('permissions', [])]
+        code = (body.get('code') or secrets.token_hex(4)).strip().upper()
+        if any(item.get('code') == code for item in invitations): return jsonify(error='邀请码已存在'), 409
+        invitations.insert(0, {'code': code, 'permissions': permissions, 'points': int(body.get('points') or 0), 'max_uses': max(1, int(body.get('max_uses') or 1)), 'used': 0, 'active': True, 'created_at': datetime.utcnow().isoformat()})
+        save_json(invitations_path(), invitations)
+    return jsonify(invitations=invitations)
+
+@app.route('/api/admin/invitations/<code>/status', methods=['POST'])
+@admin_required
+def admin_invitation_status(code):
+    invitations = load_json(invitations_path(), [])
+    invite = next((item for item in invitations if item.get('code') == code.upper()), None)
+    if not invite: return jsonify(error='邀请码不存在'), 404
+    invite['active'] = bool((request.json or {}).get('active'))
+    save_json(invitations_path(), invitations)
+    return jsonify(ok=True)
+
+def public_api_config(kind):
+    cfg = get_platform_api(kind)
+    return {'provider': cfg.get('provider', ''), 'base_url': cfg.get('base_url', ''), 'model': cfg.get('model', ''), 'configured': bool(cfg.get('api_key')), 'last_test': cfg.get('last_test')}
+
+@app.route('/api/admin/apis', methods=['GET', 'POST'])
+@admin_required
+def admin_apis():
+    settings = load_json(admin_settings_path(), {})
+    if request.method == 'POST':
+        body = request.json or {}
+        kind = body.get('kind')
+        if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+        apis = settings.setdefault('apis', {})
+        old = apis.setdefault(kind, {})
+        for key in ('provider', 'base_url', 'model'):
+            if key in body: old[key] = str(body.get(key) or '').strip().rstrip('/') if key == 'base_url' else str(body.get(key) or '').strip()
+        if body.get('api_key'): old['api_key'] = str(body['api_key']).strip()
+        save_json(admin_settings_path(), settings)
+    return jsonify(apis={kind: public_api_config(kind) for kind in ('text', 'image', 'video')})
+
+@app.route('/api/admin/apis/<kind>/test', methods=['POST'])
+@admin_required
+def admin_api_test(kind):
+    if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+    cfg = get_platform_api(kind)
+    if not cfg.get('api_key') or not cfg.get('base_url') or not cfg.get('model'):
+        return jsonify(error='请先填写 Base URL、API Key 和模型名'), 400
+    try:
+        headers = {'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
+        r = requests.get(f"{cfg['base_url']}/models", headers=headers, timeout=20)
+        if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
+        settings = load_json(admin_settings_path(), {})
+        settings.setdefault('apis', {}).setdefault(kind, {})['last_test'] = datetime.utcnow().isoformat()
+        save_json(admin_settings_path(), settings)
+        return jsonify(ok=True, message='连接成功，鉴权与模型服务可访问')
+    except requests.RequestException as e:
+        return jsonify(error=f'连接失败：{str(e)}'), 502
 
 # ── uploads ───────────────────────────────────────────────────
 @app.route('/api/tos-presign', methods=['POST'])
@@ -654,28 +745,42 @@ def get_history():
 @app.route('/api/models', methods=['GET'])
 @login_required
 def get_models():
-    cfg = get_user_api_settings()
-    has_nano = bool(cfg['nano_api_key'])
-    has_third = bool(cfg['third_party_api_key'] and cfg['third_party_api_base'])
+    cfg = get_platform_api('video')
+    model = cfg.get('model') or MODEL_ID
+    caps = dict(MODEL_CAPS)
+    caps.setdefault(model, MODEL_CAPS['seedance'] if cfg.get('provider') == 'ark' else MODEL_CAPS[THIRD_PARTY_MODEL_ID])
     return jsonify({
-        'models': ALL_MODELS + ([THIRD_PARTY_MODEL_ID] if has_third and THIRD_PARTY_MODEL_ID not in ALL_MODELS else []),
-        'nano_available': has_nano,
-        'third_party_available': has_third,
-        'default': 'seedance',
-        'caps': MODEL_CAPS
+        'models': [model], 'nano_available': bool(cfg.get('api_key')), 'third_party_available': bool(cfg.get('api_key')),
+        'default': model, 'caps': caps
     })
 
 @app.route('/api/image-models', methods=['GET'])
 @login_required
 def get_image_models():
+    cfg = get_platform_api('image')
+    model = cfg.get('model') or 'gpt-image-2'
     return jsonify({
-        'models': ALL_IMAGE_MODELS,
+        'models': [model],
         'ratios': IMAGE_RATIOS,
-        'default_model': 'gpt-image-2',
+        'default_model': model,
         'default_ratio': DEFAULT_RATIO
     })
 
 # ── prompt refinement ──────────────────────────────────────────
+def call_platform_text(system_prompt, user_content, temperature=0.7, max_tokens=4000):
+    cfg = get_platform_api('text')
+    if not cfg.get('api_key'): raise Exception('文本 API 尚未配置')
+    messages = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_content}]
+    if cfg.get('provider') == 'ark':
+        client = Ark(api_key=cfg['api_key'])
+        resp = client.chat.completions.create(model=cfg['model'], messages=messages, temperature=temperature, max_tokens=max_tokens)
+        return resp.choices[0].message.content.strip()
+    headers = {'Content-Type': 'application/json', 'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
+    payload = {'model': cfg['model'], 'messages': messages, 'temperature': temperature, 'max_tokens': max_tokens}
+    r = requests.post(f"{cfg['base_url']}/chat/completions", headers=headers, json=payload, timeout=120)
+    if r.status_code != 200: raise Exception(f'文本 API 调用失败: {r.status_code} {r.text[:300]}')
+    return r.json()['choices'][0]['message']['content'].strip()
+
 def refine_prompt(script, images, ratio, duration, ark_api_key=None):
     """Use text model to optimize the user's script into a video-ready Chinese prompt."""
     role_desc = '、'.join([img.get('role_label', '参考图') for img in images]) if images else '无参考图'
@@ -700,17 +805,7 @@ def refine_prompt(script, images, ratio, duration, ark_api_key=None):
     )
 
     try:
-        client = Ark(api_key=ark_api_key or ARK_API_KEY)
-        resp = client.chat.completions.create(
-            model=TEXT_MODEL_ID,
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_prompt}
-            ],
-            temperature=0.7,
-            max_tokens=1000
-        )
-        refined = resp.choices[0].message.content.strip()
+        refined = call_platform_text(system_prompt, user_prompt, temperature=0.7, max_tokens=1000)
         if refined:
             return refined
     except Exception as e:
@@ -720,14 +815,16 @@ def refine_prompt(script, images, ratio, duration, ark_api_key=None):
 
 # ── Nano-GPT video generation adapter ─────────────────────────
 def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, ratio, duration, host_url,
-                      resolution='720p', original_script=None, optimize=False, api_key=None, user_id=None):
+                      resolution='720p', original_script=None, optimize=False, api_key=None, user_id=None, base_url=None):
     """Generate video via Nano-GPT API. Runs in a background thread."""
     try:
         if not api_key:
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'NANO_GPT_API_KEY 未设置，请配置环境变量'}
             return
 
-        model_real = NANO_GPT_MODELS[model_key]
+        model_real = NANO_GPT_MODELS.get(model_key, model_key)
+        api_root = (base_url or NANO_GPT_BASE).rstrip('/')
+        if api_root.endswith('/v1'): api_root = api_root[:-3]
         headers = {
             'x-api-key': api_key,
             'Content-Type': 'application/json'
@@ -765,7 +862,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
         print(f'[nano-start] model={model_key}', flush=True)
 
         # Submit generation task
-        r = requests.post('https://nano-gpt.com/api/generate-video', headers=headers, json=payload, timeout=30)
+        r = requests.post(f'{api_root}/generate-video', headers=headers, json=payload, timeout=30)
         print(f'[nano-submit] status={r.status_code} body={r.text[:200]}', flush=True)
         if r.status_code not in (200, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 提交失败: {r.status_code} {r.text[:200]}'}
@@ -781,8 +878,8 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
         # {"reason":"snapshot_complete"} there. Use the official status endpoint
         # as the authoritative result poller, with a legacy fallback.
         status_endpoints = [
-            ('https://nano-gpt.com/api/video/status', {'requestId': task_id}),
-            ('https://nano-gpt.com/api/generate-video/status', {'runId': task_id, 'model': model_real, 'modelSlug': model_real}),
+            (f'{api_root}/video/status', {'requestId': task_id}),
+            (f'{api_root}/generate-video/status', {'runId': task_id, 'model': model_real, 'modelSlug': model_real}),
         ]
         events_url_path = data.get('eventsUrl', '')
         if events_url_path and events_url_path.startswith('/'):
@@ -1098,14 +1195,15 @@ def image_ratio_instruction(ratio, size):
 
 
 # ── Nano image generation ─────────────────────────────────────
-def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None):
+def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, base_url=None):
     """Call Nano-GPT images/generations API."""
     size = image_size_for_nano(model_id, ratio, custom_size)
     width, height = parse_image_size(size)
     final_prompt = image_ratio_instruction(ratio, size) + "\n" + prompt
     headers = {
         'Content-Type': 'application/json',
-        'x-api-key': api_key or NANO_GPT_API_KEY
+        'x-api-key': api_key or NANO_GPT_API_KEY,
+        'Authorization': f'Bearer {api_key or NANO_GPT_API_KEY}'
     }
     payload = {
         'model': model_id,
@@ -1118,7 +1216,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None):
     if width and height:
         payload['width'] = width
         payload['height'] = height
-    r = requests.post(f'{NANO_GPT_BASE}/images/generations', headers=headers, json=payload, timeout=120)
+    r = requests.post(f'{(base_url or NANO_GPT_BASE).rstrip("/")}/images/generations', headers=headers, json=payload, timeout=120)
     if r.status_code not in (200, 201):
         raise Exception(f'Nano 图片生成失败: {r.status_code} {r.text[:200]}')
     data = r.json()
@@ -1143,7 +1241,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None):
 
 
 # ── Volc Seedream image generation ────────────────────────────
-def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', api_key=None):
+def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', api_key=None, model_id=None):
     """Call Volc Ark Seedream for image generation."""
     if ratio == 'custom' and custom_size:
         size = custom_size
@@ -1157,7 +1255,7 @@ def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', a
             url = host_url + url
         ref_url = url
         break
-    kwargs = {'model': VOLC_IMAGE_MODEL_ID, 'prompt': prompt, 'size': size, 'watermark': False}
+    kwargs = {'model': model_id or VOLC_IMAGE_MODEL_ID, 'prompt': prompt, 'size': size, 'watermark': False}
     if ref_url:
         kwargs['image'] = ref_url
     resp = client.images.generate(**kwargs)
@@ -1172,10 +1270,12 @@ def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', a
 # ── Generate image endpoint ───────────────────────────────────
 @app.route('/api/generate-image', methods=['POST'])
 @login_required
+@model_access_required('image')
 def generate_image():
     body = request.json
     prompt = body.get('prompt', '').strip()
-    image_model = body.get('image_model', 'gpt-image-2')
+    image_cfg = get_platform_api('image')
+    image_model = image_cfg.get('model') or body.get('image_model', 'gpt-image-2')
     ratio = body.get('ratio', DEFAULT_RATIO)
     custom_size = body.get('custom_size', '')
     mode = body.get('mode', 'storyboard')
@@ -1183,7 +1283,6 @@ def generate_image():
     style_id = body.get('style_id')
     host_url = request.host_url.rstrip('/')
     user_id = current_user_id()
-    api_cfg = get_user_api_settings(user_id)
 
     if not prompt:
         return jsonify(error='prompt 不能为空'), 400
@@ -1208,10 +1307,10 @@ def generate_image():
 
     def run():
         try:
-            if image_model in NANO_GPT_IMAGE_MODELS:
-                local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size, api_cfg['nano_api_key'])
-            elif image_model == 'volc-seedream-4-5':
-                local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size, api_cfg['ark_api_key'])
+            if image_cfg.get('provider') in ('nano', 'openai'):
+                local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size, image_cfg['api_key'], image_cfg['base_url'])
+            elif image_cfg.get('provider') == 'ark':
+                local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size, image_cfg['api_key'], image_model)
             else:
                 JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'不支持的图片模型: {image_model}'}
                 return
@@ -1246,6 +1345,7 @@ def image_status(job_id):
 # ── generate ──────────────────────────────────────────────────
 @app.route('/api/generate', methods=['POST'])
 @login_required
+@model_access_required('video')
 def generate():
     body      = request.json
     script    = body.get('script', '')
@@ -1261,11 +1361,11 @@ def generate():
     duration    = int(body.get('duration', 5))
     resolution  = body.get('resolution', '720p')
     optimize    = body.get('optimize_prompt', True)
-    video_model = body.get('video_model', 'seedance')
+    video_cfg   = get_platform_api('video')
+    video_model = video_cfg.get('model') or body.get('video_model', 'seedance')
     host_url    = request.host_url.rstrip('/')
     job_id      = uuid.uuid4().hex
     user_id     = current_user_id()
-    api_cfg     = get_user_api_settings(user_id)
     JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
 
@@ -1291,30 +1391,30 @@ def generate():
 
     original_script = script
     if optimize and script.strip():
-        script = refine_prompt(script, images, ratio, duration, api_cfg['ark_api_key'])
+        script = refine_prompt(script, images, ratio, duration)
 
     # ── Nano-GPT path ──
-    if video_model in NANO_GPT_NAMES:
-        if not api_cfg['nano_api_key']:
+    if video_cfg.get('provider') == 'nano':
+        if not video_cfg.get('api_key'):
             JOBS[job_id] = {'status': 'failed', 'video_url': None,
                             'error': 'NANO_GPT_API_KEY 未设置。请 export NANO_GPT_API_KEY=sk-nano-xxx 后重启服务'}
             return jsonify(job_id=job_id)
         threading.Thread(target=nano_gpt_generate, args=(
             job_id, video_model, script, images, audio_url, video_url, ratio, duration, host_url,
-            resolution, original_script, optimize, api_cfg['nano_api_key'], user_id
+            resolution, original_script, optimize, video_cfg['api_key'], user_id, video_cfg['base_url']
         ), daemon=True).start()
         return jsonify(job_id=job_id)
 
     # ── Third-party path ──
-    if video_model == THIRD_PARTY_MODEL_ID:
-        if not api_cfg['third_party_api_key'] or not api_cfg['third_party_api_base']:
+    if video_cfg.get('provider') == 'generic':
+        if not video_cfg.get('api_key') or not video_cfg.get('base_url'):
             JOBS[job_id] = {'status': 'failed', 'video_url': None,
                             'error': '第三方模型未配置。请设置 THIRD_PARTY_API_BASE 和 THIRD_PARTY_API_KEY 环境变量后重启服务'}
             return jsonify(job_id=job_id)
         threading.Thread(target=third_party_video_adapter, args=(
             job_id, script, images, audio_url, video_url, ratio, duration, host_url,
             video_model, resolution, original_script, optimize,
-            api_cfg['third_party_api_base'], api_cfg['third_party_api_key'], user_id
+            video_cfg['base_url'], video_cfg['api_key'], user_id
         ), daemon=True).start()
         return jsonify(job_id=job_id)
 
@@ -1375,10 +1475,10 @@ def generate():
             except Exception as wash_err:
                 print(f"专属洗图执行出现异常，已降级回原图: {wash_err}")
 
-            client = Ark(api_key=api_cfg['ark_api_key'])
+            client = Ark(api_key=video_cfg['api_key'])
             JOBS[job_id]['status'] = 'running'
             res = client.content_generation.tasks.create(
-                model=MODEL_ID, content=content,
+                model=video_model, content=content,
                 generate_audio=True, ratio=ratio, duration=duration, watermark=False)
             task_id = res.id
 
@@ -1657,49 +1757,8 @@ def upscale_status(job_id):
 
 # ── Script text model helper ─────────────────────────────────
 def call_script_text_model(model_key, system_prompt, user_content, temperature=0.7, max_tokens=4000, api_cfg=None):
-    """Call script text model (brainstorm/split). Routes to Ark or Nano based on model_key."""
-    model_cfg = SCRIPT_MODELS.get(model_key, SCRIPT_MODELS[SCRIPT_MODEL_DEFAULT])
-    provider = model_cfg["provider"]
-    model_id = model_cfg["model_id"]
-
-    api_cfg = api_cfg or {'ark_api_key': ARK_API_KEY, 'nano_api_key': NANO_GPT_API_KEY}
-    if provider == "volcengine":
-        client = Ark(api_key=api_cfg['ark_api_key'])
-        resp = client.chat.completions.create(
-            model=model_id,
-            messages=[
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_content}
-            ],
-            temperature=temperature, max_tokens=max_tokens
-        )
-        return resp.choices[0].message.content.strip()
-
-    elif provider == "nano":
-        api_key = api_cfg['nano_api_key']
-        if not api_key:
-            raise Exception('NANO_GPT_API_KEY 未设置，请配置环境变量后使用 GLM4.6 或 Claude4.6 模型')
-        headers = {
-            'Content-Type': 'application/json',
-            'x-api-key': api_key
-        }
-        payload = {
-            'model': model_id,
-            'messages': [
-                {'role': 'system', 'content': system_prompt},
-                {'role': 'user', 'content': user_content}
-            ],
-            'temperature': temperature,
-            'max_tokens': max_tokens
-        }
-        r = requests.post(f'{NANO_GPT_BASE}/chat/completions', headers=headers, json=payload, timeout=120)
-        if r.status_code != 200:
-            raise Exception(f'Nano 文本模型调用失败: {r.status_code} {r.text[:300]}')
-        data = r.json()
-        return data['choices'][0]['message']['content'].strip()
-
-    else:
-        raise Exception(f'不支持的剧本模型: {model_key}')
+    """Call the text API configured by the administrator."""
+    return call_platform_text(system_prompt, user_content, temperature=temperature, max_tokens=max_tokens)
 
 
 def _extract_json_array(text):
@@ -1761,6 +1820,7 @@ def script_import():
 
 @app.route('/api/script/brainstorm', methods=['POST'])
 @login_required
+@model_access_required('text')
 def script_brainstorm():
     body = request.json
     topic = body.get('topic', '').strip()
@@ -1785,6 +1845,7 @@ def script_brainstorm():
 
 @app.route('/api/script/split', methods=['POST'])
 @login_required
+@model_access_required('text')
 def script_split():
     body = request.json or {}
     script_text = body.get('script', '').strip()

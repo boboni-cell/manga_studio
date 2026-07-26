@@ -1655,25 +1655,9 @@ input[type=file] { display: none; }
   <button class="topbar-btn" id="topbarImageGen" onclick="switchMainTab('imageGen')">🎨 图片生成</button>
   <button class="topbar-btn active" id="topbarStudio" onclick="switchMainTab('studio')">📷 镜头生成</button>
   <button class="topbar-btn" id="topbarHistory" onclick="switchMainTab('history')">📋 历史记录</button>
-  <button class="topbar-btn" onclick="openApiSettings()">⚙ API 接入</button>
-  <button class="topbar-btn" id="adminButton" style="display:none" onclick="openAdminPanel()">🛡 后台管理</button>
+  <button class="topbar-btn" id="adminButton" style="display:none" onclick="location.href='/admin'">🛡 后台管理</button>
   <button class="topbar-btn" onclick="logout()">退出</button>
 </div>
-
-<dialog id="apiSettingsDialog" style="color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;width:min(460px,90vw)">
-  <h3 style="margin-bottom:6px">个人 API 接入</h3><p style="color:var(--text-dim);margin-bottom:14px">密钥保存在服务端并仅供你的账号使用。留空表示保留原值。</p>
-  <input id="arkApiKey" class="form-input" type="password" placeholder="火山 Ark API Key">
-  <input id="nanoApiKey" class="form-input" type="password" placeholder="Nano-GPT API Key" style="margin-top:8px">
-  <input id="thirdApiBase" class="form-input" placeholder="第三方 API Base URL" style="margin-top:8px">
-  <input id="thirdApiKey" class="form-input" type="password" placeholder="第三方 API Key" style="margin-top:8px">
-  <div id="apiSettingsStatus" style="color:var(--text-dim);margin:12px 0;min-height:20px"></div>
-  <div style="display:flex;justify-content:flex-end;gap:8px"><button class="topbar-btn" onclick="apiSettingsDialog.close()">取消</button><button class="topbar-btn active" onclick="saveApiSettings()">保存</button></div>
-</dialog>
-
-<dialog id="adminDialog" style="color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;width:min(820px,94vw)">
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px"><div><h3>后台管理</h3><p id="adminSummary" style="color:var(--text-dim)">加载中…</p></div><div style="flex:1"></div><button class="topbar-btn" onclick="adminDialog.close()">关闭</button></div>
-  <div style="overflow:auto"><table style="width:100%;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-dim)"><th style="padding:8px">账号</th><th>注册时间</th><th>记录</th><th>API</th><th>状态</th><th>操作</th></tr></thead><tbody id="adminUsers"></tbody></table></div>
-</dialog>
 
 <!-- ===== MAIN LAYOUT ===== -->
 <div class="main">
@@ -4510,22 +4494,6 @@ function reeditScriptHistory(idx) {
   }, 100);
 }
 
-async function openApiSettings() {
-  const r = await fetch('/api/settings');
-  if (r.status === 401) { location.href = '/'; return; }
-  const d = await r.json();
-  thirdApiBase.value = d.third_party_api_base || '';
-  apiSettingsStatus.textContent = ['Ark ' + (d.ark_configured ? '✓' : '未配置'), 'Nano ' + (d.nano_configured ? '✓' : '未配置'), '第三方 ' + (d.third_party_configured ? '✓' : '未配置')].join(' · ');
-  apiSettingsDialog.showModal();
-}
-async function saveApiSettings() {
-  const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ark_api_key:arkApiKey.value,nano_api_key:nanoApiKey.value,third_party_api_base:thirdApiBase.value,third_party_api_key:thirdApiKey.value})});
-  const d = await r.json();
-  if (!r.ok) { apiSettingsStatus.textContent = d.error || '保存失败'; return; }
-  arkApiKey.value = nanoApiKey.value = thirdApiKey.value = '';
-  apiSettingsStatus.textContent = '保存成功 · Ark ' + (d.ark_configured?'✓':'未配置') + ' · Nano ' + (d.nano_configured?'✓':'未配置') + ' · 第三方 ' + (d.third_party_configured?'✓':'未配置');
-  buildModelSelect(); buildImageSelects();
-}
 async function logout() { await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
 
 function adminEscape(value) {
