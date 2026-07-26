@@ -1,4 +1,5 @@
 import os, json, uuid, time, threading, requests, functools, sys
+import re
 import tos
 from datetime import datetime
 from urllib.parse import quote
@@ -418,12 +419,31 @@ def get_user_api_settings(user_id=None):
         'third_party_api_key': saved.get('third_party_api_key') or THIRD_PARTY_API_KEY,
     }
 
+def is_admin(user_id=None):
+    user_id = (user_id or current_user_id() or '').lower()
+    admins = {item.strip().lower() for item in os.environ.get('ADMIN_USERS', '').split(',') if item.strip()}
+    return user_id in admins
+
+def admin_required(f):
+    @functools.wraps(f)
+    def wrap(*a, **kw):
+        if not current_user_id():
+            return jsonify(error='unauthorized'), 401
+        if not is_admin():
+            return jsonify(error='forbidden'), 403
+        return f(*a, **kw)
+    return wrap
+
 def login_required(f):
     @functools.wraps(f)
     def wrap(*a, **kw):
-        if current_user_id():
-            return f(*a, **kw)
-        return jsonify(error='unauthorized'), 401
+        user_id = current_user_id()
+        if not user_id:
+            return jsonify(error='unauthorized'), 401
+        if load_json(users_path(), {}).get(user_id, {}).get('disabled'):
+            session.clear()
+            return jsonify(error='账号已停用'), 403
+        return f(*a, **kw)
     return wrap
 # ── static pages ──────────────────────────────────────────────
 @app.route('/')
@@ -437,8 +457,10 @@ def register():
     body = request.json or {}
     username = (body.get('username') or '').strip()
     password = body.get('password') or ''
-    if not (3 <= len(username) <= 40) or not username.isascii() or not all(c.isalnum() or c in '_.-' for c in username):
-        return jsonify(error='用户名需为 3-40 位字母、数字、点、横线或下划线'), 400
+    valid_name = 3 <= len(username) <= 120 and re.fullmatch(r'[A-Za-z0-9._@+-]+', username)
+    valid_email = '@' not in username or re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', username)
+    if not valid_name or not valid_email:
+        return jsonify(error='请输入有效的邮箱或用户名'), 400
     if len(password) < 8:
         return jsonify(error='密码至少需要 8 位'), 400
     user_id = username.lower()
@@ -459,6 +481,8 @@ def login():
     user = load_json(users_path(), {}).get(user_id)
     if not user or not check_password_hash(user.get('password_hash', ''), body.get('password') or ''):
         return jsonify(error='用户名或密码错误'), 401
+    if user.get('disabled'):
+        return jsonify(error='账号已停用，请联系管理员'), 403
     session.clear()
     session['user_id'] = user_id
     return jsonify(ok=True, username=user.get('username', user_id))
@@ -472,7 +496,41 @@ def logout():
 @login_required
 def auth_me():
     user = load_json(users_path(), {}).get(current_user_id(), {})
-    return jsonify(username=user.get('username', current_user_id()))
+    return jsonify(username=user.get('username', current_user_id()), is_admin=is_admin())
+
+@app.route('/api/admin/users', methods=['GET'])
+@admin_required
+def admin_users():
+    users = load_json(users_path(), {})
+    result = []
+    for user_id, user in users.items():
+        history = load_json(history_path(user_id), [])
+        settings = load_json(settings_path(user_id), {})
+        result.append({
+            'id': user_id,
+            'username': user.get('username', user_id),
+            'created_at': user.get('created_at', ''),
+            'disabled': bool(user.get('disabled')),
+            'is_admin': is_admin(user_id),
+            'history_count': len(history) if isinstance(history, list) else 0,
+            'api_configured': bool(settings.get('ark_api_key') or settings.get('nano_api_key') or settings.get('third_party_api_key'))
+        })
+    result.sort(key=lambda item: item['created_at'], reverse=True)
+    return jsonify(users=result, total=len(result))
+
+@app.route('/api/admin/users/<user_id>/status', methods=['POST'])
+@admin_required
+def admin_user_status(user_id):
+    user_id = user_id.lower()
+    body = request.json or {}
+    users = load_json(users_path(), {})
+    if user_id not in users:
+        return jsonify(error='用户不存在'), 404
+    if is_admin(user_id) and body.get('disabled'):
+        return jsonify(error='不能停用管理员账号'), 400
+    users[user_id]['disabled'] = bool(body.get('disabled'))
+    save_json(users_path(), users)
+    return jsonify(ok=True, disabled=users[user_id]['disabled'])
 
 @app.route('/api/settings', methods=['GET', 'POST'])
 @login_required
