@@ -4,6 +4,7 @@ from datetime import datetime
 from urllib.parse import quote
 from flask import Flask, request, jsonify, send_from_directory, redirect, session
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 from volcenginesdkarkruntime import Ark
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -145,11 +146,12 @@ QUALITY_PROMPT = """【画面质量强制要求】
 
 JOBS = {}
 SCRIPT_JOBS = {}
+JOB_OWNERS = {}
 HISTORY_LOCK = threading.Lock()
 
 def load_json(path, default):
     """Load data from Supabase or local JSON file."""
-    key = os.path.basename(path).replace('.json', '')
+    key = os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
     if _supabase:
         try:
             r = _supabase.table('kv_store').select('data').eq('key', key).execute()
@@ -163,7 +165,7 @@ def load_json(path, default):
 
 def save_json(path, data):
     """Save data to Supabase and local JSON file."""
-    key = os.path.basename(path).replace('.json', '')
+    key = os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -177,20 +179,34 @@ def save_json(path, data):
         except Exception:
             pass
 
-def characters_path(): return os.path.join(DATA, 'characters.json')
-def assets_path(cat):  return os.path.join(DATA, f'{cat}.json')
-def history_path():    return os.path.join(DATA, 'history.json')
-def styles_path():     return os.path.join(DATA, 'styles.json')
+def current_user_id():
+    return session.get('user_id')
 
-def insert_history(entry, limit=100):
+def user_data_path(name, user_id=None):
+    user_id = user_id or current_user_id()
+    if not user_id:
+        raise RuntimeError('unauthorized')
+    folder = os.path.join(DATA, 'users', secure_filename(user_id))
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, f'{name}.json')
+
+def characters_path(user_id=None): return user_data_path('characters', user_id)
+def assets_path(cat, user_id=None): return user_data_path(cat, user_id)
+def history_path(user_id=None): return user_data_path('history', user_id)
+def styles_path(user_id=None): return user_data_path('styles', user_id)
+def settings_path(user_id=None): return user_data_path('api_settings', user_id)
+def users_path(): return os.path.join(DATA, 'users.json')
+
+def insert_history(entry, limit=100, user_id=None):
     with HISTORY_LOCK:
-        hist = load_json(history_path(), [])
+        path = history_path(user_id)
+        hist = load_json(path, [])
         hist.insert(0, entry)
-        save_json(history_path(), hist[:limit])
+        save_json(path, hist[:limit])
 
 def save_video_history(video_url, script, original_script=None, refined_script=None,
                        model=None, ratio=None, duration=None, resolution=None,
-                       ref_count=None):
+                       ref_count=None, user_id=None):
     entry = {
         'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
         'type': 'video',
@@ -204,7 +220,7 @@ def save_video_history(video_url, script, original_script=None, refined_script=N
     if duration: entry['duration'] = duration
     if resolution: entry['resolution'] = resolution
     if ref_count is not None: entry['ref_count'] = ref_count
-    insert_history(entry)
+    insert_history(entry, user_id=user_id)
     return entry
 
 def ensure_default_styles(styles):
@@ -312,12 +328,7 @@ DEFAULT_STYLES = [{'id': 'style_1',
 def init_data():
     os.makedirs(DATA, exist_ok=True)
     for path, default in [
-        (characters_path(), {}),
-        (history_path(), []),
-        (styles_path(), DEFAULT_STYLES),
-        (assets_path('outfits'), []),
-        (assets_path('scenes'), []),
-        (assets_path('audios'), []),
+        (users_path(), {}),
     ]:
         if not os.path.exists(path) or os.path.getsize(path) < 10:
             save_json(path, default)
@@ -395,35 +406,94 @@ def upload_to_tos(file_data, object_key, content_type='application/octet-stream'
         return None, False
 
 
-# ── Login middleware ──────────────────────────────────────────
-LOGIN_PASSWORD = os.environ.get('LOGIN_PASSWORD', '')
-LOGIN_REQUIRED = bool(LOGIN_PASSWORD)
+# ── User authentication ──────────────────────────────────────
+USERS_LOCK = threading.Lock()
+
+def get_user_api_settings(user_id=None):
+    saved = load_json(settings_path(user_id), {})
+    return {
+        'ark_api_key': saved.get('ark_api_key') or ARK_API_KEY,
+        'nano_api_key': saved.get('nano_api_key') or NANO_GPT_API_KEY,
+        'third_party_api_base': saved.get('third_party_api_base') or THIRD_PARTY_API_BASE,
+        'third_party_api_key': saved.get('third_party_api_key') or THIRD_PARTY_API_KEY,
+    }
 
 def login_required(f):
-    """Simple password gate. If LOGIN_PASSWORD not set, skip auth."""
-    if not LOGIN_REQUIRED:
-        return f
     @functools.wraps(f)
     def wrap(*a, **kw):
-        pwd = request.args.get('p', '')
-        if pwd == LOGIN_PASSWORD:
-            session['_auth'] = True
-        if session.get('_auth'):
+        if current_user_id():
             return f(*a, **kw)
         return jsonify(error='unauthorized'), 401
     return wrap
 # ── static pages ──────────────────────────────────────────────
 @app.route('/')
 def index():
-    pwd = request.args.get('p', '')
-    if pwd:
-        if LOGIN_REQUIRED and pwd == LOGIN_PASSWORD:
-            session['_auth'] = True
-        elif LOGIN_REQUIRED:
-            return '<h2 style="text-align:center;margin-top:100px;">密码错误</h2>', 403
-    if LOGIN_REQUIRED and not session.get('_auth'):
-        return '<h2 style="text-align:center;margin-top:100px;">请输入密码</h2><form style="text-align:center;margin-top:20px;" method="get"><input name="p" type="password" placeholder="密码" autofocus style="padding:8px;font-size:14px;"><button style="padding:8px 16px;">登录</button></form>', 401
+    if not current_user_id():
+        return send_from_directory('static', 'login.html')
     return send_from_directory('static', 'index.html')
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    body = request.json or {}
+    username = (body.get('username') or '').strip()
+    password = body.get('password') or ''
+    if not (3 <= len(username) <= 40) or not username.isascii() or not all(c.isalnum() or c in '_.-' for c in username):
+        return jsonify(error='用户名需为 3-40 位字母、数字、点、横线或下划线'), 400
+    if len(password) < 8:
+        return jsonify(error='密码至少需要 8 位'), 400
+    user_id = username.lower()
+    with USERS_LOCK:
+        users = load_json(users_path(), {})
+        if user_id in users:
+            return jsonify(error='用户名已存在'), 409
+        users[user_id] = {'username': username, 'password_hash': generate_password_hash(password, method='pbkdf2:sha256'), 'created_at': datetime.utcnow().isoformat()}
+        save_json(users_path(), users)
+    session.clear()
+    session['user_id'] = user_id
+    return jsonify(ok=True, username=username)
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    body = request.json or {}
+    user_id = (body.get('username') or '').strip().lower()
+    user = load_json(users_path(), {}).get(user_id)
+    if not user or not check_password_hash(user.get('password_hash', ''), body.get('password') or ''):
+        return jsonify(error='用户名或密码错误'), 401
+    session.clear()
+    session['user_id'] = user_id
+    return jsonify(ok=True, username=user.get('username', user_id))
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return jsonify(ok=True)
+
+@app.route('/api/auth/me')
+@login_required
+def auth_me():
+    user = load_json(users_path(), {}).get(current_user_id(), {})
+    return jsonify(username=user.get('username', current_user_id()))
+
+@app.route('/api/settings', methods=['GET', 'POST'])
+@login_required
+def api_settings():
+    if request.method == 'POST':
+        body = request.json or {}
+        old = load_json(settings_path(), {})
+        for key in ('ark_api_key', 'nano_api_key', 'third_party_api_key'):
+            value = body.get(key)
+            if value:
+                old[key] = value.strip()
+        if 'third_party_api_base' in body:
+            old['third_party_api_base'] = (body.get('third_party_api_base') or '').strip().rstrip('/')
+        save_json(settings_path(), old)
+    cfg = get_user_api_settings()
+    return jsonify({
+        'ark_configured': bool(cfg['ark_api_key']),
+        'nano_configured': bool(cfg['nano_api_key']),
+        'third_party_configured': bool(cfg['third_party_api_key'] and cfg['third_party_api_base']),
+        'third_party_api_base': load_json(settings_path(), {}).get('third_party_api_base', '')
+    })
 
 # ── uploads ───────────────────────────────────────────────────
 @app.route('/api/tos-presign', methods=['POST'])
@@ -526,10 +596,11 @@ def get_history():
 @app.route('/api/models', methods=['GET'])
 @login_required
 def get_models():
-    has_nano = bool(NANO_GPT_API_KEY)
-    has_third = bool(THIRD_PARTY_API_KEY and THIRD_PARTY_API_BASE)
+    cfg = get_user_api_settings()
+    has_nano = bool(cfg['nano_api_key'])
+    has_third = bool(cfg['third_party_api_key'] and cfg['third_party_api_base'])
     return jsonify({
-        'models': ALL_MODELS,
+        'models': ALL_MODELS + ([THIRD_PARTY_MODEL_ID] if has_third and THIRD_PARTY_MODEL_ID not in ALL_MODELS else []),
         'nano_available': has_nano,
         'third_party_available': has_third,
         'default': 'seedance',
@@ -547,7 +618,7 @@ def get_image_models():
     })
 
 # ── prompt refinement ──────────────────────────────────────────
-def refine_prompt(script, images, ratio, duration):
+def refine_prompt(script, images, ratio, duration, ark_api_key=None):
     """Use text model to optimize the user's script into a video-ready Chinese prompt."""
     role_desc = '、'.join([img.get('role_label', '参考图') for img in images]) if images else '无参考图'
 
@@ -571,7 +642,7 @@ def refine_prompt(script, images, ratio, duration):
     )
 
     try:
-        client = Ark(api_key=ARK_API_KEY)
+        client = Ark(api_key=ark_api_key or ARK_API_KEY)
         resp = client.chat.completions.create(
             model=TEXT_MODEL_ID,
             messages=[
@@ -591,16 +662,16 @@ def refine_prompt(script, images, ratio, duration):
 
 # ── Nano-GPT video generation adapter ─────────────────────────
 def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, ratio, duration, host_url,
-                      resolution='720p', original_script=None, optimize=False):
+                      resolution='720p', original_script=None, optimize=False, api_key=None, user_id=None):
     """Generate video via Nano-GPT API. Runs in a background thread."""
     try:
-        if not NANO_GPT_API_KEY:
+        if not api_key:
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'NANO_GPT_API_KEY 未设置，请配置环境变量'}
             return
 
         model_real = NANO_GPT_MODELS[model_key]
         headers = {
-            'x-api-key': NANO_GPT_API_KEY,
+            'x-api-key': api_key,
             'Content-Type': 'application/json'
         }
 
@@ -758,7 +829,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
                         original_script=original_script or script,
                         refined_script=script if optimize else (original_script or script),
                         model=model_key, ratio=ratio, duration=duration,
-                        resolution=resolution, ref_count=len(images))
+                        resolution=resolution, ref_count=len(images), user_id=user_id)
                     JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_vurl, 'source_video_url': vurl, 'error': None}
                     return
                 else:
@@ -779,12 +850,12 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 # ── Third-party generic video adapter ─────────────────────────
 def third_party_video_adapter(job_id, script, images, audio_url, video_url, ratio, duration, host_url,
                               model_key=THIRD_PARTY_MODEL_ID, resolution='720p',
-                              original_script=None, optimize=False):
+                              original_script=None, optimize=False, api_base=None, api_key=None, user_id=None):
     """Generic adapter for any third-party video generation API.
     Reads api_base and api_key from env vars. Sends prompt + refs, polls for result."""
     try:
-        api_base = THIRD_PARTY_API_BASE
-        api_key  = THIRD_PARTY_API_KEY
+        api_base = api_base or THIRD_PARTY_API_BASE
+        api_key = api_key or THIRD_PARTY_API_KEY
         if not api_base:
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': 'THIRD_PARTY_API_BASE 未设置'}
             return
@@ -853,7 +924,8 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
                     ratio=ratio,
                     duration=duration,
                     resolution=resolution,
-                    ref_count=len(images)
+                    ref_count=len(images),
+                    user_id=user_id
                 )
                 JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
                 return
@@ -968,14 +1040,14 @@ def image_ratio_instruction(ratio, size):
 
 
 # ── Nano image generation ─────────────────────────────────────
-def nano_image_generate(prompt, model_id, ratio, custom_size=''):
+def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None):
     """Call Nano-GPT images/generations API."""
     size = image_size_for_nano(model_id, ratio, custom_size)
     width, height = parse_image_size(size)
     final_prompt = image_ratio_instruction(ratio, size) + "\n" + prompt
     headers = {
         'Content-Type': 'application/json',
-        'x-api-key': NANO_GPT_API_KEY
+        'x-api-key': api_key or NANO_GPT_API_KEY
     }
     payload = {
         'model': model_id,
@@ -1013,13 +1085,13 @@ def nano_image_generate(prompt, model_id, ratio, custom_size=''):
 
 
 # ── Volc Seedream image generation ────────────────────────────
-def volc_image_generate(prompt, input_images, host_url, ratio, custom_size=''):
+def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', api_key=None):
     """Call Volc Ark Seedream for image generation."""
     if ratio == 'custom' and custom_size:
         size = custom_size
     else:
         size = RATIO_TO_SIZE_VOLC.get(ratio, "1920x1920")
-    client = Ark(api_key=ARK_API_KEY)
+    client = Ark(api_key=api_key or ARK_API_KEY)
     ref_url = None
     for img in (input_images or []):
         url = img['url']
@@ -1052,6 +1124,8 @@ def generate_image():
     input_images = body.get('input_images') or []
     style_id = body.get('style_id')
     host_url = request.host_url.rstrip('/')
+    user_id = current_user_id()
+    api_cfg = get_user_api_settings(user_id)
 
     if not prompt:
         return jsonify(error='prompt 不能为空'), 400
@@ -1070,15 +1144,16 @@ def generate_image():
                 input_images.append({'url': style['thumbnail_url'], 'role_label': '风格参考'})
 
     job_id = uuid.uuid4().hex
+    JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'url': None, 'name': None, 'error': None,
                      'model': image_model, 'ratio': ratio, 'mode': mode}
 
     def run():
         try:
             if image_model in NANO_GPT_IMAGE_MODELS:
-                local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size)
+                local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size, api_cfg['nano_api_key'])
             elif image_model == 'volc-seedream-4-5':
-                local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size)
+                local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size, api_cfg['ark_api_key'])
             else:
                 JOBS[job_id] = {'status': 'failed', 'url': None, 'error': f'不支持的图片模型: {image_model}'}
                 return
@@ -1091,7 +1166,7 @@ def generate_image():
                 'original_script': prompt,
                 'model': image_model,
                 'ratio': ratio
-            })
+            }, user_id=user_id)
             JOBS[job_id] = {'status': 'succeeded', 'url': local_url, 'name': filename,
                              'model': image_model, 'ratio': ratio, 'mode': mode}
         except Exception as e:
@@ -1105,6 +1180,8 @@ def generate_image():
 @app.route('/api/image-status/<job_id>', methods=['GET'])
 @login_required
 def image_status(job_id):
+    if JOB_OWNERS.get(job_id) != current_user_id():
+        return jsonify(status='not_found'), 404
     return jsonify(JOBS.get(job_id, {'status': 'not_found'}))
 
 
@@ -1129,6 +1206,9 @@ def generate():
     video_model = body.get('video_model', 'seedance')
     host_url    = request.host_url.rstrip('/')
     job_id      = uuid.uuid4().hex
+    user_id     = current_user_id()
+    api_cfg     = get_user_api_settings(user_id)
+    JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
 
     # Inject style
@@ -1153,29 +1233,30 @@ def generate():
 
     original_script = script
     if optimize and script.strip():
-        script = refine_prompt(script, images, ratio, duration)
+        script = refine_prompt(script, images, ratio, duration, api_cfg['ark_api_key'])
 
     # ── Nano-GPT path ──
     if video_model in NANO_GPT_NAMES:
-        if not NANO_GPT_API_KEY:
+        if not api_cfg['nano_api_key']:
             JOBS[job_id] = {'status': 'failed', 'video_url': None,
                             'error': 'NANO_GPT_API_KEY 未设置。请 export NANO_GPT_API_KEY=sk-nano-xxx 后重启服务'}
             return jsonify(job_id=job_id)
         threading.Thread(target=nano_gpt_generate, args=(
             job_id, video_model, script, images, audio_url, video_url, ratio, duration, host_url,
-            resolution, original_script, optimize
+            resolution, original_script, optimize, api_cfg['nano_api_key'], user_id
         ), daemon=True).start()
         return jsonify(job_id=job_id)
 
     # ── Third-party path ──
     if video_model == THIRD_PARTY_MODEL_ID:
-        if not THIRD_PARTY_API_KEY or not THIRD_PARTY_API_BASE:
+        if not api_cfg['third_party_api_key'] or not api_cfg['third_party_api_base']:
             JOBS[job_id] = {'status': 'failed', 'video_url': None,
                             'error': '第三方模型未配置。请设置 THIRD_PARTY_API_BASE 和 THIRD_PARTY_API_KEY 环境变量后重启服务'}
             return jsonify(job_id=job_id)
         threading.Thread(target=third_party_video_adapter, args=(
             job_id, script, images, audio_url, video_url, ratio, duration, host_url,
-            video_model, resolution, original_script, optimize
+            video_model, resolution, original_script, optimize,
+            api_cfg['third_party_api_base'], api_cfg['third_party_api_key'], user_id
         ), daemon=True).start()
         return jsonify(job_id=job_id)
 
@@ -1236,7 +1317,7 @@ def generate():
             except Exception as wash_err:
                 print(f"专属洗图执行出现异常，已降级回原图: {wash_err}")
 
-            client = Ark(api_key=ARK_API_KEY)
+            client = Ark(api_key=api_cfg['ark_api_key'])
             JOBS[job_id]['status'] = 'running'
             res = client.content_generation.tasks.create(
                 model=MODEL_ID, content=content,
@@ -1256,7 +1337,8 @@ def generate():
                         ratio=ratio,
                         duration=duration,
                         resolution=resolution,
-                        ref_count=len(images)
+                        ref_count=len(images),
+                        user_id=user_id
                     )
                     JOBS[job_id] = {'status':'succeeded','video_url':stored_vurl,'source_video_url':vurl,'error':None}
                     break
@@ -1274,6 +1356,8 @@ def generate():
 @app.route('/api/status/<job_id>')
 @login_required
 def status(job_id):
+    if JOB_OWNERS.get(job_id) != current_user_id():
+        return jsonify(status='not_found'), 404
     job = JOBS.get(job_id, {'status': 'not_found'})
     return jsonify(job)
 
@@ -1499,6 +1583,7 @@ def upscale_local():
         video_url = request.host_url.rstrip('/') + video_url
 
     job_id = uuid.uuid4().hex
+    JOB_OWNERS[job_id] = current_user_id()
     JOBS[job_id] = {'status': 'pending', 'url': None, 'error': None}
     threading.Thread(target=run_upscale_job, args=(job_id, video_url, ratio), daemon=True).start()
     return jsonify(job_id=job_id)
@@ -1507,18 +1592,21 @@ def upscale_local():
 @app.route('/api/upscale-status/<job_id>')
 @login_required
 def upscale_status(job_id):
+    if JOB_OWNERS.get(job_id) != current_user_id():
+        return jsonify(status='not_found'), 404
     return jsonify(JOBS.get(job_id, {'status': 'not_found'}))
 
 
 # ── Script text model helper ─────────────────────────────────
-def call_script_text_model(model_key, system_prompt, user_content, temperature=0.7, max_tokens=4000):
+def call_script_text_model(model_key, system_prompt, user_content, temperature=0.7, max_tokens=4000, api_cfg=None):
     """Call script text model (brainstorm/split). Routes to Ark or Nano based on model_key."""
     model_cfg = SCRIPT_MODELS.get(model_key, SCRIPT_MODELS[SCRIPT_MODEL_DEFAULT])
     provider = model_cfg["provider"]
     model_id = model_cfg["model_id"]
 
+    api_cfg = api_cfg or {'ark_api_key': ARK_API_KEY, 'nano_api_key': NANO_GPT_API_KEY}
     if provider == "volcengine":
-        client = Ark(api_key=ARK_API_KEY)
+        client = Ark(api_key=api_cfg['ark_api_key'])
         resp = client.chat.completions.create(
             model=model_id,
             messages=[
@@ -1530,7 +1618,7 @@ def call_script_text_model(model_key, system_prompt, user_content, temperature=0
         return resp.choices[0].message.content.strip()
 
     elif provider == "nano":
-        api_key = os.environ.get("NANO_GPT_API_KEY", "").strip() or NANO_GPT_API_KEY
+        api_key = api_cfg['nano_api_key']
         if not api_key:
             raise Exception('NANO_GPT_API_KEY 未设置，请配置环境变量后使用 GLM4.6 或 Claude4.6 模型')
         headers = {
@@ -1631,7 +1719,7 @@ def script_brainstorm():
         '直接输出剧本文本，不要markdown格式，不要角色列表。'
     )
     try:
-        text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000)
+        text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000, api_cfg=get_user_api_settings())
         return jsonify(text=text)
     except Exception as e:
         return jsonify(error=f'生成失败: {str(e)}'), 500
@@ -1646,6 +1734,9 @@ def script_split():
         return jsonify(error='请输入剧本文本'), 400
 
     job_id = uuid.uuid4().hex
+    user_id = current_user_id()
+    api_cfg = get_user_api_settings(user_id)
+    JOB_OWNERS[job_id] = user_id
     SCRIPT_JOBS[job_id] = {
         'status': 'running',
         'created_at': time.time()
@@ -1653,7 +1744,7 @@ def script_split():
 
     def worker():
         try:
-            shots = build_script_shots(body)
+            shots = build_script_shots(body, api_cfg=api_cfg, user_id=user_id)
             SCRIPT_JOBS[job_id].update({
                 'status': 'done',
                 'shots': shots,
@@ -1674,6 +1765,8 @@ def script_split():
 @app.route('/api/script/split/<job_id>', methods=['GET'])
 @login_required
 def script_split_status(job_id):
+    if JOB_OWNERS.get(job_id) != current_user_id():
+        return jsonify(error='分镜任务不存在或已过期'), 404
     now = time.time()
     for old_id, job in list(SCRIPT_JOBS.items()):
         if now - job.get('created_at', now) > 3600:
@@ -1684,7 +1777,7 @@ def script_split_status(job_id):
     return jsonify(job)
 
 
-def build_script_shots(body):
+def build_script_shots(body, api_cfg=None, user_id=None):
     script_text = body.get('script', '').strip()
     mode = body.get('mode', 'smart')  # smart | short | long
     script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
@@ -1736,7 +1829,7 @@ def build_script_shots(body):
         )
         max_tokens = 2600 if len(script_text) < 800 else 4000
     try:
-        raw = call_script_text_model(script_model, system_prompt, script_text, temperature=0.6, max_tokens=max_tokens)
+        raw = call_script_text_model(script_model, system_prompt, script_text, temperature=0.6, max_tokens=max_tokens, api_cfg=api_cfg)
         if raw.startswith('```'):
             raw = raw.split('\n', 1)[1]
         if raw.endswith('```'):
@@ -1749,7 +1842,7 @@ def build_script_shots(body):
             'original_script': script_text,
             'segment_count': len(shots),
             'shots': shots
-        })
+        }, user_id=user_id)
         return shots
     except json.JSONDecodeError as e:
         raise Exception(f'解析分镜结果失败: {str(e)}\n模型原文：{raw[:800]}')
