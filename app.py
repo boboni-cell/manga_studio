@@ -196,7 +196,6 @@ def history_path(user_id=None): return user_data_path('history', user_id)
 def styles_path(user_id=None): return user_data_path('styles', user_id)
 def settings_path(user_id=None): return user_data_path('api_settings', user_id)
 def users_path(): return os.path.join(DATA, 'users.json')
-def admin_settings_path(): return os.path.join(DATA, 'admin_settings.json')
 def invitations_path(): return os.path.join(DATA, 'invitations.json')
 
 def insert_history(entry, limit=100, user_id=None):
@@ -331,11 +330,28 @@ def init_data():
     os.makedirs(DATA, exist_ok=True)
     for path, default in [
         (users_path(), {}),
-        (admin_settings_path(), {}),
         (invitations_path(), []),
     ]:
         if not os.path.exists(path) or os.path.getsize(path) < 10:
             save_json(path, default)
+
+    initial_password = os.environ.get('ADMIN_INITIAL_PASSWORD', '')
+    admin_ids = [item.strip().lower() for item in os.environ.get('ADMIN_USERS', '').split(',') if item.strip()]
+    if initial_password and admin_ids:
+        users = load_json(users_path(), {})
+        changed = False
+        for admin_id in admin_ids:
+            if admin_id not in users:
+                users[admin_id] = {
+                    'username': admin_id,
+                    'password_hash': generate_password_hash(initial_password, method='pbkdf2:sha256'),
+                    'created_at': datetime.utcnow().isoformat(),
+                    'model_permissions': ['text', 'image', 'video'],
+                    'points': 0
+                }
+                changed = True
+        if changed:
+            save_json(users_path(), users)
 
 init_data()
 
@@ -413,29 +429,31 @@ def upload_to_tos(file_data, object_key, content_type='application/octet-stream'
 # ── User authentication ──────────────────────────────────────
 USERS_LOCK = threading.Lock()
 
-API_DEFAULTS = {
-    'text': {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': TEXT_MODEL_ID},
-    'image': {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': 'gpt-image-2'},
-    'video': {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': MODEL_ID},
-}
+class QuotaError(Exception): pass
 
-def get_platform_api(kind):
-    saved = load_json(admin_settings_path(), {}).get('apis', {}).get(kind, {})
-    cfg = dict(API_DEFAULTS[kind])
-    cfg.update({k: v for k, v in saved.items() if v not in (None, '')})
-    cfg['base_url'] = (cfg.get('base_url') or '').rstrip('/')
-    return cfg
+def get_personal_api(kind, user_id=None):
+    saved = load_json(settings_path(user_id), {}).get('apis', {}).get(kind, {})
+    return {
+        'provider': saved.get('provider', ''), 'base_url': (saved.get('base_url') or '').rstrip('/'),
+        'api_key': saved.get('api_key', ''), 'model': saved.get('model', ''), 'last_test': saved.get('last_test')
+    }
+
+def use_personal_api(user_id=None):
+    user_id = user_id or current_user_id()
+    if is_admin(user_id): return False
+    user = load_json(users_path(), {}).get(user_id, {})
+    return int(user.get('points') or 0) <= 0
+
+def resolve_api(kind, builtin, user_id=None):
+    if not use_personal_api(user_id): return builtin
+    personal = get_personal_api(kind, user_id)
+    if personal.get('api_key') and personal.get('base_url') and personal.get('model'): return personal
+    raise QuotaError('平台积分已用完，请先在「我的 API」中接入自己的接口')
 
 def get_user_api_settings(user_id=None):
-    text_cfg = get_platform_api('text')
-    image_cfg = get_platform_api('image')
-    video_cfg = get_platform_api('video')
-    saved = load_json(settings_path(user_id), {})
     return {
-        'ark_api_key': next((c['api_key'] for c in (text_cfg, image_cfg, video_cfg) if c.get('provider') == 'ark' and c.get('api_key')), ARK_API_KEY),
-        'nano_api_key': next((c['api_key'] for c in (text_cfg, image_cfg, video_cfg) if c.get('provider') in ('nano', 'openai') and c.get('api_key')), NANO_GPT_API_KEY),
-        'third_party_api_base': video_cfg['base_url'] if video_cfg.get('provider') == 'generic' else THIRD_PARTY_API_BASE,
-        'third_party_api_key': video_cfg['api_key'] if video_cfg.get('provider') == 'generic' else THIRD_PARTY_API_KEY,
+        'ark_api_key': ARK_API_KEY, 'nano_api_key': NANO_GPT_API_KEY,
+        'third_party_api_base': THIRD_PARTY_API_BASE, 'third_party_api_key': THIRD_PARTY_API_KEY,
     }
 
 def is_admin(user_id=None):
@@ -485,6 +503,11 @@ def admin_page():
     if not current_user_id(): return redirect('/')
     if not is_admin(): return '<h2 style="text-align:center;margin-top:100px">无管理员权限</h2>', 403
     return send_from_directory('static', 'admin.html')
+
+@app.route('/api-settings')
+@login_required
+def api_settings_page():
+    return send_from_directory('static', 'api-settings.html')
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -542,23 +565,38 @@ def auth_me():
 @app.route('/api/settings', methods=['GET', 'POST'])
 @login_required
 def api_settings():
+    settings = load_json(settings_path(), {})
     if request.method == 'POST':
         body = request.json or {}
-        old = load_json(settings_path(), {})
-        for key in ('ark_api_key', 'nano_api_key', 'third_party_api_key'):
-            value = body.get(key)
-            if value:
-                old[key] = value.strip()
-        if 'third_party_api_base' in body:
-            old['third_party_api_base'] = (body.get('third_party_api_base') or '').strip().rstrip('/')
-        save_json(settings_path(), old)
-    cfg = get_user_api_settings()
-    return jsonify({
-        'ark_configured': bool(cfg['ark_api_key']),
-        'nano_configured': bool(cfg['nano_api_key']),
-        'third_party_configured': bool(cfg['third_party_api_key'] and cfg['third_party_api_base']),
-        'third_party_api_base': load_json(settings_path(), {}).get('third_party_api_base', '')
-    })
+        kind = body.get('kind')
+        if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+        cfg = settings.setdefault('apis', {}).setdefault(kind, {})
+        for key in ('provider', 'base_url', 'model'):
+            if key in body: cfg[key] = str(body.get(key) or '').strip().rstrip('/') if key == 'base_url' else str(body.get(key) or '').strip()
+        if body.get('api_key'): cfg['api_key'] = str(body['api_key']).strip()
+        save_json(settings_path(), settings)
+    apis = {}
+    for kind in ('text', 'image', 'video'):
+        cfg = get_personal_api(kind)
+        apis[kind] = {'provider': cfg['provider'], 'base_url': cfg['base_url'], 'model': cfg['model'], 'configured': bool(cfg['api_key']), 'last_test': cfg.get('last_test')}
+    return jsonify(apis=apis, using_personal=use_personal_api(), points=load_json(users_path(), {}).get(current_user_id(), {}).get('points', 0))
+
+@app.route('/api/settings/<kind>/test', methods=['POST'])
+@login_required
+def personal_api_test(kind):
+    if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+    cfg = get_personal_api(kind)
+    if not cfg.get('api_key') or not cfg.get('base_url') or not cfg.get('model'): return jsonify(error='请先保存完整接口配置'), 400
+    try:
+        headers = {'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
+        r = requests.get(f"{cfg['base_url']}/models", headers=headers, timeout=20)
+        if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
+        settings = load_json(settings_path(), {})
+        settings.setdefault('apis', {}).setdefault(kind, {})['last_test'] = datetime.utcnow().isoformat()
+        save_json(settings_path(), settings)
+        return jsonify(ok=True, message='连接成功，额度用完后可切换到此接口')
+    except requests.RequestException as e:
+        return jsonify(error=f'连接失败：{str(e)}'), 502
 
 @app.route('/api/admin/users')
 @admin_required
@@ -606,43 +644,14 @@ def admin_invitation_status(code):
     save_json(invitations_path(), invitations)
     return jsonify(ok=True)
 
-def public_api_config(kind):
-    cfg = get_platform_api(kind)
-    return {'provider': cfg.get('provider', ''), 'base_url': cfg.get('base_url', ''), 'model': cfg.get('model', ''), 'configured': bool(cfg.get('api_key')), 'last_test': cfg.get('last_test')}
-
-@app.route('/api/admin/apis', methods=['GET', 'POST'])
+@app.route('/api/admin/apis')
 @admin_required
 def admin_apis():
-    settings = load_json(admin_settings_path(), {})
-    if request.method == 'POST':
-        body = request.json or {}
-        kind = body.get('kind')
-        if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
-        apis = settings.setdefault('apis', {})
-        old = apis.setdefault(kind, {})
-        for key in ('provider', 'base_url', 'model'):
-            if key in body: old[key] = str(body.get(key) or '').strip().rstrip('/') if key == 'base_url' else str(body.get(key) or '').strip()
-        if body.get('api_key'): old['api_key'] = str(body['api_key']).strip()
-        save_json(admin_settings_path(), settings)
-    return jsonify(apis={kind: public_api_config(kind) for kind in ('text', 'image', 'video')})
-
-@app.route('/api/admin/apis/<kind>/test', methods=['POST'])
-@admin_required
-def admin_api_test(kind):
-    if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
-    cfg = get_platform_api(kind)
-    if not cfg.get('api_key') or not cfg.get('base_url') or not cfg.get('model'):
-        return jsonify(error='请先填写 Base URL、API Key 和模型名'), 400
-    try:
-        headers = {'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
-        r = requests.get(f"{cfg['base_url']}/models", headers=headers, timeout=20)
-        if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
-        settings = load_json(admin_settings_path(), {})
-        settings.setdefault('apis', {}).setdefault(kind, {})['last_test'] = datetime.utcnow().isoformat()
-        save_json(admin_settings_path(), settings)
-        return jsonify(ok=True, message='连接成功，鉴权与模型服务可访问')
-    except requests.RequestException as e:
-        return jsonify(error=f'连接失败：{str(e)}'), 502
+    return jsonify(apis={
+        'text': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY)},
+        'image': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY)},
+        'video': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY or THIRD_PARTY_API_KEY)}
+    })
 
 # ── uploads ───────────────────────────────────────────────────
 @app.route('/api/tos-presign', methods=['POST'])
@@ -745,30 +754,33 @@ def get_history():
 @app.route('/api/models', methods=['GET'])
 @login_required
 def get_models():
-    cfg = get_platform_api('video')
-    model = cfg.get('model') or MODEL_ID
-    caps = dict(MODEL_CAPS)
-    caps.setdefault(model, MODEL_CAPS['seedance'] if cfg.get('provider') == 'ark' else MODEL_CAPS[THIRD_PARTY_MODEL_ID])
+    cfg = get_user_api_settings()
+    has_nano = bool(cfg['nano_api_key'])
+    has_third = bool(cfg['third_party_api_key'] and cfg['third_party_api_base'])
     return jsonify({
-        'models': [model], 'nano_available': bool(cfg.get('api_key')), 'third_party_available': bool(cfg.get('api_key')),
-        'default': model, 'caps': caps
+        'models': ALL_MODELS + ([THIRD_PARTY_MODEL_ID] if has_third and THIRD_PARTY_MODEL_ID not in ALL_MODELS else []),
+        'nano_available': has_nano, 'third_party_available': has_third, 'default': 'seedance', 'caps': MODEL_CAPS
     })
 
 @app.route('/api/image-models', methods=['GET'])
 @login_required
 def get_image_models():
-    cfg = get_platform_api('image')
-    model = cfg.get('model') or 'gpt-image-2'
     return jsonify({
-        'models': [model],
+        'models': ALL_IMAGE_MODELS,
         'ratios': IMAGE_RATIOS,
-        'default_model': model,
+        'default_model': 'gpt-image-2',
         'default_ratio': DEFAULT_RATIO
     })
 
 # ── prompt refinement ──────────────────────────────────────────
-def call_platform_text(system_prompt, user_content, temperature=0.7, max_tokens=4000):
-    cfg = get_platform_api('text')
+def builtin_text_api(model_key=SCRIPT_MODEL_DEFAULT):
+    model_cfg = SCRIPT_MODELS.get(model_key, SCRIPT_MODELS[SCRIPT_MODEL_DEFAULT])
+    if model_cfg['provider'] == 'volcengine':
+        return {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': model_cfg['model_id']}
+    return {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': model_cfg['model_id']}
+
+def call_platform_text(system_prompt, user_content, temperature=0.7, max_tokens=4000, cfg=None, user_id=None):
+    cfg = cfg or resolve_api('text', builtin_text_api(), user_id)
     if not cfg.get('api_key'): raise Exception('文本 API 尚未配置')
     messages = [{'role': 'system', 'content': system_prompt}, {'role': 'user', 'content': user_content}]
     if cfg.get('provider') == 'ark':
@@ -781,7 +793,7 @@ def call_platform_text(system_prompt, user_content, temperature=0.7, max_tokens=
     if r.status_code != 200: raise Exception(f'文本 API 调用失败: {r.status_code} {r.text[:300]}')
     return r.json()['choices'][0]['message']['content'].strip()
 
-def refine_prompt(script, images, ratio, duration, ark_api_key=None):
+def refine_prompt(script, images, ratio, duration, ark_api_key=None, user_id=None):
     """Use text model to optimize the user's script into a video-ready Chinese prompt."""
     role_desc = '、'.join([img.get('role_label', '参考图') for img in images]) if images else '无参考图'
 
@@ -805,7 +817,7 @@ def refine_prompt(script, images, ratio, duration, ark_api_key=None):
     )
 
     try:
-        refined = call_platform_text(system_prompt, user_prompt, temperature=0.7, max_tokens=1000)
+        refined = call_platform_text(system_prompt, user_prompt, temperature=0.7, max_tokens=1000, user_id=user_id)
         if refined:
             return refined
     except Exception as e:
@@ -1272,10 +1284,13 @@ def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', a
 @login_required
 @model_access_required('image')
 def generate_image():
-    body = request.json
+    body = request.json or {}
     prompt = body.get('prompt', '').strip()
-    image_cfg = get_platform_api('image')
-    image_model = image_cfg.get('model') or body.get('image_model', 'gpt-image-2')
+    selected_model = body.get('image_model', 'gpt-image-2')
+    if selected_model in NANO_GPT_IMAGE_MODELS:
+        builtin = {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': selected_model}
+    else:
+        builtin = {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': VOLC_IMAGE_MODEL_ID}
     ratio = body.get('ratio', DEFAULT_RATIO)
     custom_size = body.get('custom_size', '')
     mode = body.get('mode', 'storyboard')
@@ -1286,6 +1301,11 @@ def generate_image():
 
     if not prompt:
         return jsonify(error='prompt 不能为空'), 400
+    try:
+        image_cfg = resolve_api('image', builtin, user_id)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
+    image_model = image_cfg['model']
 
     # Inject style
     if style_id:
@@ -1347,7 +1367,7 @@ def image_status(job_id):
 @login_required
 @model_access_required('video')
 def generate():
-    body      = request.json
+    body      = request.json or {}
     script    = body.get('script', '')
     images    = body.get('images', [])   # [{url, role_label}]
     audio_url = body.get('audio_url')
@@ -1361,11 +1381,21 @@ def generate():
     duration    = int(body.get('duration', 5))
     resolution  = body.get('resolution', '720p')
     optimize    = body.get('optimize_prompt', True)
-    video_cfg   = get_platform_api('video')
-    video_model = video_cfg.get('model') or body.get('video_model', 'seedance')
+    selected_model = body.get('video_model', 'seedance')
+    if selected_model in NANO_GPT_NAMES:
+        builtin = {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': selected_model}
+    elif selected_model == THIRD_PARTY_MODEL_ID:
+        builtin = {'provider': 'generic', 'base_url': THIRD_PARTY_API_BASE.rstrip('/'), 'api_key': THIRD_PARTY_API_KEY, 'model': selected_model}
+    else:
+        builtin = {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': MODEL_ID}
     host_url    = request.host_url.rstrip('/')
     job_id      = uuid.uuid4().hex
     user_id     = current_user_id()
+    try:
+        video_cfg = resolve_api('video', builtin, user_id)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
+    video_model = video_cfg['model']
     JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
 
@@ -1391,7 +1421,7 @@ def generate():
 
     original_script = script
     if optimize and script.strip():
-        script = refine_prompt(script, images, ratio, duration)
+        script = refine_prompt(script, images, ratio, duration, user_id=user_id)
 
     # ── Nano-GPT path ──
     if video_cfg.get('provider') == 'nano':
@@ -1757,8 +1787,9 @@ def upscale_status(job_id):
 
 # ── Script text model helper ─────────────────────────────────
 def call_script_text_model(model_key, system_prompt, user_content, temperature=0.7, max_tokens=4000, api_cfg=None):
-    """Call the text API configured by the administrator."""
-    return call_platform_text(system_prompt, user_content, temperature=temperature, max_tokens=max_tokens)
+    """Use the built-in text model while points remain, otherwise the user's API."""
+    cfg = api_cfg or resolve_api('text', builtin_text_api(model_key))
+    return call_platform_text(system_prompt, user_content, temperature=temperature, max_tokens=max_tokens, cfg=cfg)
 
 
 def _extract_json_array(text):
@@ -1774,7 +1805,7 @@ def _extract_json_array(text):
     return raw.strip()
 
 
-def parse_script_shots_json(raw, script_model):
+def parse_script_shots_json(raw, script_model, api_cfg=None):
     candidate = _extract_json_array(raw)
     try:
         shots = json.loads(candidate)
@@ -1784,7 +1815,7 @@ def parse_script_shots_json(raw, script_model):
             '请只修复语法错误，保留原字段和中文内容，不要改写剧情。'
             '只输出合法 JSON 数组，不要 Markdown，不要解释。'
         )
-        fixed = call_script_text_model(script_model, repair_prompt, raw, temperature=0, max_tokens=4000)
+        fixed = call_script_text_model(script_model, repair_prompt, raw, temperature=0, max_tokens=4000, api_cfg=api_cfg)
         shots = json.loads(_extract_json_array(fixed))
     if not isinstance(shots, list):
         raise ValueError('模型输出不是 JSON 数组')
@@ -1837,8 +1868,10 @@ def script_brainstorm():
         '直接输出剧本文本，不要markdown格式，不要角色列表。'
     )
     try:
-        text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000, api_cfg=get_user_api_settings())
+        text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000)
         return jsonify(text=text)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
     except Exception as e:
         return jsonify(error=f'生成失败: {str(e)}'), 500
 
@@ -1854,7 +1887,10 @@ def script_split():
 
     job_id = uuid.uuid4().hex
     user_id = current_user_id()
-    api_cfg = get_user_api_settings(user_id)
+    try:
+        api_cfg = resolve_api('text', builtin_text_api(body.get('script_model', SCRIPT_MODEL_DEFAULT)), user_id)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
     JOB_OWNERS[job_id] = user_id
     SCRIPT_JOBS[job_id] = {
         'status': 'running',
@@ -1953,7 +1989,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             raw = raw.split('\n', 1)[1]
         if raw.endswith('```'):
             raw = raw.rsplit('\n', 1)[0]
-        shots = parse_script_shots_json(raw, script_model)
+        shots = parse_script_shots_json(raw, script_model, api_cfg=api_cfg)
         insert_history({
             'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
             'type': 'script',
