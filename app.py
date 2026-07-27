@@ -1139,6 +1139,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
 
         headers = {
             'Authorization': f'Bearer {api_key}',
+            'x-api-key': api_key,
             'Content-Type': 'application/json'
         }
 
