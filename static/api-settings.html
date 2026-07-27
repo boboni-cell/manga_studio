@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>我的 API · 漫剧工作室</title>
   <style>
-    :root{--bg:#0c0c10;--surface:#16161d;--surface2:#1e1e28;--border:#303044;--text:#e8e8f1;--dim:#9d9db5;--accent:#5b8def;--good:#4ecb71;--bad:#f06565}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,-apple-system,sans-serif}.top{height:58px;display:flex;align-items:center;padding:0 max(22px,calc((100% - 1120px)/2));border-bottom:1px solid var(--border);background:var(--surface);gap:12px}.top b{font-size:17px}.spacer{flex:1}.btn{border:1px solid var(--border);background:var(--surface2);color:var(--text);padding:9px 14px;border-radius:8px;cursor:pointer}.primary{background:var(--accent);border-color:var(--accent)}main{max-width:1120px;margin:0 auto;padding:28px 22px 60px}h1{font-size:26px;margin:0 0 6px}h2{font-size:17px;margin:0}.sub{color:var(--dim);margin:0}.notice{margin-top:18px;padding:15px 17px;background:#151c2d;border:1px solid #2c4675;border-radius:10px;line-height:1.7}.summary{display:flex;gap:10px;margin-top:14px}.pill{padding:6px 10px;border-radius:20px;background:var(--surface2);color:var(--dim)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:22px}.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px}.api-title{display:flex;align-items:center;gap:9px;margin-bottom:14px}.api-title .pill{font-size:11px;padding:3px 7px;margin-left:auto}label{display:block;color:var(--dim);font-size:12px;margin-top:11px}input,select{width:100%;margin-top:5px;padding:10px 11px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);outline:none}.row{display:flex;gap:8px;margin-top:14px}.row .btn{flex:1}.status{min-height:34px;margin-top:10px;color:var(--dim);font-size:12px;line-height:1.5}.good{color:var(--good)}.bad{color:var(--bad)}@media(max-width:880px){.grid{grid-template-columns:1fr}.top{padding:0 16px}main{padding:22px 14px}}
+    :root{--bg:#0c0c10;--surface:#16161d;--surface2:#1e1e28;--border:#303044;--text:#e8e8f1;--dim:#9d9db5;--accent:#5b8def;--good:#4ecb71;--bad:#f06565}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,-apple-system,sans-serif}.top{height:58px;display:flex;align-items:center;padding:0 max(22px,calc((100% - 1220px)/2));border-bottom:1px solid var(--border);background:var(--surface);gap:12px}.top b{font-size:17px}.spacer{flex:1}.btn{border:1px solid var(--border);background:var(--surface2);color:var(--text);padding:9px 14px;border-radius:8px;cursor:pointer}.primary{background:var(--accent);border-color:var(--accent)}main{max-width:1220px;margin:0 auto;padding:28px 22px 60px}h1{font-size:26px;margin:0 0 6px}h2{font-size:17px;margin:0}.sub{color:var(--dim);margin:0}.notice{margin-top:18px;padding:15px 17px;background:#151c2d;border:1px solid #2c4675;border-radius:10px;line-height:1.7}.summary{display:flex;gap:10px;margin-top:14px}.pill{padding:6px 10px;border-radius:20px;background:var(--surface2);color:var(--dim)}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:22px}.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px}.api-title{display:flex;align-items:center;gap:9px;margin-bottom:14px}.api-title .pill{font-size:11px;padding:3px 7px;margin-left:auto}label{display:block;color:var(--dim);font-size:12px;margin-top:11px}input,select{width:100%;margin-top:5px;padding:10px 11px;border-radius:7px;border:1px solid var(--border);background:var(--surface2);color:var(--text);outline:none}.help{display:block;color:#74748a;font-size:11px;margin-top:6px;line-height:1.5}.row{display:flex;gap:8px;margin-top:14px}.row .btn{flex:1}.status{min-height:34px;margin-top:10px;color:var(--dim);font-size:12px;line-height:1.5}.good{color:var(--good)}.bad{color:var(--bad)}@media(max-width:880px){.grid{grid-template-columns:1fr}.top{padding:0 16px}main{padding:22px 14px}}
   </style>
 </head>
 <body>
@@ -18,10 +18,26 @@
     <div class="grid" id="apiGrid"></div>
   </main>
   <script>
+    const p=(id,label,base='',model='')=>({id,label,base,model});
     const TYPES={
-      text:{title:'文本 API',icon:'✍️',providers:[['openai','OpenAI 兼容'],['nano','Nano-GPT'],['ark','火山 Ark']]},
-      image:{title:'图片生成 API',icon:'🎨',providers:[['openai','OpenAI 兼容'],['nano','Nano-GPT'],['ark','火山 Ark']]},
-      video:{title:'视频生成 API',icon:'🎥',providers:[['nano','Nano-GPT'],['generic','通用视频接口'],['ark','火山 Ark']]}
+      text:{title:'文本 API',icon:'✍️',help:'使用 OpenAI Chat Completions 兼容协议',providers:[
+        p('openai','OpenAI','https://api.openai.com/v1','gpt-4.1-mini'),p('deepseek','DeepSeek','https://api.deepseek.com/v1','deepseek-chat'),
+        p('anthropic','Anthropic Claude','https://api.anthropic.com/v1','claude-sonnet-4-5'),p('gemini','Google Gemini','https://generativelanguage.googleapis.com/v1beta/openai','gemini-2.5-flash'),
+        p('xai','xAI Grok','https://api.x.ai/v1','grok-3-mini'),
+        p('openrouter','OpenRouter','https://openrouter.ai/api/v1','openai/gpt-4.1-mini'),p('siliconflow','硅基流动','https://api.siliconflow.cn/v1','deepseek-ai/DeepSeek-V3'),
+        p('dashscope','通义千问 DashScope','https://dashscope.aliyuncs.com/compatible-mode/v1','qwen-plus'),p('moonshot','Moonshot / Kimi','https://api.moonshot.cn/v1','moonshot-v1-8k'),
+        p('zhipu','智谱 GLM','https://open.bigmodel.cn/api/paas/v4','glm-4-flash'),p('minimax','MiniMax','https://api.minimax.chat/v1','MiniMax-M2.1'),
+        p('nano','Nano-GPT','https://nano-gpt.com/api/v1','openai/gpt-4.1-mini'),p('ark','火山 Ark','https://ark.cn-beijing.volces.com/api/v3',''),p('custom','Custom API')
+      ]},
+      image:{title:'图片生成 API',icon:'🎨',help:'使用 OpenAI Images 兼容协议',providers:[
+        p('openai','OpenAI','https://api.openai.com/v1','gpt-image-1'),p('nano','Nano-GPT','https://nano-gpt.com/api/v1','gpt-image-2'),
+        p('siliconflow','硅基流动','https://api.siliconflow.cn/v1','black-forest-labs/FLUX.1-schnell'),p('agnes','Agnes API Hub','https://apihub.agnes-ai.com/v1','agnes-image-2.1-flash'),
+        p('ark','火山 Seedream','https://ark.cn-beijing.volces.com/api/v3',''),p('custom','Custom API')
+      ]},
+      video:{title:'视频生成 API',icon:'🎥',help:'Custom 默认使用 /video/generate 和 /video/status/{id}',providers:[
+        p('agnes','Agnes API Hub','https://apihub.agnes-ai.com/v1','agnes-video-v2.0'),p('nano','Nano-GPT','https://nano-gpt.com/api/v1','kling-v30-std'),
+        p('ark','火山 Seedance','https://ark.cn-beijing.volces.com/api/v3',''),p('custom','Custom API')
+      ]}
     };
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     async function loadApis(){
@@ -29,8 +45,9 @@
       if(!r.ok){apiGrid.innerHTML='<div class="bad">'+esc(d.error||'加载失败')+'</div>';return;}
       points.textContent='积分：'+(d.points||0);
       routeState.textContent='当前线路：'+(d.using_personal?'个人 API':'平台内置 API');
-      apiGrid.innerHTML=Object.entries(TYPES).map(([kind,t])=>{const a=d.apis[kind]||{};return `<div class="card"><div class="api-title"><span>${t.icon}</span><h2>${t.title}</h2><span class="pill">${a.configured?'已保存':'未接入'}</span></div><label>接口类型<select id="${kind}Provider">${t.providers.map(p=>`<option value="${p[0]}" ${a.provider===p[0]?'selected':''}>${p[1]}</option>`).join('')}</select></label><label>Base URL<input id="${kind}Base" value="${esc(a.base_url)}" placeholder="https://example.com/v1"></label><label>API Key<input id="${kind}Key" type="password" placeholder="${a.configured?'已保存，留空不修改':'请输入 API Key'}"></label><label>模型名称<input id="${kind}Model" value="${esc(a.model)}" placeholder="model-id"></label><div class="row"><button class="btn primary" onclick="saveApi('${kind}')">保存</button><button class="btn" onclick="testApi('${kind}')">测试连接</button></div><div class="status" id="${kind}Status">${a.last_test?'上次连接成功：'+new Date(a.last_test).toLocaleString():''}</div></div>`}).join('');
+      apiGrid.innerHTML=Object.entries(TYPES).map(([kind,t])=>{const a=d.apis[kind]||{},selected=t.providers.some(x=>x.id===a.provider)?a.provider:'custom';return `<div class="card"><div class="api-title"><span>${t.icon}</span><h2>${t.title}</h2><span class="pill">${a.configured?'已保存':'未接入'}</span></div><label>接口服务商<select id="${kind}Provider" onchange="applyPreset('${kind}')">${t.providers.map(x=>`<option value="${x.id}" ${selected===x.id?'selected':''}>${x.label}</option>`).join('')}</select></label><small class="help">${t.help}</small><label>Base URL<input id="${kind}Base" value="${esc(a.base_url)}" placeholder="https://example.com/v1"></label><label>API Key<input id="${kind}Key" type="password" placeholder="${a.configured?'已保存，留空不修改':'请输入 API Key'}"></label><label>模型名称<input id="${kind}Model" value="${esc(a.model)}" placeholder="model-id"></label><div class="row"><button class="btn primary" onclick="saveApi('${kind}')">保存</button><button class="btn" onclick="testApi('${kind}')">测试连接</button></div><div class="status" id="${kind}Status">${a.last_test?'上次连接成功：'+new Date(a.last_test).toLocaleString():''}</div></div>`}).join('');
     }
+    function applyPreset(kind){const provider=document.getElementById(kind+'Provider').value,preset=TYPES[kind].providers.find(x=>x.id===provider);if(!preset)return;document.getElementById(kind+'Base').value=preset.base;document.getElementById(kind+'Model').value=preset.model;}
     async function saveApi(kind){
       const body={kind,provider:document.getElementById(kind+'Provider').value,base_url:document.getElementById(kind+'Base').value,api_key:document.getElementById(kind+'Key').value,model:document.getElementById(kind+'Model').value};
       const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json(),s=document.getElementById(kind+'Status');

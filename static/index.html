@@ -2254,8 +2254,8 @@ let sessionImageResults = [];
 let sessionVideoResults = [];
 let skipImageCheck = false;
 let skipVideoCheck = false;
-const IMAGE_MODEL_LABELS = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'volc-seedream-4-5': 'Seedream 4.5' };
-const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
+const IMAGE_MODEL_LABELS = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5' };
+const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'agnes-video-v2.0': 'Agnes Video v2.0', 'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
 
 // Mirror of app.py NANO_GPT_NAMES for frontend model filtering
 const NANO_GPT_NAMES = new Set(['kling-v30-std','grok-imagine-video','vidu-q3','seedance-v15-pro']);
@@ -2366,6 +2366,7 @@ async function buildModelSelect() {
     sel.innerHTML = '';
     const labels = {
       'seedance': 'Seedance (火山)',
+      'agnes-video-v2.0': 'Agnes Video v2.0',
       'kling-v30-std': 'Kling v3.0 Std',
       'grok-imagine-video': 'Grok Imagine',
       'vidu-q3': 'Vidu Q3',
@@ -2384,6 +2385,10 @@ async function buildModelSelect() {
       sel.querySelectorAll('option').forEach(opt => {
         if (NANO_GPT_NAMES.has(opt.value)) opt.disabled = true;
       });
+    }
+    if (!res.agnes_available) {
+      const agnesOption = sel.querySelector('option[value="agnes-video-v2.0"]');
+      if (agnesOption) agnesOption.disabled = true;
     }
     // Disable third-party if not available
     if (!res.third_party_available) {
@@ -2424,12 +2429,13 @@ async function buildImageSelects() {
     // Model select
     const mSel = document.getElementById('imageModelSelect');
     mSel.innerHTML = '';
-    const labels = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'volc-seedream-4-5': 'Seedream 4.5' };
+    const labels = IMAGE_MODEL_LABELS;
     (res.models || []).forEach(m => {
       const opt = document.createElement('option');
       opt.value = m;
       opt.textContent = labels[m] || m;
       if (m === imageModel) opt.selected = true;
+      if (m === 'agnes-image-2.1-flash' && !res.agnes_available) opt.disabled = true;
       mSel.appendChild(opt);
     });
     mSel.onchange = () => { imageModel = mSel.value; };

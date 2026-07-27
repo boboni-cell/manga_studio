@@ -54,6 +54,7 @@ ARK_API_KEY = os.environ.get('ARK_API_KEY', '')
 TOS_AK     = os.environ.get('TOS_AK', '')
 TOS_SK     = os.environ.get('TOS_SK', '')
 NANO_GPT_API_KEY = os.environ.get('NANO_GPT_API_KEY', '')
+AGNES_API_KEY = os.environ.get('AGNES_API_KEY', '')
 
 # TOS config (non-secret)
 TOS_ENDPOINT = "tos-cn-beijing.volces.com"
@@ -93,7 +94,11 @@ THIRD_PARTY_API_BASE = os.environ.get("THIRD_PARTY_API_BASE", "")
 THIRD_PARTY_API_KEY = os.environ.get("THIRD_PARTY_API_KEY", "")
 THIRD_PARTY_MODEL_ID = "third-party"
 
-ALL_MODELS = ["seedance"] + sorted(NANO_GPT_NAMES) + ([THIRD_PARTY_MODEL_ID] if THIRD_PARTY_API_KEY or THIRD_PARTY_API_BASE else [])
+AGNES_API_BASE = "https://apihub.agnes-ai.com/v1"
+AGNES_VIDEO_MODEL_ID = "agnes-video-v2.0"
+AGNES_IMAGE_MODEL_ID = "agnes-image-2.1-flash"
+
+ALL_MODELS = ["seedance", AGNES_VIDEO_MODEL_ID] + sorted(NANO_GPT_NAMES) + ([THIRD_PARTY_MODEL_ID] if THIRD_PARTY_API_KEY or THIRD_PARTY_API_BASE else [])
 
 # Model capabilities
 MODEL_CAPS = {
@@ -102,13 +107,14 @@ MODEL_CAPS = {
     "grok-imagine-video": {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "vidu-q3": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "seedance-v15-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
+    AGNES_VIDEO_MODEL_ID: {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": False, "resolutions": ["768p"]},
     THIRD_PARTY_MODEL_ID: {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
 }
 
 # Image generation configs
 NANO_GPT_IMAGE_MODELS = {"gpt-image-2", "nano-banana-2", "midjourney"}
 VOLC_IMAGE_MODEL_ID = "doubao-seedream-4-5-251128"
-ALL_IMAGE_MODELS = sorted(NANO_GPT_IMAGE_MODELS) + ["volc-seedream-4-5"]
+ALL_IMAGE_MODELS = sorted(NANO_GPT_IMAGE_MODELS) + [AGNES_IMAGE_MODEL_ID, "volc-seedream-4-5"]
 IMAGE_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "4:5", "5:4", "custom"]
 # Ratio → pixel size for Nano models (moderate sizes)
 RATIO_TO_SIZE_NANO = {
@@ -116,6 +122,11 @@ RATIO_TO_SIZE_NANO = {
     "3:4": "1536x2048", "4:3": "2048x1536",
     "9:16": "768x1344", "16:9": "1344x768",
     "4:5": "1536x1920", "5:4": "1920x1536"
+}
+RATIO_TO_SIZE_AGNES = {
+    "1:1": "1024x1024", "2:3": "768x1152", "3:2": "1152x768",
+    "3:4": "768x1024", "4:3": "1024x768", "9:16": "768x1365",
+    "16:9": "1365x768", "4:5": "819x1024", "5:4": "1024x819"
 }
 # GPT Image style models sometimes ignore uncommon size strings and fall back
 # to 1024x1024, so use stricter/common dimensions plus aspect_ratio below.
@@ -589,6 +600,8 @@ def personal_api_test(kind):
     if not cfg.get('api_key') or not cfg.get('base_url') or not cfg.get('model'): return jsonify(error='请先保存完整接口配置'), 400
     try:
         headers = {'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
+        if cfg.get('provider') == 'anthropic':
+            headers['anthropic-version'] = '2023-06-01'
         r = requests.get(f"{cfg['base_url']}/models", headers=headers, timeout=20)
         if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
         settings = load_json(settings_path(), {})
@@ -649,8 +662,8 @@ def admin_invitation_status(code):
 def admin_apis():
     return jsonify(apis={
         'text': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY)},
-        'image': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY)},
-        'video': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY or THIRD_PARTY_API_KEY)}
+        'image': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY or AGNES_API_KEY)},
+        'video': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY or AGNES_API_KEY or THIRD_PARTY_API_KEY)}
     })
 
 # ── uploads ───────────────────────────────────────────────────
@@ -759,7 +772,8 @@ def get_models():
     has_third = bool(cfg['third_party_api_key'] and cfg['third_party_api_base'])
     return jsonify({
         'models': ALL_MODELS + ([THIRD_PARTY_MODEL_ID] if has_third and THIRD_PARTY_MODEL_ID not in ALL_MODELS else []),
-        'nano_available': has_nano, 'third_party_available': has_third, 'default': 'seedance', 'caps': MODEL_CAPS
+        'nano_available': has_nano, 'agnes_available': bool(AGNES_API_KEY),
+        'third_party_available': has_third, 'default': 'seedance', 'caps': MODEL_CAPS
     })
 
 @app.route('/api/image-models', methods=['GET'])
@@ -768,6 +782,7 @@ def get_image_models():
     return jsonify({
         'models': ALL_IMAGE_MODELS,
         'ratios': IMAGE_RATIOS,
+        'agnes_available': bool(AGNES_API_KEY),
         'default_model': 'gpt-image-2',
         'default_ratio': DEFAULT_RATIO
     })
@@ -788,6 +803,8 @@ def call_platform_text(system_prompt, user_content, temperature=0.7, max_tokens=
         resp = client.chat.completions.create(model=cfg['model'], messages=messages, temperature=temperature, max_tokens=max_tokens)
         return resp.choices[0].message.content.strip()
     headers = {'Content-Type': 'application/json', 'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
+    if cfg.get('provider') == 'anthropic':
+        headers['anthropic-version'] = '2023-06-01'
     payload = {'model': cfg['model'], 'messages': messages, 'temperature': temperature, 'max_tokens': max_tokens}
     r = requests.post(f"{cfg['base_url']}/chat/completions", headers=headers, json=payload, timeout=120)
     if r.status_code != 200: raise Exception(f'文本 API 调用失败: {r.status_code} {r.text[:300]}')
@@ -1015,6 +1032,96 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
 
 
 # ── Third-party generic video adapter ─────────────────────────
+def _find_media_url(obj, depth=0):
+    if depth > 8:
+        return None
+    if isinstance(obj, str) and obj.startswith('http') and any(ext in obj.lower() for ext in ('.mp4', '.webm', '.mov')):
+        return obj
+    if isinstance(obj, dict):
+        for key in ('video_url', 'videoUrl', 'output_url', 'outputUrl', 'download_url'):
+            value = obj.get(key)
+            if isinstance(value, str) and value.startswith('http'):
+                return value
+        value = obj.get('url')
+        if isinstance(value, str) and value.startswith('http') and any(ext in value.lower() for ext in ('.mp4', '.webm', '.mov')):
+            return value
+        for value in obj.values():
+            found = _find_media_url(value, depth + 1)
+            if found:
+                return found
+    if isinstance(obj, list):
+        for value in obj:
+            found = _find_media_url(value, depth + 1)
+            if found:
+                return found
+    return None
+
+
+def agnes_video_generate(job_id, script, ratio, duration, resolution='768p', original_script=None,
+                         optimize=False, api_key=None, user_id=None, api_base=AGNES_API_BASE,
+                         model_id=AGNES_VIDEO_MODEL_ID):
+    """Create and poll an Agnes OpenAI-compatible video task."""
+    try:
+        if not api_key:
+            raise Exception('AGNES_API_KEY 未设置')
+        sizes = {
+            '1:1': (768, 768), '9:16': (768, 1152), '16:9': (1152, 768),
+            '3:4': (768, 1024), '4:3': (1024, 768), '2:3': (768, 1152), '3:2': (1152, 768)
+        }
+        width, height = sizes.get(ratio, (768, 1152))
+        headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+        payload = {'model': model_id, 'prompt': script, 'width': width, 'height': height}
+        api_base = api_base.rstrip('/')
+        JOBS[job_id]['status'] = 'running'
+        response = requests.post(f'{api_base}/videos', headers=headers, json=payload, timeout=60)
+        if response.status_code not in (200, 201, 202):
+            try:
+                error_data = response.json()
+                message = error_data.get('message') or error_data.get('error', {}).get('message') or response.text[:300]
+            except (ValueError, AttributeError):
+                message = response.text[:300]
+            raise Exception(f'Agnes 视频提交失败: HTTP {response.status_code} {message}')
+
+        created = response.json()
+        created_data = created.get('data') if isinstance(created.get('data'), dict) else {}
+        task_id = created.get('id') or created.get('task_id') or created.get('job_id') or created_data.get('id') or created_data.get('task_id')
+        direct_url = _find_media_url(created)
+        if direct_url:
+            stored_url, _ = download_and_save_video(direct_url)
+            save_video_history(stored_url, script, original_script=original_script or script,
+                               refined_script=script if optimize else (original_script or script),
+                               model=model_id, ratio=ratio, duration=duration, resolution=resolution,
+                               ref_count=0, user_id=user_id)
+            JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': direct_url, 'error': None}
+            return
+        if not task_id:
+            raise Exception(f'Agnes 返回中没有任务 ID: {json.dumps(created, ensure_ascii=False)[:500]}')
+
+        for _ in range(240):
+            poll = requests.get(f'{api_base}/videos/{task_id}', headers=headers, timeout=30)
+            if poll.status_code not in (200, 202):
+                raise Exception(f'Agnes 视频查询失败: HTTP {poll.status_code} {poll.text[:300]}')
+            result = poll.json()
+            result_data = result.get('data') if isinstance(result.get('data'), dict) else result
+            status = str(result_data.get('status') or result_data.get('state') or '').lower()
+            video_url = _find_media_url(result)
+            if video_url:
+                stored_url, _ = download_and_save_video(video_url)
+                save_video_history(stored_url, script, original_script=original_script or script,
+                                   refined_script=script if optimize else (original_script or script),
+                                   model=model_id, ratio=ratio, duration=duration, resolution=resolution,
+                                   ref_count=0, user_id=user_id)
+                JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': video_url, 'error': None}
+                return
+            if status in ('failed', 'error', 'cancelled', 'canceled'):
+                message = result_data.get('error') or result_data.get('message') or '未知错误'
+                raise Exception(f'Agnes 视频生成失败: {message}')
+            time.sleep(5)
+        raise Exception('Agnes 视频轮询超时（20分钟）')
+    except Exception as e:
+        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': str(e)}
+
+
 def third_party_video_adapter(job_id, script, images, audio_url, video_url, ratio, duration, host_url,
                               model_key=THIRD_PARTY_MODEL_ID, resolution='720p',
                               original_script=None, optimize=False, api_base=None, api_key=None, user_id=None):
@@ -1044,6 +1151,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
             ref_images.append({'url': url, 'label': img.get('role_label', 'reference')})
 
         payload = {
+            'model': model_key,
             'prompt': script,
             'aspect_ratio': ratio,
             'duration': duration,
@@ -1057,34 +1165,52 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
 
         JOBS[job_id]['status'] = 'running'
 
-        # Submit
-        r = requests.post(f'{api_base}/video/generate', headers=headers, json=payload, timeout=30)
-        if r.status_code != 200 and r.status_code != 201:
+        # Prefer the OpenAI-compatible /videos route; keep the legacy custom route as fallback.
+        width, height = {'1:1': (768, 768), '9:16': (768, 1152), '16:9': (1152, 768)}.get(ratio, (768, 1152))
+        openai_payload = {'model': model_key, 'prompt': script, 'width': width, 'height': height}
+        r = requests.post(f'{api_base}/videos', headers=headers, json=openai_payload, timeout=30)
+        status_url = None
+        if r.status_code in (404, 405):
+            r = requests.post(f'{api_base}/video/generate', headers=headers, json=payload, timeout=30)
+            status_url = f'{api_base}/video/status/{{task_id}}'
+        if r.status_code not in (200, 201, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方提交失败: {r.status_code} {r.text[:200]}'}
             return
 
         data = r.json()
-        task_id = data.get('task_id') or data.get('id') or data.get('job_id')
+        data_body = data.get('data') if isinstance(data.get('data'), dict) else {}
+        direct_url = _find_media_url(data)
+        task_id = data.get('task_id') or data.get('id') or data.get('job_id') or data_body.get('task_id') or data_body.get('id')
+        if direct_url:
+            stored_url, _ = download_and_save_video(direct_url)
+            save_video_history(stored_url, script, original_script=original_script or script,
+                               refined_script=script if optimize else (original_script or script), model=model_key,
+                               ratio=ratio, duration=duration, resolution=resolution, ref_count=len(images), user_id=user_id)
+            JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': direct_url, 'error': None}
+            return
         if not task_id:
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方返回无 task_id: {data}'}
             return
+        status_url = status_url or f'{api_base}/videos/{{task_id}}'
 
         # Poll
-        while True:
-            pr = requests.get(f'{api_base}/video/status/{task_id}', headers=headers, timeout=30)
-            if pr.status_code != 200:
+        for _ in range(240):
+            pr = requests.get(status_url.format(task_id=task_id), headers=headers, timeout=30)
+            if pr.status_code not in (200, 202):
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方查询失败: {pr.status_code}'}
                 return
 
             pd = pr.json()
-            status = pd.get('status', '')
-            if status in ('completed', 'succeeded', 'done'):
-                vurl = pd.get('video_url') or pd.get('output', {}).get('video_url') or pd.get('result', {}).get('video_url')
+            pd_body = pd.get('data') if isinstance(pd.get('data'), dict) else pd
+            status = str(pd_body.get('status') or pd_body.get('state') or '').lower()
+            vurl = _find_media_url(pd)
+            if status in ('completed', 'succeeded', 'done', 'success', 'finished') or vurl:
                 if not vurl:
                     JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': '第三方完成但无 video_url'}
                     return
+                stored_url, _ = download_and_save_video(vurl)
                 save_video_history(
-                    vurl, script,
+                    stored_url, script,
                     original_script=original_script or script,
                     refined_script=script if optimize else (original_script or script),
                     model=model_key,
@@ -1094,7 +1220,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
                     ref_count=len(images),
                     user_id=user_id
                 )
-                JOBS[job_id] = {'status': 'succeeded', 'video_url': vurl, 'error': None}
+                JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': vurl, 'error': None}
                 return
             elif status in ('failed', 'error', 'cancelled'):
                 err = pd.get('error') or pd.get('message', '未知错误')
@@ -1102,6 +1228,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
                 return
             else:
                 time.sleep(5)
+        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': '第三方视频轮询超时（20分钟）'}
 
     except Exception as e:
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方异常: {str(e)}'}
@@ -1193,6 +1320,8 @@ def parse_image_size(size):
 def image_size_for_nano(model_id, ratio, custom_size=''):
     if ratio == 'custom' and custom_size:
         return custom_size
+    if model_id == AGNES_IMAGE_MODEL_ID:
+        return RATIO_TO_SIZE_AGNES.get(ratio, "1024x1024")
     if model_id == 'gpt-image-2':
         return RATIO_TO_SIZE_GPT_IMAGE.get(ratio, "1024x1024")
     return RATIO_TO_SIZE_NANO.get(ratio, "1024x1024")
@@ -1230,7 +1359,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
         payload['height'] = height
     r = requests.post(f'{(base_url or NANO_GPT_BASE).rstrip("/")}/images/generations', headers=headers, json=payload, timeout=120)
     if r.status_code not in (200, 201):
-        raise Exception(f'Nano 图片生成失败: {r.status_code} {r.text[:200]}')
+        raise Exception(f'图片 API 生成失败: {r.status_code} {r.text[:200]}')
     data = r.json()
     # Handle url or base64 response
     items = data.get('data', [])
@@ -1249,7 +1378,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             with open(path, 'wb') as f:
                 f.write(img_bytes)
             return f'/static/uploads/{name}', name
-    raise Exception(f'Nano 返回无图片: {str(data)[:200]}')
+    raise Exception(f'图片 API 返回无图片: {str(data)[:200]}')
 
 
 # ── Volc Seedream image generation ────────────────────────────
@@ -1287,7 +1416,9 @@ def generate_image():
     body = request.json or {}
     prompt = body.get('prompt', '').strip()
     selected_model = body.get('image_model', 'gpt-image-2')
-    if selected_model in NANO_GPT_IMAGE_MODELS:
+    if selected_model == AGNES_IMAGE_MODEL_ID:
+        builtin = {'provider': 'agnes', 'base_url': AGNES_API_BASE, 'api_key': AGNES_API_KEY, 'model': AGNES_IMAGE_MODEL_ID}
+    elif selected_model in NANO_GPT_IMAGE_MODELS:
         builtin = {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': selected_model}
     else:
         builtin = {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': VOLC_IMAGE_MODEL_ID}
@@ -1327,7 +1458,7 @@ def generate_image():
 
     def run():
         try:
-            if image_cfg.get('provider') in ('nano', 'openai'):
+            if image_cfg.get('provider') != 'ark':
                 local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size, image_cfg['api_key'], image_cfg['base_url'])
             elif image_cfg.get('provider') == 'ark':
                 local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size, image_cfg['api_key'], image_model)
@@ -1382,7 +1513,9 @@ def generate():
     resolution  = body.get('resolution', '720p')
     optimize    = body.get('optimize_prompt', True)
     selected_model = body.get('video_model', 'seedance')
-    if selected_model in NANO_GPT_NAMES:
+    if selected_model == AGNES_VIDEO_MODEL_ID:
+        builtin = {'provider': 'agnes', 'base_url': AGNES_API_BASE, 'api_key': AGNES_API_KEY, 'model': AGNES_VIDEO_MODEL_ID}
+    elif selected_model in NANO_GPT_NAMES:
         builtin = {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': selected_model}
     elif selected_model == THIRD_PARTY_MODEL_ID:
         builtin = {'provider': 'generic', 'base_url': THIRD_PARTY_API_BASE.rstrip('/'), 'api_key': THIRD_PARTY_API_KEY, 'model': selected_model}
@@ -1423,6 +1556,14 @@ def generate():
     if optimize and script.strip():
         script = refine_prompt(script, images, ratio, duration, user_id=user_id)
 
+    # ── Agnes path ──
+    if video_cfg.get('provider') == 'agnes':
+        threading.Thread(target=agnes_video_generate, args=(
+            job_id, script, ratio, duration, resolution, original_script, optimize,
+            video_cfg['api_key'], user_id, video_cfg['base_url'], video_model
+        ), daemon=True).start()
+        return jsonify(job_id=job_id)
+
     # ── Nano-GPT path ──
     if video_cfg.get('provider') == 'nano':
         if not video_cfg.get('api_key'):
@@ -1436,7 +1577,7 @@ def generate():
         return jsonify(job_id=job_id)
 
     # ── Third-party path ──
-    if video_cfg.get('provider') == 'generic':
+    if video_cfg.get('provider') not in ('nano', 'agnes', 'ark'):
         if not video_cfg.get('api_key') or not video_cfg.get('base_url'):
             JOBS[job_id] = {'status': 'failed', 'video_url': None,
                             'error': '第三方模型未配置。请设置 THIRD_PARTY_API_BASE 和 THIRD_PARTY_API_KEY 环境变量后重启服务'}
