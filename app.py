@@ -1337,7 +1337,8 @@ def image_ratio_instruction(ratio, size):
 
 
 # ── Nano image generation ─────────────────────────────────────
-def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, base_url=None):
+def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, base_url=None,
+                        input_images=None, host_url=''):
     """Call Nano-GPT images/generations API."""
     size = image_size_for_nano(model_id, ratio, custom_size)
     width, height = parse_image_size(size)
@@ -1358,6 +1359,15 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
     if width and height:
         payload['width'] = width
         payload['height'] = height
+    reference_urls = []
+    for img in (input_images or []):
+        url = img.get('url', '')
+        if url.startswith('/static/'):
+            url = host_url + url
+        if url:
+            reference_urls.append(url)
+    if reference_urls:
+        payload['image'] = reference_urls[0] if len(reference_urls) == 1 else reference_urls
     r = requests.post(f'{(base_url or NANO_GPT_BASE).rstrip("/")}/images/generations', headers=headers, json=payload, timeout=120)
     if r.status_code not in (200, 201):
         raise Exception(f'图片 API 生成失败: {r.status_code} {r.text[:200]}')
@@ -1390,16 +1400,15 @@ def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', a
     else:
         size = RATIO_TO_SIZE_VOLC.get(ratio, "1920x1920")
     client = Ark(api_key=api_key or ARK_API_KEY)
-    ref_url = None
+    ref_urls = []
     for img in (input_images or []):
         url = img['url']
         if url.startswith('/static/'):
             url = host_url + url
-        ref_url = url
-        break
+        ref_urls.append(url)
     kwargs = {'model': model_id or VOLC_IMAGE_MODEL_ID, 'prompt': prompt, 'size': size, 'watermark': False}
-    if ref_url:
-        kwargs['image'] = ref_url
+    if ref_urls:
+        kwargs['image'] = ref_urls[0] if len(ref_urls) == 1 else ref_urls
     resp = client.images.generate(**kwargs)
     img_url = None
     if hasattr(resp, 'data') and resp.data:
@@ -1460,7 +1469,10 @@ def generate_image():
     def run():
         try:
             if image_cfg.get('provider') != 'ark':
-                local_url, filename = nano_image_generate(prompt, image_model, ratio, custom_size, image_cfg['api_key'], image_cfg['base_url'])
+                local_url, filename = nano_image_generate(
+                    prompt, image_model, ratio, custom_size,
+                    image_cfg['api_key'], image_cfg['base_url'], input_images, host_url
+                )
             elif image_cfg.get('provider') == 'ark':
                 local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size, image_cfg['api_key'], image_model)
             else:
@@ -2003,7 +2015,7 @@ def script_brainstorm():
 
     system_prompt = (
         '你是一个专业的短剧编剧。根据用户提供的主题或关键词，'
-        '创作一个1-2分钟的真人短剧片段。输出格式：\n'
+        '创作一个1-2分钟的短剧片段。输出格式：\n'
         '【场景】xxx\n'
         '【人物】xxx\n'
         '【剧情】xxx\n\n'
@@ -2094,13 +2106,13 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             '只输出 JSON 数组，数组内只放1个对象。字段必须有：segment_no、duration、scene、characters、emotion、story_action、beats、dialogue、video_prompt。\n'
             'duration 用6-8秒。beats 只写1-2个，写清时间、景别、运镜、动作重点。\n'
             'video_prompt 必须是直接命令式，融合成一段连续视频指令，保留用户原意，适当补环境和情绪，不写废话。\n'
-            'video_prompt 结尾固定加：真人短剧质感，真实摄影风格，人物五官稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。\n'
+            'video_prompt 结尾只加技术质量约束：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。不得指定真人、摄影、动漫或3D风格。\n'
             '不要 Markdown，不要解释，只输出 JSON 数组。'
         )
         max_tokens = 1200
     else:
         system_prompt = (
-            '你是专业真人AI短剧分镜导演。用户会提供剧本、剧情梗概或灵感，你要把它拆成"可直接生成的视频段落"，而不是机械拆成单个镜头。\n\n'
+            '你是专业AI短剧分镜导演。用户会提供剧本、剧情梗概或灵感，你要把它拆成"可直接生成的视频段落"，而不是机械拆成单个镜头。\n\n'
             '核心目标：\n'
             '每个输出项是一段可直接交给视频生成模型生成的视频段落，时长 4-15 秒。一个视频段落内部可以包含 1-3 个连续镜头变化或运镜阶段，但必须发生在同一场景、同一时间、同一情绪推进中，保证场景统一、人物连续、动作连贯。\n\n'
             '拆分原则：\n'
@@ -2119,7 +2131,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             '2. 写清楚机位如何变化、人物如何运动、台词什么时候说。\n'
             '3. 同一场景内多个 beat 要强调"同一连续镜头感"或"自然剪辑感"。\n'
             '4. 保持人物、服装、场景一致。\n'
-            '5. 质量约束放在最后：真人短剧质感，真实摄影风格，人物五官稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。\n\n'
+            '5. 质量约束放在最后：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。不得指定真人、摄影、动漫或3D风格。\n\n'
             '如果用户输入很短或没灵感：自动补成一个短剧冲突片段，优先使用强冲突场景：误会、重逢、隐瞒、摊牌、反转、救场、背叛、追问。\n\n'
             + mode_instructions.get(mode, mode_instructions['smart']) + '\n\n'
             '输出格式必须是 JSON 数组，不要 Markdown，不要解释，只输出 JSON 数组。'

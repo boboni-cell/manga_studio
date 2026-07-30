@@ -1061,6 +1061,22 @@ body {
 .image-ref-item img {
   width: 100%; height: 100%; object-fit: cover;
 }
+.image-ref-role {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: rgba(5, 6, 12, 0.78);
+  color: #fff;
+  font-size: 8px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .image-ref-item .ref-del {
   position: absolute;
   top: -4px; right: -4px;
@@ -1866,7 +1882,7 @@ input[type=file] { display: none; }
       <div class="history-panel">
         <div class="history-header">
           <h3>图片生成</h3>
-          <p>使用 AI 生成角色立绘、场景图、服装参考图</p>
+          <p>使用 AI 生成角色立绘、人物设定卡、场景图、服装参考图</p>
         </div>
         <div class="image-gen-panel" style="display:block;">
           <div class="image-gen-row" style="flex-direction:column;gap:8px;">
@@ -1874,8 +1890,9 @@ input[type=file] { display: none; }
               <span class="tlabel" style="line-height:22px;">模板</span>
               <button class="tpl-btn" id="tpl_scene_angle" onclick="applyTemplate('scene_angle')">场景换视角</button>
               <button class="tpl-btn" id="tpl_char_turnaround" onclick="applyTemplate('char_turnaround')">角色三视图</button>
-              <button class="tpl-btn" id="tpl_char_portrait" onclick="applyTemplate('char_portrait')">真人短剧定妆</button>
-              <button class="tpl-btn" id="tpl_outfit_ref" onclick="applyTemplate('outfit_ref')">服装参考</button>
+              <button class="tpl-btn" id="tpl_character_sheet" onclick="applyTemplate('character_sheet')">人物设定卡</button>
+              <button class="tpl-btn" id="tpl_char_portrait" onclick="applyTemplate('char_portrait')">角色定妆照</button>
+              <button class="tpl-btn" id="tpl_outfit_ref" onclick="applyTemplate('outfit_ref')">服装替换三视图</button>
               <button class="tpl-btn" id="tpl_storyboard" onclick="applyTemplate('storyboard')">分镜构图</button>
               <button class="tpl-btn" id="tpl_group_photo" onclick="applyTemplate('group_photo')">人物同场合照</button>
               <button class="tpl-btn" id="tpl_scene_master" onclick="applyTemplate('scene_master')">场景母图</button>
@@ -1886,6 +1903,7 @@ input[type=file] { display: none; }
               <button class="ratio-btn" onclick="toggleTemplateDetail()">查看详情</button>
               <button class="ratio-btn" onclick="cancelTemplate()">取消模板</button>
             </div>
+            <div id="templateHint" style="display:none;padding:7px 9px;background:rgba(94,142,240,.08);border:1px solid rgba(94,142,240,.28);border-radius:var(--radius-sm);font-size:10px;color:var(--text-dim);line-height:1.6;"></div>
             <div id="templateDetail" style="display:none;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:11px;color:var(--text-muted);line-height:1.6;max-height:120px;overflow-y:auto;white-space:pre-wrap;"></div>
             <div style="font-size:10px;color:var(--text-muted);display:flex;gap:12px;">
               <span>📋 模板：负责稳定结构和质量</span>
@@ -2468,6 +2486,14 @@ async function generateImage() {
 
 async function _doGenerateImage() {
   const userInput = document.getElementById('imagePrompt').value.trim();
+  if (selectedTemplate === 'outfit_ref' && imageRefs.length === 0) {
+    alert('请先上传原人物三视图。');
+    return;
+  }
+  if (selectedTemplate === 'outfit_ref' && imageRefs.length < 2 && !userInput) {
+    alert('请再上传服装照片，或在补充要求里填写服装描述。');
+    return;
+  }
   // Combine template + user supplement
   // storyboard template: user content first, template rules appended
   const templateText = selectedTemplate ? (PROMPT_TEMPLATES[selectedTemplate] || '') : '';
@@ -2492,7 +2518,7 @@ async function _doGenerateImage() {
     res = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, image_model: imageModel, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map(r => ({ url: r.url })), style_id: selectedStyleId || undefined })
+      body: JSON.stringify({ prompt, image_model: imageModel, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map((r, i) => ({ url: r.url, role_label: imageRefRole(i) })), style_id: selectedStyleId || undefined })
     }).then(function(r) { return r.json(); });
   } catch (e) {
     sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
@@ -2742,14 +2768,15 @@ async function confirmNewLibItem() {
 
 // ── Prompt Templates ────────────────────────────────────────
 const PROMPT_TEMPLATES = {
-  scene_angle: '基于参考图生成同一场景的另一个机位视角。保持空间结构、装修风格、主要家具、材质、色调、光线方向一致。改变镜头位置和构图，让画面像同一真实空间中的连续镜头。不要改变房间类型，不要新增不合理家具，不要让门窗、楼梯、沙发、桌椅位置逻辑混乱。真人短剧质感，真实摄影风格，画面清晰，适合后续图生视频。',
-  char_turnaround: '基于参考人物生成同一角色的三视图设定图：正面、侧面、背面。保持同一人物身份、脸型轮廓、五官比例、发型、发色、身材比例、服装款式和颜色完全一致。三视图按所选比例合理排列展示，站姿自然，光线均匀，背景简洁。不要换脸，不要改变年龄，不要改变性别，不要改变服装，不要生成不同人物。真人短剧角色定妆照质感，高清清晰。',
-  char_portrait: '基于参考人物生成真人短剧角色定妆照。保持人物身份特征、脸型轮廓、五官比例、发型、发色、气质和服装主特征一致。生成真实人物质感，五官清晰，皮肤自然，表情自然有戏，适合短剧角色档案和后续视频参考。避免廉价网红脸、过度磨皮、塑料感、年龄漂移、性别变化、欧美化、脸部变形。构图适配所选比例，主体突出不裁切关键部位，柔和棚拍光，背景简洁。',
-  outfit_ref: '基于参考图生成真人短剧服装参考图。重点保持服装款式、颜色、面料质感、版型、领口、袖口、腰线、配饰和整体穿搭风格一致。人物姿态自然，服装完整清晰可见，正面展示为主。不要改变服装设计，不要让衣服穿模，不要增加多余配饰，不要遮挡关键服装细节。真实摄影质感，背景简洁，适合后续作为服装参考图。',
-  storyboard: '基于当前剧情生成一张专业导演分镜构图参考图，用于后续视频生成。画面可以采用导演分镜板形式，展示同一段剧情的关键镜头设计。可以包含 3-9 个小画面，每个小画面代表一个镜头构图，例如远景、全景、中景、近景、特写、高角度、低角度、侧面、背影、俯拍等。每个小画面必须围绕同一场景、同一组人物和同一段剧情，不要生成无关画面。每个小画面要清楚表达镜头景别、机位角度、人物站位、主体动作、情绪重点、场景空间关系、前景/中景/背景层次和光线氛围。人物脸部只需要表达大致方向和表情，不要过于具体，不要生成真实明星脸或固定真人身份。重点是镜头构图、人物站位、动作关系、景别变化和场景调度。可以有简单镜头标记或景别缩写，但不要出现大段文字。不要生成字幕、对白气泡、水印、Logo。构图清晰，画面可读性强。风格跟随当前选择的风格库，如果没有选择风格，使用电影导演分镜板风格，画面干净，镜头感强，光影明确。',
-  group_photo: '基于多张人物参考图，生成这些角色在同一场景中的合照。保持每个角色各自的脸型、五官、发型、年龄感、气质和服装特征，不要混脸，不要换脸，不要把一个人的五官套到另一个人身上。人物站位自然，比例正确，互动关系清楚，真人短剧质感，真实摄影风格，画面清晰。',
-  scene_master: '生成一个可长期复用的真人短剧场景母图。场景空间结构清楚，主要家具和关键物件位置明确，风格统一，光线稳定，适合后续多个镜头反复参考。画面中不要出现人物，不要出现文字、水印、商标。构图尽量展示完整空间关系，真实摄影风格，高清清晰。',
-  video_first_frame: '生成适合作为图生视频首帧的画面。主体清楚，动作处于可继续运动的起始状态，人物表情自然，画面边缘不要裁切头部和身体关键部位。背景稳定，光线统一，构图适合后续镜头运动。不要加入文字、水印、边框、拼贴元素。真人短剧摄影质感，高清清晰。'
+  scene_angle: '任务：基于参考图生成同一场景的另一个机位视角。保持空间结构、装修、主要家具、材质、色调和光线方向一致；只改变镜头位置、视角和构图。不得改变房间类型，不得新增不合理物件，不得破坏门窗、楼梯、沙发、桌椅的位置关系。画面清晰，适合后续图生视频。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  char_turnaround: '任务：生成横向角色三视图设定图。版式严格分为左右两区：左侧约占画面 40%，放同一角色的正面头肩近景；右侧约占 60%，从左到右放同一角色的全身正面、90度侧面、背面。右侧三个人物必须从头到脚完整显示，等高、同一比例、同一基线、间距均匀。四个视图必须是同一人物，脸型、五官、年龄、发型、发色、身材、服装、鞋子和配饰完全一致；仅视角不同。背景纯净，光线均匀。不得裁切头脚，不得增加人物，不得换脸、换装或改变体型，不得添加文字、边框、Logo、水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  character_sheet: '任务：生成一张横向人物设定卡。版式包含：左侧角色主肖像与简短资料区；中间同一角色的全身正面、四分之三侧面、90度侧面、背面；右上色板；右侧脸部、眼睛、手部、服装材质等细节特写；底部服装、鞋子、配饰和随身物品的拆解展示。所有视图必须属于同一人物，身份、五官、发型、身材、服装和配色完全一致。用户提供了姓名、年龄、职业、性格等资料时才展示对应短标签；未提供时留出整洁信息区，不编造长文。构图整齐，分区清楚，主体不裁切，不生成无关人物，不添加水印或Logo。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  char_portrait: '任务：基于参考人物生成角色定妆照。保持人物身份、脸型、五官比例、年龄、发型、发色、气质和服装主特征一致。主体突出，关键部位不裁切，背景简洁。不得换脸、改变年龄或性别，不得增加人物，不得添加文字、Logo或水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  outfit_ref: '任务：给原角色更换服装，并输出与原图相同版式的横向三视图。参考图1是原人物三视图，只用于锁定角色身份、脸型、五官、年龄、发型、发色、身材比例和版式；参考图2若存在，是目标服装照片，只用于锁定服装款式、颜色、面料、版型、领口、袖口、腰线、鞋子和配饰。若没有参考图2，则严格采用用户的文字服装描述。输出左侧正面头肩近景，右侧全身正面、90度侧面、背面；四个视图必须是同一人物并穿同一套新服装，右侧三视图等高、同一基线、从头到脚完整显示。只更换服装，不改变人物身份、发型、身材、姿态基准、背景和原有视觉风格。不得混用两张参考图的用途，不得保留旧服装，不得增加人物，不得裁切头脚，不得添加文字、Logo或水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图1风格。',
+  storyboard: '任务：基于当前剧情生成一张导演分镜构图参考图，用于后续视频生成。使用 3-9 个小画面展示同一场景、同一组人物、同一段剧情的关键镜头；覆盖远景、全景、中景、近景、特写、高低机位、侧面、背影或俯拍等必要变化。每格明确景别、机位、人物站位、动作、情绪重点、空间层次、光线和运镜方向。人物身份与服装保持一致，不生成无关画面。只允许简短镜头标记，不得出现大段文字、字幕、对白气泡、Logo或水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  group_photo: '任务：基于多张人物参考图，生成这些角色在同一场景中的合照。分别保持每个角色的脸型、五官、年龄、发型、气质和服装特征；不得混脸、换脸或交换服装。人物站位自然，比例正确，互动关系清楚，画面清晰。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  scene_master: '任务：生成可长期复用的场景母图。空间结构清楚，主要家具和关键物件位置明确，光线稳定，适合后续镜头重复参考。画面中不得出现人物、文字、Logo、水印或商标；构图应完整展示空间关系。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  video_first_frame: '任务：生成适合作为图生视频首帧的画面。主体清楚，动作处于可继续运动的起始状态，表情与姿态自然，画面边缘不得裁切头部或身体关键部位。背景稳定，光线统一，构图支持后续镜头运动。不得添加文字、边框、Logo、水印或拼贴元素。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。'
 };
 function applyTemplate(key) {
   if (!key) return;
@@ -2762,14 +2789,29 @@ function applyTemplate(key) {
   if (btn) btn.classList.add('active');
   // Show status bar
   const labels = {
-    scene_angle: '场景换视角', char_turnaround: '角色三视图', char_portrait: '真人短剧定妆',
-    outfit_ref: '服装参考', storyboard: '分镜构图', group_photo: '人物同场合照',
+    scene_angle: '场景换视角', char_turnaround: '角色三视图', character_sheet: '人物设定卡', char_portrait: '角色定妆照',
+    outfit_ref: '服装替换三视图', storyboard: '分镜构图', group_photo: '人物同场合照',
     scene_master: '场景母图', video_first_frame: '视频首帧'
   };
   document.getElementById('templateLabel').textContent = '已选模板：' + (labels[key] || key);
   document.getElementById('templateStatus').style.display = 'flex';
   document.getElementById('templateDetail').style.display = 'none';
   document.getElementById('templateDetail').textContent = PROMPT_TEMPLATES[key] || '';
+  const hints = {
+    char_turnaround: '参考图：上传角色原图。输出：左侧脸部近景 + 右侧正面 / 侧面 / 背面全身。',
+    character_sheet: '参考图：上传角色图。补充要求：填写姓名、年龄、职业、性格及需要展示的细节。',
+    outfit_ref: '① 上传原人物三视图（必传）  ② 再上传服装照片，或直接填写服装文字描述。'
+  };
+  const hint = document.getElementById('templateHint');
+  hint.textContent = hints[key] || '';
+  hint.style.display = hints[key] ? 'block' : 'none';
+  const placeholders = {
+    char_turnaround: '补充角色信息或本次调整要求（可选）',
+    character_sheet: '姓名、年龄、职业、性格、服装及需要展示的细节',
+    outfit_ref: '服装文字描述；已上传服装照片时可补充修改要求'
+  };
+  document.getElementById('imagePrompt').placeholder = placeholders[key] || '写你的补充要求';
+  renderImageRefs();
 }
 
 function cancelTemplate() {
@@ -2777,6 +2819,9 @@ function cancelTemplate() {
   document.querySelectorAll('.tpl-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('templateStatus').style.display = 'none';
   document.getElementById('templateDetail').style.display = 'none';
+  document.getElementById('templateHint').style.display = 'none';
+  document.getElementById('imagePrompt').placeholder = '写你的补充要求，例如：换成夜晚、镜头从楼梯上方俯拍、保持红色沙发';
+  renderImageRefs();
 }
 
 function toggleTemplateDetail() {
@@ -2853,9 +2898,21 @@ function renderImageRefs() {
   container.innerHTML = imageRefs.map((ref, i) => `
     <div class="image-ref-item">
       <img src="${ref.url}" loading="lazy">
+      <span class="image-ref-role">${imageRefRole(i)}</span>
       <button class="ref-del" onclick="removeImageRef(${i})">✕</button>
     </div>`).join('');
   document.getElementById('refModelHint').textContent = `已选 ${imageRefs.length} 张`;
+}
+
+function imageRefRole(index) {
+  if (selectedTemplate === 'outfit_ref') {
+    if (index === 0) return '原人物三视图';
+    if (index === 1) return '服装照片';
+    return '辅助参考';
+  }
+  if (selectedTemplate === 'char_turnaround') return index === 0 ? '角色参考' : '辅助参考';
+  if (selectedTemplate === 'character_sheet') return index === 0 ? '角色参考' : '细节参考';
+  return imageRefs[index]?.name || '参考图';
 }
 
 function addImageRef(url, name) {
