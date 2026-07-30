@@ -831,6 +831,12 @@ body {
   color: #fff;
   font-weight: 500;
 }
+.ratio-btn:disabled, .dur-btn:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
 .toolbar-sep {
   width: 1px; height: 16px;
   background: var(--border);
@@ -2291,7 +2297,7 @@ async function init() {
     safeFetch('/api/assets/scenes').then(r => r.json()).then(d => { assets.scenes = d || []; }).catch(function(e) { console.error('加载场景失败:', e); }),
     safeFetch('/api/assets/audios').then(r => r.json()).then(d => { assets.audios = d || []; }).catch(function(e) { console.error('加载音频失败:', e); }),
     safeFetch('/api/styles').then(r => r.json()).then(d => { styles = d || []; }).catch(function(e) { console.error('加载风格失败:', e); }),
-    safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; }).catch(function(e) { console.error('加载历史失败:', e); })
+    safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; restoreRecentImageResults(); }).catch(function(e) { console.error('加载历史失败:', e); })
   ];
   await Promise.allSettled(fetchers);
   _initDone = true;
@@ -2318,8 +2324,9 @@ function buildDurBtns() {
 }
 
 function setRatio(btn) {
+  if (btn.disabled) return;
   selectedRatio = btn.dataset.r;
-  document.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.ratio-btn[data-r]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 }
 
@@ -2337,6 +2344,7 @@ function toggleOptimize() {
 function setVideoModel(val) {
   videoModel = val;
   buildResSelect();
+  syncVideoModelControls();
 }
 
 function updateVideoStyleSlot() {
@@ -2416,6 +2424,7 @@ async function buildModelSelect() {
     // Store model caps
     if (res.caps) modelCaps = res.caps;
     buildResSelect();
+    syncVideoModelControls();
   } catch (e) {
     console.error('加载模型列表失败:', e);
   }
@@ -2437,6 +2446,57 @@ function buildResSelect() {
   if (!resolutions.includes(selectedResolution)) {
     selectedResolution = resolutions[0];
     sel.value = selectedResolution;
+  }
+}
+
+function syncVideoModelControls() {
+  const caps = modelCaps[videoModel] || {};
+  const ratios = caps.ratios || [];
+  const ratioButtons = Array.from(document.querySelectorAll('.ratio-btn[data-r]'));
+  ratioButtons.forEach(function(btn) {
+    const supported = !ratios.length || ratios.includes(btn.dataset.r);
+    btn.disabled = !supported;
+    btn.title = supported ? '' : '当前模型不支持该比例';
+  });
+  if (ratios.length && !ratios.includes(selectedRatio)) {
+    const next = ratioButtons.find(function(btn) { return !btn.disabled; });
+    if (next) setRatio(next);
+  }
+
+  const minDuration = Number(caps.min_duration || 4);
+  const maxDuration = Number(caps.max_duration || 15);
+  const durationButtons = Array.from(document.querySelectorAll('.dur-btn'));
+  durationButtons.forEach(function(btn) {
+    const seconds = parseInt(btn.textContent, 10);
+    btn.disabled = seconds < minDuration || seconds > maxDuration;
+    btn.title = btn.disabled ? '当前模型不支持该时长' : '';
+  });
+  if (selectedDuration < minDuration || selectedDuration > maxDuration) {
+    const next = durationButtons.find(function(btn) { return !btn.disabled; });
+    if (next) setDuration(parseInt(next.textContent, 10), next);
+  }
+}
+
+function restoreRecentImageResults() {
+  const recent = (history || []).filter(function(item) {
+    return item && item.type === 'image' && item.image_url;
+  }).slice(0, 20);
+  sessionImageResults = recent.slice().reverse().map(function(item) {
+    return {
+      url: item.image_url,
+      name: item.name || '历史图片',
+      time: item.time || '',
+      model: item.model || '',
+      ratio: item.ratio || '-',
+      prompt: item.script || item.original_script || '',
+      refCount: item.ref_count || 0
+    };
+  });
+  if (!imageStash.length) {
+    imageStash = recent.map(function(item) {
+      return { url: item.image_url, name: item.name || '历史图片' };
+    });
+    activeStashIdx = imageStash.length ? 0 : -1;
   }
 }
 
@@ -2586,7 +2646,7 @@ function renderImageResults(generating) {
   if (totalOk > 0) {
     html += '<div class="result-section-header" style="display:flex;align-items:center;gap:8px;padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:8px;">' +
       '<span style="font-size:14px;">📸</span>' +
-      '<span style="font-size:12px;font-weight:600;color:var(--text);">本次图片结果</span>' +
+      '<span style="font-size:12px;font-weight:600;color:var(--text);">最近图片结果</span>' +
       '<span style="font-size:10px;color:var(--text-muted);">共 ' + totalOk + ' 张</span>' +
       '</div>';
   }
@@ -2991,6 +3051,10 @@ function switchMainTab(tab) {
     } else {
       renderHistory();
     }
+  }
+  if (tab === 'imageGen' && sessionImageResults.length) {
+    renderImageResults(false);
+    renderStash();
   }
 }
 
@@ -3937,6 +4001,15 @@ async function _doGenerate() {
     return;
   }
 
+  if (res.error || !res.job_id) {
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('projectStatus').textContent = '就绪';
+    sessionVideoResults = sessionVideoResults.filter(v => !v.generating);
+    sessionVideoResults.push({ error: res.error || '提交失败', time: new Date().toLocaleString(), ratio: currentRatio2, duration: currentDuration2, resolution: currentResolution2, model: currentVModel2, prompt: currentPrompt2, tags: [] });
+    renderVideoResults();
+    return;
+  }
+
   pollJob(res.job_id, {
     ratio: currentRatio2, duration: currentDuration2, resolution: currentResolution2,
     model: currentVModel2, prompt: currentPrompt2, refCount: currentRefCount2
@@ -3958,7 +4031,8 @@ async function pollJob(jobId, meta) {
       sessionVideoResults = sessionVideoResults.filter(v => !v.generating);
       sessionVideoResults.push({
         url: r.video_url, time: new Date().toLocaleString(),
-        ratio: meta.ratio, duration: meta.duration, resolution: meta.resolution,
+        ratio: r.ratio || meta.ratio, duration: r.duration || meta.duration,
+        resolution: r.resolution || meta.resolution, size: r.size || '',
         model: meta.model, prompt: meta.prompt, refCount: meta.refCount,
         tags: ['原始']
       });
@@ -4025,6 +4099,7 @@ function renderVideoResults() {
         '<span class="meta-badge">' + (v.ratio || '-') + '</span>' +
         '<span class="meta-badge">' + (v.duration || '-') + 's</span>' +
         '<span class="meta-badge">' + (v.resolution || '720p') + '</span>' +
+        (v.size ? '<span class="meta-badge">' + escHtml(v.size) + '</span>' : '') +
         '<span class="meta-badge" style="font-size:9px;color:var(--text-muted);">' + v.time + '</span>' +
         '</div></div>' +
         '<div style="font-size:10px;color:var(--text-muted);padding:0 8px 6px;">' + escHtml(v.prompt || '') + ' · 素材 ' + (v.refCount || 0) + '</div>' +

@@ -1,6 +1,6 @@
 import os, json, uuid, time, threading, requests, functools, sys, re, secrets
 import tos
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote
 from flask import Flask, request, jsonify, send_from_directory, redirect, session
 from werkzeug.utils import secure_filename
@@ -107,7 +107,15 @@ MODEL_CAPS = {
     "grok-imagine-video": {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "vidu-q3": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
     "seedance-v15-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
-    AGNES_VIDEO_MODEL_ID: {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": False, "resolutions": ["768p"]},
+    AGNES_VIDEO_MODEL_ID: {
+        "supports_first_frame": False,
+        "supports_last_frame": False,
+        "supports_reference_images": False,
+        "resolutions": ["480p", "720p", "1080p"],
+        "ratios": ["16:9", "9:16", "1:1", "4:3", "3:4"],
+        "min_duration": 4,
+        "max_duration": 15,
+    },
     THIRD_PARTY_MODEL_ID: {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
 }
 
@@ -185,7 +193,7 @@ def save_json(path, data):
             _supabase.table('kv_store').upsert({
                 'key': key,
                 'data': data,
-                'updated_at': datetime.utcnow().isoformat()
+                'updated_at': datetime.now(timezone.utc).isoformat()
             }, on_conflict='key').execute()
         except Exception:
             pass
@@ -356,7 +364,7 @@ def init_data():
                 users[admin_id] = {
                     'username': admin_id,
                     'password_hash': generate_password_hash(initial_password, method='pbkdf2:sha256'),
-                    'created_at': datetime.utcnow().isoformat(),
+                    'created_at': datetime.now(timezone.utc).isoformat(),
                     'model_permissions': ['text', 'image', 'video'],
                     'points': 0
                 }
@@ -372,6 +380,23 @@ def get_tos_client():
 
 def r2_configured():
     return all([R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE])
+
+def persistent_storage_configured():
+    return r2_configured() or bool(TOS_AK and TOS_SK)
+
+def active_storage_name():
+    if r2_configured():
+        return 'r2'
+    if TOS_AK and TOS_SK:
+        return 'tos'
+    return 'local'
+
+def storage_name_for_url(url):
+    if R2_PUBLIC_BASE and url and url.startswith(R2_PUBLIC_BASE):
+        return 'r2'
+    if TOS_PUBLIC_BASE and url and url.startswith(TOS_PUBLIC_BASE):
+        return 'tos'
+    return 'local'
 
 def get_r2_client():
     import boto3
@@ -542,7 +567,7 @@ def register():
         if not invite:
             return jsonify(error='邀请码无效或已用完'), 400
         invite['used'] = invite.get('used', 0) + 1
-        users[user_id] = {'username': username, 'password_hash': generate_password_hash(password, method='pbkdf2:sha256'), 'created_at': datetime.utcnow().isoformat(), 'model_permissions': invite.get('permissions', []), 'points': invite.get('points', 0), 'invite_code': invite_code}
+        users[user_id] = {'username': username, 'password_hash': generate_password_hash(password, method='pbkdf2:sha256'), 'created_at': datetime.now(timezone.utc).isoformat(), 'model_permissions': invite.get('permissions', []), 'points': invite.get('points', 0), 'invite_code': invite_code}
         save_json(users_path(), users)
         save_json(invitations_path(), invitations)
     session.clear()
@@ -605,7 +630,7 @@ def personal_api_test(kind):
         r = requests.get(f"{cfg['base_url']}/models", headers=headers, timeout=20)
         if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
         settings = load_json(settings_path(), {})
-        settings.setdefault('apis', {}).setdefault(kind, {})['last_test'] = datetime.utcnow().isoformat()
+        settings.setdefault('apis', {}).setdefault(kind, {})['last_test'] = datetime.now(timezone.utc).isoformat()
         save_json(settings_path(), settings)
         return jsonify(ok=True, message='连接成功，额度用完后可切换到此接口')
     except requests.RequestException as e:
@@ -643,7 +668,7 @@ def admin_invitations():
         permissions = [kind for kind in ('text', 'image', 'video') if kind in body.get('permissions', [])]
         code = (body.get('code') or secrets.token_hex(4)).strip().upper()
         if any(item.get('code') == code for item in invitations): return jsonify(error='邀请码已存在'), 409
-        invitations.insert(0, {'code': code, 'permissions': permissions, 'points': int(body.get('points') or 0), 'max_uses': max(1, int(body.get('max_uses') or 1)), 'used': 0, 'active': True, 'created_at': datetime.utcnow().isoformat()})
+        invitations.insert(0, {'code': code, 'permissions': permissions, 'points': int(body.get('points') or 0), 'max_uses': max(1, int(body.get('max_uses') or 1)), 'used': 0, 'active': True, 'created_at': datetime.now(timezone.utc).isoformat()})
         save_json(invitations_path(), invitations)
     return jsonify(invitations=invitations)
 
@@ -660,10 +685,22 @@ def admin_invitation_status(code):
 @app.route('/api/admin/apis')
 @admin_required
 def admin_apis():
+    r2_fields = {
+        'R2_ACCOUNT_ID': R2_ACCOUNT_ID,
+        'R2_ACCESS_KEY_ID': R2_ACCESS_KEY_ID,
+        'R2_SECRET_ACCESS_KEY': R2_SECRET_ACCESS_KEY,
+        'R2_BUCKET': R2_BUCKET,
+        'R2_PUBLIC_BASE': R2_PUBLIC_BASE,
+    }
     return jsonify(apis={
         'text': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY)},
         'image': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY or AGNES_API_KEY)},
         'video': {'configured': bool(ARK_API_KEY or NANO_GPT_API_KEY or AGNES_API_KEY or THIRD_PARTY_API_KEY)}
+    }, storage={
+        'backend': active_storage_name(),
+        'persistent': persistent_storage_configured(),
+        'r2_configured': r2_configured(),
+        'r2_missing': [key for key, value in r2_fields.items() if not value],
     })
 
 # ── uploads ───────────────────────────────────────────────────
@@ -720,10 +757,13 @@ def upload():
     ct = f.content_type or 'application/octet-stream'
     file_bytes = f.read()
 
-    # Upload to TOS
+    # Upload to durable object storage
     public_url, ok = upload_to_tos(file_bytes, name, ct)
     if ok:
-        return jsonify(url=public_url, name=name, storage='tos')
+        return jsonify(url=public_url, name=name, storage=storage_name_for_url(public_url))
+
+    if persistent_storage_configured():
+        return jsonify(error='永久存储上传失败，请检查 R2/TOS 配置后重试'), 503
 
     # Fallback to local
     path = os.path.join(UPLOAD, name)
@@ -1057,20 +1097,72 @@ def _find_media_url(obj, depth=0):
     return None
 
 
-def agnes_video_generate(job_id, script, ratio, duration, resolution='768p', original_script=None,
+AGNES_VIDEO_SIZES = {
+    '480p': {
+        '16:9': (864, 480), '9:16': (480, 864), '1:1': (480, 480),
+        '4:3': (640, 480), '3:4': (480, 640),
+    },
+    '720p': {
+        '16:9': (1280, 720), '9:16': (720, 1280), '1:1': (720, 720),
+        '4:3': (960, 720), '3:4': (720, 960),
+    },
+    '1080p': {
+        '16:9': (1920, 1080), '9:16': (1080, 1920), '1:1': (1080, 1080),
+        '4:3': (1440, 1080), '3:4': (1080, 1440),
+    },
+}
+
+def agnes_num_frames(duration, frame_rate=24):
+    """Return the closest Agnes-valid frame count (8n + 1, at most 441)."""
+    target = max(1, int(duration)) * frame_rate
+    frames = 8 * round((target - 1) / 8) + 1
+    return min(441, max(9, frames))
+
+def agnes_video_meta(payload, requested_ratio, requested_duration, requested_resolution):
+    data = payload.get('data') if isinstance(payload, dict) and isinstance(payload.get('data'), dict) else payload
+    data = data if isinstance(data, dict) else {}
+    metadata = data.get('metadata') if isinstance(data.get('metadata'), dict) else {}
+    mapping = metadata.get('size_mapping') if isinstance(metadata.get('size_mapping'), dict) else {}
+    seconds = data.get('seconds') or metadata.get('seconds')
+    try:
+        actual_duration = round(float(seconds), 2)
+    except (TypeError, ValueError):
+        actual_duration = requested_duration
+    size = data.get('size') or metadata.get('size') or mapping.get('size')
+    if isinstance(size, dict):
+        size = f"{size.get('width')}x{size.get('height')}" if size.get('width') and size.get('height') else None
+    if not size and mapping.get('width') and mapping.get('height'):
+        size = f"{mapping['width']}x{mapping['height']}"
+    return {
+        'ratio': mapping.get('ratio') or data.get('ratio') or requested_ratio,
+        'duration': actual_duration,
+        'resolution': mapping.get('resolution') or data.get('resolution') or requested_resolution,
+        'size': size,
+    }
+
+def agnes_video_generate(job_id, script, ratio, duration, resolution='720p', original_script=None,
                          optimize=False, api_key=None, user_id=None, api_base=AGNES_API_BASE,
                          model_id=AGNES_VIDEO_MODEL_ID):
     """Create and poll an Agnes OpenAI-compatible video task."""
     try:
         if not api_key:
             raise Exception('AGNES_API_KEY 未设置')
-        sizes = {
-            '1:1': (768, 768), '9:16': (768, 1152), '16:9': (1152, 768),
-            '3:4': (768, 1024), '4:3': (1024, 768), '2:3': (768, 1152), '3:2': (1152, 768)
-        }
-        width, height = sizes.get(ratio, (768, 1152))
+        if resolution not in AGNES_VIDEO_SIZES:
+            resolution = '720p'
+        if ratio not in AGNES_VIDEO_SIZES[resolution]:
+            ratio = '9:16'
+        width, height = AGNES_VIDEO_SIZES[resolution][ratio]
+        frame_rate = 24
+        num_frames = agnes_num_frames(duration, frame_rate)
         headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
-        payload = {'model': model_id, 'prompt': script, 'width': width, 'height': height}
+        payload = {
+            'model': model_id,
+            'prompt': script,
+            'width': width,
+            'height': height,
+            'num_frames': num_frames,
+            'frame_rate': frame_rate,
+        }
         api_base = api_base.rstrip('/')
         JOBS[job_id]['status'] = 'running'
         response = requests.post(f'{api_base}/videos', headers=headers, json=payload, timeout=60)
@@ -1087,12 +1179,15 @@ def agnes_video_generate(job_id, script, ratio, duration, resolution='768p', ori
         task_id = created.get('id') or created.get('task_id') or created.get('job_id') or created_data.get('id') or created_data.get('task_id')
         direct_url = _find_media_url(created)
         if direct_url:
+            actual = agnes_video_meta(created, ratio, duration, resolution)
             stored_url, _ = download_and_save_video(direct_url)
             save_video_history(stored_url, script, original_script=original_script or script,
                                refined_script=script if optimize else (original_script or script),
-                               model=model_id, ratio=ratio, duration=duration, resolution=resolution,
+                               model=model_id, ratio=actual['ratio'], duration=actual['duration'], resolution=actual['resolution'],
                                ref_count=0, user_id=user_id)
-            JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': direct_url, 'error': None}
+            JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': direct_url,
+                            'ratio': actual['ratio'], 'duration': actual['duration'],
+                            'resolution': actual['resolution'], 'size': actual['size'], 'error': None}
             return
         if not task_id:
             raise Exception(f'Agnes 返回中没有任务 ID: {json.dumps(created, ensure_ascii=False)[:500]}')
@@ -1106,12 +1201,15 @@ def agnes_video_generate(job_id, script, ratio, duration, resolution='768p', ori
             status = str(result_data.get('status') or result_data.get('state') or '').lower()
             video_url = _find_media_url(result)
             if video_url:
+                actual = agnes_video_meta(result, ratio, duration, resolution)
                 stored_url, _ = download_and_save_video(video_url)
                 save_video_history(stored_url, script, original_script=original_script or script,
                                    refined_script=script if optimize else (original_script or script),
-                                   model=model_id, ratio=ratio, duration=duration, resolution=resolution,
+                                   model=model_id, ratio=actual['ratio'], duration=actual['duration'], resolution=actual['resolution'],
                                    ref_count=0, user_id=user_id)
-                JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': video_url, 'error': None}
+                JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': video_url,
+                                'ratio': actual['ratio'], 'duration': actual['duration'],
+                                'resolution': actual['resolution'], 'size': actual['size'], 'error': None}
                 return
             if status in ('failed', 'error', 'cancelled', 'canceled'):
                 message = result_data.get('error') or result_data.get('message') or '未知错误'
@@ -1237,7 +1335,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
 
 # ── Image generation helpers ──────────────────────────────────
 def download_and_save_image(image_url):
-    """Download image from URL, upload to object storage, fallback to local."""
+    """Download image from URL and keep it in durable storage when configured."""
     r = requests.get(image_url, timeout=120)
     if r.status_code != 200:
         raise Exception(f'下载图片失败: {r.status_code}')
@@ -1254,6 +1352,9 @@ def download_and_save_image(image_url):
     public_url, ok = upload_to_tos(img_bytes, name, ct)
     if ok:
         return public_url, name
+
+    if persistent_storage_configured():
+        raise Exception('图片生成成功，但永久存储上传失败；未保存到临时磁盘，请检查 R2/TOS 配置后重试')
 
     # Fallback to local
     path = os.path.join(UPLOAD, name)
@@ -1385,6 +1486,8 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             public_url, ok = upload_to_tos(img_bytes, name, 'image/png')
             if ok:
                 return public_url, name
+            if persistent_storage_configured():
+                raise Exception('图片生成成功，但永久存储上传失败；请检查 R2/TOS 配置后重试')
             path = os.path.join(UPLOAD, name)
             with open(path, 'wb') as f:
                 f.write(img_bytes)
@@ -1542,6 +1645,14 @@ def generate():
     except QuotaError as e:
         return jsonify(error=str(e)), 402
     video_model = video_cfg['model']
+    if video_cfg.get('provider') == 'agnes':
+        agnes_caps = MODEL_CAPS[AGNES_VIDEO_MODEL_ID]
+        if ratio not in agnes_caps['ratios']:
+            return jsonify(error=f'Agnes Video v2.0 不支持比例 {ratio}'), 400
+        if resolution not in agnes_caps['resolutions']:
+            return jsonify(error=f'Agnes Video v2.0 不支持分辨率 {resolution}'), 400
+        if duration < agnes_caps['min_duration'] or duration > agnes_caps['max_duration']:
+            return jsonify(error=f"Agnes Video v2.0 时长仅支持 {agnes_caps['min_duration']}-{agnes_caps['max_duration']} 秒"), 400
     JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
 
