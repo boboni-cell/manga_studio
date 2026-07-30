@@ -821,7 +821,7 @@ def refine_prompt(script, images, ratio, duration, ark_api_key=None, user_id=Non
         '1. 描述要具体、视觉化，包含画面构图、人物动作、镜头运动、光线氛围\n'
         '2. 必须提及画幅比例和时长信息\n'
         '3. 明确区分各参考图的用途（人物/服装/场景），不得混用\n'
-        '4. 保留用户原始描述的意图和内容，只做结构化和润色\n'
+        '4. 保留用户原始描述中的风格要求；原文没有风格要求时，不得自行添加真人拍摄、真实摄影、动漫、漫画、3D或其他视觉风格\n'
         '5. 输出纯中文，不要英文，不要 markdown，不超过 500 字'
     )
 
@@ -2007,19 +2007,21 @@ def script_import():
 @login_required
 @model_access_required('text')
 def script_brainstorm():
-    body = request.json
+    body = request.json or {}
     topic = body.get('topic', '').strip()
     script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
     if not topic:
         return jsonify(error='请输入主题或关键词'), 400
 
+    style_rule = script_style_rule(body.get('style_id'), target='script', user_id=current_user_id())
     system_prompt = (
         '你是一个专业的短剧编剧。根据用户提供的主题或关键词，'
         '创作一个1-2分钟的短剧片段。输出格式：\n'
         '【场景】xxx\n'
         '【人物】xxx\n'
         '【剧情】xxx\n\n'
-        '直接输出剧本文本，不要markdown格式，不要角色列表。'
+        '直接输出剧本文本，不要markdown格式，不要角色列表。\n'
+        + style_rule
     )
     try:
         text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000)
@@ -2086,6 +2088,28 @@ def script_split_status(job_id):
     return jsonify(job)
 
 
+def script_style_rule(style_id, target='video_prompt', user_id=None):
+    if not style_id:
+        if target == 'script':
+            return '用户未选择风格：不要添加真人拍摄、真实摄影、动漫、漫画、3D或其他视觉风格描述。'
+        return '【风格规则】用户未选择风格。所有 video_prompt 只写剧情、镜头、动作和技术质量，不得主动添加真人拍摄、真实摄影、动漫、漫画、3D或其他视觉风格词。'
+
+    styles, changed = ensure_default_styles(load_json(styles_path(user_id), []))
+    if changed:
+        save_json(styles_path(user_id), styles)
+    style = next((item for item in styles if item.get('id') == style_id), None)
+    if not style:
+        if target == 'script':
+            return '所选风格不存在：不要添加任何视觉风格描述。'
+        return '【风格规则】所选风格不存在。所有 video_prompt 不得添加任何视觉风格词。'
+
+    name = style.get('name', '用户选择的风格')
+    prompt = style.get('prompt', '').strip()
+    if target == 'script':
+        return f'【用户已选风格：{name}】场景氛围和视觉描述必须遵守以下要求，不得改成其他风格：{prompt}'
+    return f'【用户已选风格：{name}】每个 video_prompt 必须遵守以下风格要求，不得添加其他风格：{prompt}'
+
+
 def build_script_shots(body, api_cfg=None, user_id=None):
     script_text = body.get('script', '').strip()
     mode = body.get('mode', 'smart')  # smart | short | long
@@ -2093,6 +2117,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
     if not script_text:
         raise Exception('请输入剧本文本')
     compact_request = len(script_text) < 120 and mode != 'long'
+    style_rule = script_style_rule(body.get('style_id'), user_id=user_id)
 
     mode_instructions = {
         'short': '\n当前模式：短镜头模式。每个输出项只包含 1 个 beat，时长 4-6 秒，适合快速反应、特写、动作切点。',
@@ -2106,7 +2131,8 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             '只输出 JSON 数组，数组内只放1个对象。字段必须有：segment_no、duration、scene、characters、emotion、story_action、beats、dialogue、video_prompt。\n'
             'duration 用6-8秒。beats 只写1-2个，写清时间、景别、运镜、动作重点。\n'
             'video_prompt 必须是直接命令式，融合成一段连续视频指令，保留用户原意，适当补环境和情绪，不写废话。\n'
-            'video_prompt 结尾只加技术质量约束：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。不得指定真人、摄影、动漫或3D风格。\n'
+            + style_rule + '\n'
+            'video_prompt 结尾只加技术质量约束：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。除上述风格规则外不得自行补充风格词。\n'
             '不要 Markdown，不要解释，只输出 JSON 数组。'
         )
         max_tokens = 1200
@@ -2131,7 +2157,8 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             '2. 写清楚机位如何变化、人物如何运动、台词什么时候说。\n'
             '3. 同一场景内多个 beat 要强调"同一连续镜头感"或"自然剪辑感"。\n'
             '4. 保持人物、服装、场景一致。\n'
-            '5. 质量约束放在最后：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。不得指定真人、摄影、动漫或3D风格。\n\n'
+            '5. 质量约束放在最后：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。除风格规则外不得自行补充风格词。\n\n'
+            + style_rule + '\n\n'
             '如果用户输入很短或没灵感：自动补成一个短剧冲突片段，优先使用强冲突场景：误会、重逢、隐瞒、摊牌、反转、救场、背叛、追问。\n\n'
             + mode_instructions.get(mode, mode_instructions['smart']) + '\n\n'
             '输出格式必须是 JSON 数组，不要 Markdown，不要解释，只输出 JSON 数组。'

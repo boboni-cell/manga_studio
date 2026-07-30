@@ -4291,7 +4291,7 @@ async function brainstormScript() {
   try {
     const r = await fetch('/api/script/brainstorm', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, script_model: scriptModel })
+      body: JSON.stringify({ topic, script_model: scriptModel, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '生成灵感'));
     if (r.error) { alert(r.error); document.getElementById('scriptWSText').value = ''; return; }
     document.getElementById('scriptWSText').value = r.text;
@@ -4307,7 +4307,7 @@ async function splitScript() {
   try {
     const r = await fetch('/api/script/split', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel })
+      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '拆分'));
     if (r.error) { alert(r.error); return; }
     let result = r;
