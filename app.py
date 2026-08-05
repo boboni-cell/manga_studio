@@ -520,9 +520,10 @@ def public_api_profile(profile):
         'last_test': profile.get('last_test')
     }
 
-def get_personal_api(kind, user_id=None):
+def get_personal_api(kind, user_id=None, profile_id=None):
     profiles, selected = get_api_profiles(kind, user_id)
-    profile = next((item for item in profiles if item['id'] == selected), None)
+    target_id = profile_id or selected
+    profile = next((item for item in profiles if item['id'] == target_id), None)
     return dict(profile or {'provider': '', 'base_url': '', 'api_key': '', 'model': '', 'last_test': None})
 
 def use_personal_api(user_id=None):
@@ -531,10 +532,12 @@ def use_personal_api(user_id=None):
     user = load_json(users_path(), {}).get(user_id, {})
     return int(user.get('points') or 0) <= 0
 
-def resolve_api(kind, builtin, user_id=None):
-    if not use_personal_api(user_id): return builtin
-    personal = get_personal_api(kind, user_id)
+def resolve_api(kind, builtin, user_id=None, force_personal=False, profile_id=None):
+    if not force_personal and not use_personal_api(user_id): return builtin
+    personal = get_personal_api(kind, user_id, profile_id)
     if personal.get('api_key') and personal.get('base_url') and personal.get('model'): return personal
+    if force_personal:
+        raise QuotaError('请选择一个已保存且配置完整的个人 API')
     raise QuotaError('平台积分已用完，请先在「我的 API」中接入自己的接口')
 
 def get_user_api_settings(user_id=None):
@@ -784,6 +787,53 @@ def admin_user_status(user_id):
     users[user_id]['disabled'] = disabled
     save_json(users_path(), users)
     return jsonify(ok=True)
+
+@app.route('/api/admin/personal-apis')
+@admin_required
+def admin_personal_apis():
+    users = load_json(users_path(), {})
+    rows = []
+    for user_id, user in users.items():
+        for kind in ('text', 'image', 'video'):
+            profiles, selected = get_api_profiles(kind, user_id)
+            for profile in profiles:
+                rows.append({
+                    'user_id': user_id,
+                    'username': user.get('username', user_id),
+                    'kind': kind,
+                    'id': profile['id'],
+                    'name': profile.get('name', ''),
+                    'provider': profile.get('provider', ''),
+                    'base_url': profile.get('base_url', ''),
+                    'model': profile.get('model', ''),
+                    'configured': bool(profile.get('api_key')),
+                    'selected': profile['id'] == selected,
+                    'created_at': profile.get('created_at', '')
+                })
+    rows.sort(key=lambda item: item.get('created_at', ''), reverse=True)
+    return jsonify(profiles=rows, total=len(rows))
+
+@app.route('/api/admin/users/<user_id>/apis/<kind>/<profile_id>', methods=['DELETE'])
+@admin_required
+def admin_delete_personal_api(user_id, kind, profile_id):
+    user_id = user_id.lower()
+    if user_id not in load_json(users_path(), {}): return jsonify(error='用户不存在'), 404
+    if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+    profiles, selected = get_api_profiles(kind, user_id)
+    if not any(item['id'] == profile_id for item in profiles): return jsonify(error='接口配置不存在'), 404
+    profiles = [item for item in profiles if item['id'] != profile_id]
+    if selected == profile_id:
+        selected = profiles[0]['id'] if profiles else None
+    path = settings_path(user_id)
+    settings = load_json(path, {})
+    settings.setdefault('api_profiles', {})[kind] = profiles
+    settings.setdefault('selected_api_profiles', {})[kind] = selected
+    if selected:
+        settings.setdefault('apis', {})[kind] = dict(next(item for item in profiles if item['id'] == selected))
+    else:
+        settings.setdefault('apis', {}).pop(kind, None)
+    save_json(path, settings)
+    return jsonify(ok=True, selected_profile_id=selected)
 
 @app.route('/api/admin/invitations', methods=['GET', 'POST'])
 @admin_required
@@ -1819,6 +1869,7 @@ def generate_image():
     body = request.json or {}
     prompt = body.get('prompt', '').strip()
     selected_model = body.get('image_model', 'gpt-image-2')
+    force_personal = bool(body.get('use_personal_api')) or selected_model == 'personal-api'
     if selected_model == AGNES_IMAGE_MODEL_ID:
         builtin = {'provider': 'agnes', 'base_url': AGNES_API_BASE, 'api_key': AGNES_API_KEY, 'model': AGNES_IMAGE_MODEL_ID}
     elif selected_model in NANO_GPT_IMAGE_MODELS:
@@ -1836,7 +1887,10 @@ def generate_image():
     if not prompt:
         return jsonify(error='prompt 不能为空'), 400
     try:
-        image_cfg = resolve_api('image', builtin, user_id)
+        image_cfg = resolve_api(
+            'image', builtin, user_id, force_personal=force_personal,
+            profile_id=body.get('api_profile_id')
+        )
     except QuotaError as e:
         return jsonify(error=str(e)), 402
     image_model = image_cfg['model']
@@ -1924,6 +1978,7 @@ def generate():
     resolution  = body.get('resolution', '720p')
     optimize    = body.get('optimize_prompt', True)
     selected_model = body.get('video_model', 'seedance')
+    force_personal = bool(body.get('use_personal_api')) or selected_model == 'personal-api'
     if selected_model == AGNES_VIDEO_MODEL_ID:
         builtin = {'provider': 'agnes', 'base_url': AGNES_API_BASE, 'api_key': AGNES_API_KEY, 'model': AGNES_VIDEO_MODEL_ID}
     elif selected_model in NANO_GPT_NAMES:
@@ -1936,7 +1991,10 @@ def generate():
     job_id      = uuid.uuid4().hex
     user_id     = current_user_id()
     try:
-        video_cfg = resolve_api('video', builtin, user_id)
+        video_cfg = resolve_api(
+            'video', builtin, user_id, force_personal=force_personal,
+            profile_id=body.get('api_profile_id')
+        )
     except QuotaError as e:
         return jsonify(error=str(e)), 402
     video_model = video_cfg['model']
@@ -2425,6 +2483,7 @@ def script_brainstorm():
     body = request.json or {}
     topic = body.get('topic', '').strip()
     script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
+    force_personal = bool(body.get('use_personal_api')) or script_model == 'personal-api'
     if not topic:
         return jsonify(error='请输入主题或关键词'), 400
 
@@ -2439,7 +2498,12 @@ def script_brainstorm():
         + style_rule
     )
     try:
-        text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000)
+        api_cfg = resolve_api(
+            'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
+            current_user_id(), force_personal=force_personal,
+            profile_id=body.get('api_profile_id')
+        )
+        text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000, api_cfg=api_cfg)
         return jsonify(text=text)
     except QuotaError as e:
         return jsonify(error=str(e)), 402
@@ -2458,8 +2522,13 @@ def script_split():
 
     job_id = uuid.uuid4().hex
     user_id = current_user_id()
+    script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
+    force_personal = bool(body.get('use_personal_api')) or script_model == 'personal-api'
     try:
-        api_cfg = resolve_api('text', builtin_text_api(body.get('script_model', SCRIPT_MODEL_DEFAULT)), user_id)
+        api_cfg = resolve_api(
+            'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
+            user_id, force_personal=force_personal, profile_id=body.get('api_profile_id')
+        )
     except QuotaError as e:
         return jsonify(error=str(e)), 402
     JOB_OWNERS[job_id] = user_id

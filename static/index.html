@@ -1875,6 +1875,7 @@ input[type=file] { display: none; }
             <button class="ratio-btn active" id="smDoubao" onclick="setScriptModel('doubao',this)">豆包</button>
             <button class="ratio-btn" id="smGlm46" onclick="setScriptModel('glm46',this)">GPT-4.1M</button>
             <button class="ratio-btn" id="smClaude46" onclick="setScriptModel('claude46',this)">Claude4.6</button>
+            <button class="ratio-btn" id="smPersonalApi" onclick="setScriptModel('personal-api',this)">自己的 API</button>
             <span style="flex:1;"></span>
             <span class="tlabel" style="font-size:11px;">模式</span>
             <button class="ratio-btn active" id="modeSmart" onclick="setSplitMode('smart',this)">智能段落</button>
@@ -2285,8 +2286,8 @@ let sessionVideoResults = [];
 let skipImageCheck = false;
 let skipVideoCheck = false;
 let apiProfileData = { api_profiles: {}, selected_api_profiles: {}, points: 0 };
-const IMAGE_MODEL_LABELS = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5' };
-const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'agnes-video-v2.0': 'Agnes Video v2.0', 'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
+const IMAGE_MODEL_LABELS = { 'personal-api': '自己的 API', 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5' };
+const VIDEO_MODEL_LABELS = { 'personal-api': '自己的 API', 'seedance': 'Seedance', 'agnes-video-v2.0': 'Agnes Video v2.0', 'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
 
 // Mirror of app.py NANO_GPT_NAMES for frontend model filtering
 const NANO_GPT_NAMES = new Set(['kling-v30-std','grok-imagine-video','vidu-q3','seedance-v15-pro']);
@@ -2353,6 +2354,16 @@ async function selectWorkbenchApi(kind, profileId) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || '切换接口失败');
     apiProfileData.selected_api_profiles[kind] = profileId;
+    if (kind === 'video') {
+      videoModel = 'personal-api';
+      buildModelSelect();
+    } else if (kind === 'image') {
+      imageModel = 'personal-api';
+      buildImageSelects();
+    } else if (kind === 'text') {
+      scriptModel = 'personal-api';
+      document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46,#smPersonalApi').forEach(b => b.classList.toggle('active', b.id === 'smPersonalApi'));
+    }
     document.getElementById('projectStatus').textContent = '接口已切换';
     setTimeout(function() { document.getElementById('projectStatus').textContent = '就绪'; }, 1200);
   } catch (e) {
@@ -2459,6 +2470,16 @@ async function buildModelSelect() {
       if (m === videoModel) opt.selected = true;
       sel.appendChild(opt);
     });
+    const personalProfiles = (apiProfileData.api_profiles || {}).video || [];
+    if (personalProfiles.length) {
+      const selectedId = (apiProfileData.selected_api_profiles || {}).video;
+      const selectedProfile = personalProfiles.find(p => p.id === selectedId) || personalProfiles[0];
+      const opt = document.createElement('option');
+      opt.value = 'personal-api';
+      opt.textContent = '自己的 API' + (selectedProfile ? ' · ' + selectedProfile.name : '');
+      opt.selected = videoModel === 'personal-api';
+      sel.appendChild(opt);
+    }
     // Disable nano models if not available
     if (!res.nano_available) {
       sel.querySelectorAll('option').forEach(opt => {
@@ -2569,6 +2590,16 @@ async function buildImageSelects() {
       if (m === 'agnes-image-2.1-flash' && !res.agnes_available) opt.disabled = true;
       mSel.appendChild(opt);
     });
+    const personalProfiles = (apiProfileData.api_profiles || {}).image || [];
+    if (personalProfiles.length) {
+      const selectedId = (apiProfileData.selected_api_profiles || {}).image;
+      const selectedProfile = personalProfiles.find(p => p.id === selectedId) || personalProfiles[0];
+      const opt = document.createElement('option');
+      opt.value = 'personal-api';
+      opt.textContent = '自己的 API' + (selectedProfile ? ' · ' + selectedProfile.name : '');
+      opt.selected = imageModel === 'personal-api';
+      mSel.appendChild(opt);
+    }
     mSel.onchange = () => { imageModel = mSel.value; };
     // Ratio select
     const rSel = document.getElementById('imageRatioSelect');
@@ -2631,7 +2662,7 @@ async function _doGenerateImage() {
     res = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, image_model: imageModel, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map((r, i) => ({ url: r.url, role_label: imageRefRole(i) })), style_id: selectedStyleId || undefined })
+      body: JSON.stringify({ prompt, image_model: imageModel, use_personal_api: imageModel === 'personal-api', api_profile_id: (apiProfileData.selected_api_profiles || {}).image, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map((r, i) => ({ url: r.url, role_label: imageRefRole(i) })), style_id: selectedStyleId || undefined })
     }).then(function(r) { return r.json(); });
   } catch (e) {
     sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
@@ -4039,6 +4070,8 @@ async function _doGenerate() {
         duration: selectedDuration,
         optimize_prompt: optimizePrompt,
         video_model: videoModel,
+        use_personal_api: videoModel === 'personal-api',
+        api_profile_id: (apiProfileData.selected_api_profiles || {}).video,
         style_id: videoStyleId || undefined,
         resolution: selectedResolution
       })
@@ -4419,7 +4452,7 @@ async function brainstormScript() {
   try {
     const r = await fetch('/api/script/brainstorm', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, script_model: scriptModel, style_id: videoStyleId || undefined })
+      body: JSON.stringify({ topic, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: (apiProfileData.selected_api_profiles || {}).text, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '生成灵感'));
     if (r.error) { alert(r.error); document.getElementById('scriptWSText').value = ''; return; }
     document.getElementById('scriptWSText').value = r.text;
@@ -4435,7 +4468,7 @@ async function splitScript() {
   try {
     const r = await fetch('/api/script/split', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel, style_id: videoStyleId || undefined })
+      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: (apiProfileData.selected_api_profiles || {}).text, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '拆分'));
     if (r.error) { alert(r.error); return; }
     let result = r;
@@ -4464,7 +4497,7 @@ function setSplitMode(mode, btn) {
 
 function setScriptModel(model, btn) {
   scriptModel = model;
-  document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46,#smPersonalApi').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 }
 
