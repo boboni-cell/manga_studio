@@ -27,27 +27,31 @@
         p('openrouter','OpenRouter','https://openrouter.ai/api/v1','openai/gpt-4.1-mini'),p('siliconflow','硅基流动','https://api.siliconflow.cn/v1','deepseek-ai/DeepSeek-V3'),
         p('dashscope','通义千问 DashScope','https://dashscope.aliyuncs.com/compatible-mode/v1','qwen-plus'),p('moonshot','Moonshot / Kimi','https://api.moonshot.cn/v1','moonshot-v1-8k'),
         p('zhipu','智谱 GLM','https://open.bigmodel.cn/api/paas/v4','glm-4-flash'),p('minimax','MiniMax','https://api.minimax.chat/v1','MiniMax-M2.1'),
+        p('atlas','Atlas Cloud（全模型）','https://api.atlascloud.ai/api/v1','bytedance/doubao-seed-2.1-turbo-260628'),
         p('nano','Nano-GPT','https://nano-gpt.com/api/v1','openai/gpt-4.1-mini'),p('ark','火山 Ark','https://ark.cn-beijing.volces.com/api/v3',''),p('custom','Custom API')
       ]},
       image:{title:'图片生成 API',icon:'🎨',help:'使用 OpenAI Images 兼容协议',providers:[
+        p('atlas','Atlas Cloud（全模型）','https://api.atlascloud.ai/api/v1','bytedance/seedream-v5.0-pro/text-to-image'),
         p('openai','OpenAI','https://api.openai.com/v1','gpt-image-1'),p('nano','Nano-GPT','https://nano-gpt.com/api/v1','gpt-image-2'),
         p('siliconflow','硅基流动','https://api.siliconflow.cn/v1','black-forest-labs/FLUX.1-schnell'),p('agnes','Agnes API Hub','https://apihub.agnes-ai.com/v1','agnes-image-2.1-flash'),
         p('ark','火山 Seedream','https://ark.cn-beijing.volces.com/api/v3',''),p('custom','Custom API')
       ]},
       video:{title:'视频生成 API',icon:'🎥',help:'Custom 默认使用 /video/generate 和 /video/status/{id}',providers:[
+        p('atlas','Atlas Cloud（全模型）','https://api.atlascloud.ai/api/v1','bytedance/seedance-2.0-mini/text-to-video'),
         p('agnes','Agnes API Hub','https://apihub.agnes-ai.com/v1','agnes-video-v2.0'),p('nano','Nano-GPT','https://nano-gpt.com/api/v1','kling-v30-std'),
         p('ark','火山 Seedance','https://ark.cn-beijing.volces.com/api/v3',''),p('custom','Custom API')
       ]}
     };
+    function providerHelp(kind,provider,fallback){if(provider!=='atlas')return fallback;if(kind==='text')return 'Atlas Cloud 文本使用 OpenAI 兼容协议';if(kind==='image')return '自动调用 Atlas Cloud 图片生成与任务查询接口';return '自动调用 Atlas Cloud 视频生成与任务查询接口';}
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     async function loadApis(){
       const r=await fetch('/api/settings'),d=await r.json();
       if(!r.ok){apiGrid.innerHTML='<div class="bad">'+esc(d.error||'加载失败')+'</div>';return;}
       points.textContent='积分：'+(d.points||0);
       routeState.textContent='当前线路：'+(d.using_personal?'个人 API':'平台内置 API');
-      apiGrid.innerHTML=Object.entries(TYPES).map(([kind,t])=>{const a=d.apis[kind]||{},selected=t.providers.some(x=>x.id===a.provider)?a.provider:'custom';return `<div class="card"><div class="api-title"><span>${t.icon}</span><h2>${t.title}</h2><span class="pill">${a.configured?'已保存':'未接入'}</span></div><label>接口服务商<select id="${kind}Provider" onchange="applyPreset('${kind}')">${t.providers.map(x=>`<option value="${x.id}" ${selected===x.id?'selected':''}>${x.label}</option>`).join('')}</select></label><small class="help">${t.help}</small><label>Base URL<input id="${kind}Base" value="${esc(a.base_url)}" placeholder="https://example.com/v1"></label><label>API Key<input id="${kind}Key" type="password" placeholder="${a.configured?'已保存，留空不修改':'请输入 API Key'}"></label><label>模型名称<input id="${kind}Model" value="${esc(a.model)}" placeholder="model-id"></label><div class="row"><button class="btn primary" onclick="saveApi('${kind}')">保存</button><button class="btn" onclick="testApi('${kind}')">测试连接</button></div><div class="status" id="${kind}Status">${a.last_test?'上次连接成功：'+new Date(a.last_test).toLocaleString():''}</div></div>`}).join('');
+      apiGrid.innerHTML=Object.entries(TYPES).map(([kind,t])=>{const a=d.apis[kind]||{},selected=t.providers.some(x=>x.id===a.provider)?a.provider:'custom';return `<div class="card"><div class="api-title"><span>${t.icon}</span><h2>${t.title}</h2><span class="pill">${a.configured?'已保存':'未接入'}</span></div><label>接口服务商<select id="${kind}Provider" onchange="applyPreset('${kind}')">${t.providers.map(x=>`<option value="${x.id}" ${selected===x.id?'selected':''}>${x.label}</option>`).join('')}</select></label><small class="help" id="${kind}Help">${providerHelp(kind,selected,t.help)}</small><label>Base URL<input id="${kind}Base" value="${esc(a.base_url)}" placeholder="https://example.com/v1"></label><label>API Key<input id="${kind}Key" type="password" placeholder="${a.configured?'已保存，留空不修改':'请输入 API Key'}"></label><label>模型名称<input id="${kind}Model" value="${esc(a.model)}" placeholder="model-id"></label><div class="row"><button class="btn primary" onclick="saveApi('${kind}')">保存</button><button class="btn" onclick="testApi('${kind}')">测试连接</button></div><div class="status" id="${kind}Status">${a.last_test?'上次连接成功：'+new Date(a.last_test).toLocaleString():''}</div></div>`}).join('');
     }
-    function applyPreset(kind){const provider=document.getElementById(kind+'Provider').value,preset=TYPES[kind].providers.find(x=>x.id===provider);if(!preset)return;document.getElementById(kind+'Base').value=preset.base;document.getElementById(kind+'Model').value=preset.model;}
+    function applyPreset(kind){const provider=document.getElementById(kind+'Provider').value,preset=TYPES[kind].providers.find(x=>x.id===provider);if(!preset)return;document.getElementById(kind+'Base').value=preset.base;document.getElementById(kind+'Model').value=preset.model;document.getElementById(kind+'Help').textContent=providerHelp(kind,provider,TYPES[kind].help);}
     async function saveApi(kind){
       const body={kind,provider:document.getElementById(kind+'Provider').value,base_url:document.getElementById(kind+'Base').value,api_key:document.getElementById(kind+'Key').value,model:document.getElementById(kind+'Model').value};
       const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json(),s=document.getElementById(kind+'Status');

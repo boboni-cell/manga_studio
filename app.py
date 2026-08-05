@@ -97,6 +97,7 @@ THIRD_PARTY_MODEL_ID = "third-party"
 AGNES_API_BASE = "https://apihub.agnes-ai.com/v1"
 AGNES_VIDEO_MODEL_ID = "agnes-video-v2.0"
 AGNES_IMAGE_MODEL_ID = "agnes-image-2.1-flash"
+ATLAS_API_BASE = "https://api.atlascloud.ai/api/v1"
 
 ALL_MODELS = ["seedance", AGNES_VIDEO_MODEL_ID] + sorted(NANO_GPT_NAMES) + ([THIRD_PARTY_MODEL_ID] if THIRD_PARTY_API_KEY or THIRD_PARTY_API_BASE else [])
 
@@ -469,8 +470,13 @@ class QuotaError(Exception): pass
 
 def get_personal_api(kind, user_id=None):
     saved = load_json(settings_path(user_id), {}).get('apis', {}).get(kind, {})
+    base_url = (saved.get('base_url') or '').rstrip('/')
+    provider = saved.get('provider', '')
+    if 'api.atlascloud.ai' in base_url.lower():
+        provider = 'atlas'
+        base_url = ATLAS_API_BASE
     return {
-        'provider': saved.get('provider', ''), 'base_url': (saved.get('base_url') or '').rstrip('/'),
+        'provider': provider, 'base_url': base_url,
         'api_key': saved.get('api_key', ''), 'model': saved.get('model', ''), 'last_test': saved.get('last_test')
     }
 
@@ -627,7 +633,8 @@ def personal_api_test(kind):
         headers = {'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
         if cfg.get('provider') == 'anthropic':
             headers['anthropic-version'] = '2023-06-01'
-        r = requests.get(f"{cfg['base_url']}/models", headers=headers, timeout=20)
+        base_url = ATLAS_API_BASE if cfg.get('provider') == 'atlas' else cfg['base_url']
+        r = requests.get(f"{base_url}/models", headers=headers, timeout=20)
         if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
         settings = load_json(settings_path(), {})
         settings.setdefault('apis', {}).setdefault(kind, {})['last_test'] = datetime.now(timezone.utc).isoformat()
@@ -1333,6 +1340,170 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方异常: {str(e)}'}
 
 
+def atlas_output_url(payload):
+    if isinstance(payload, str) and payload.startswith('http'):
+        return payload
+    if isinstance(payload, list):
+        for item in payload:
+            found = atlas_output_url(item)
+            if found:
+                return found
+    if isinstance(payload, dict):
+        for key in ('outputs', 'output', 'url', 'image_url', 'video_url'):
+            found = atlas_output_url(payload.get(key))
+            if found:
+                return found
+    return None
+
+
+def atlas_generate_media(kind, payload, api_key, api_base=None):
+    """Submit an Atlas Cloud image/video task and return its output URL."""
+    api_root = ATLAS_API_BASE if 'api.atlascloud.ai' in (api_base or '').lower() else (api_base or ATLAS_API_BASE).rstrip('/')
+    headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+    endpoint = 'generateImage' if kind == 'image' else 'generateVideo'
+    response = requests.post(f'{api_root}/model/{endpoint}', headers=headers, json=payload, timeout=60)
+    if kind == 'image' and response.status_code in (404, 405):
+        response = requests.post(f'{api_root}/model/generateVideo', headers=headers, json=payload, timeout=60)
+    if response.status_code not in (200, 201, 202):
+        raise Exception(f'Atlas Cloud 提交失败: HTTP {response.status_code} {response.text[:300]}')
+
+    created = response.json()
+    created_data = created.get('data') if isinstance(created, dict) and isinstance(created.get('data'), dict) else created
+    created_data = created_data if isinstance(created_data, dict) else {}
+    direct_url = atlas_output_url(created_data.get('outputs'))
+    if direct_url:
+        return direct_url
+    task_id = created_data.get('id') or created_data.get('task_id')
+    if not task_id:
+        raise Exception(f'Atlas Cloud 返回中没有任务 ID: {json.dumps(created, ensure_ascii=False)[:400]}')
+
+    interval = 2 if kind == 'image' else 5
+    attempts = 180 if kind == 'image' else 240
+    status_paths = ('prediction', 'result')
+    for _ in range(attempts):
+        result = None
+        for status_path in status_paths:
+            poll = requests.get(f'{api_root}/model/{status_path}/{task_id}', headers=headers, timeout=30)
+            if poll.status_code in (404, 405):
+                continue
+            if poll.status_code not in (200, 202):
+                raise Exception(f'Atlas Cloud 查询失败: HTTP {poll.status_code} {poll.text[:240]}')
+            result = poll.json()
+            break
+        if result is None:
+            raise Exception('Atlas Cloud 查询接口不可用')
+        result_data = result.get('data') if isinstance(result, dict) and isinstance(result.get('data'), dict) else result
+        result_data = result_data if isinstance(result_data, dict) else {}
+        status = str(result_data.get('status') or result_data.get('state') or '').lower()
+        output_url = atlas_output_url(result_data.get('outputs') or result_data.get('output'))
+        if output_url:
+            return output_url
+        if status in ('failed', 'error', 'cancelled', 'canceled', 'timeout'):
+            error = result_data.get('error') or result_data.get('message') or '未知错误'
+            raise Exception(f'Atlas Cloud 生成失败: {error}')
+        if status in ('completed', 'succeeded', 'done', 'success', 'finished'):
+            raise Exception('Atlas Cloud 任务完成但没有返回媒体地址')
+        time.sleep(interval)
+    raise Exception(f'Atlas Cloud {"图片" if kind == "image" else "视频"}生成超时')
+
+
+ATLAS_IMAGE_SIZES = {
+    '1:1': '2048*2048', '4:3': '2304*1728', '3:4': '1728*2304',
+    '16:9': '2720*1530', '9:16': '1530*2720',
+    '3:2': '2496*1664', '2:3': '1664*2496',
+    '5:4': '2304*1728', '4:5': '1728*2304',
+}
+
+
+def atlas_image_generate(prompt, model_id, ratio, custom_size, api_key, api_base, input_images, host_url):
+    references = []
+    for image in input_images or []:
+        url = image.get('url', '')
+        if url.startswith('/static/'):
+            url = host_url + url
+        if url:
+            references.append(url)
+
+    model = model_id
+    if references and model.endswith('/text-to-image'):
+        model = model.rsplit('/', 1)[0] + '/edit'
+    elif not references and model.endswith('/edit'):
+        model = model.rsplit('/', 1)[0] + '/text-to-image'
+
+    size = custom_size.replace('x', '*').replace('X', '*') if ratio == 'custom' and custom_size else ATLAS_IMAGE_SIZES.get(ratio)
+    payload = {'model': model, 'prompt': prompt, 'output_format': 'png'}
+    if size:
+        payload['size'] = size
+    if references:
+        payload['images'] = references[:10]
+    output_url = atlas_generate_media('image', payload, api_key, api_base)
+    return download_and_save_image(output_url)
+
+
+def atlas_video_generate(job_id, script, images, audio_url, video_url, ratio, duration, resolution,
+                         host_url, model_id, api_key, api_base, original_script, optimize, user_id):
+    try:
+        reference_images = []
+        for image in images or []:
+            url = image.get('url', '')
+            if url.startswith('/static/'):
+                url = host_url + url
+            if url:
+                reference_images.append(url)
+        reference_videos = []
+        if video_url:
+            reference_videos.append(host_url + video_url if video_url.startswith('/static/') else video_url)
+        reference_audios = []
+        if audio_url:
+            reference_audios.append(host_url + audio_url if audio_url.startswith('/static/') else audio_url)
+
+        has_references = bool(reference_images or reference_videos or reference_audios)
+        model = model_id
+        if has_references and model.endswith('/text-to-video'):
+            model = model.rsplit('/', 1)[0] + '/reference-to-video'
+        elif not has_references and model.endswith('/reference-to-video'):
+            model = model.rsplit('/', 1)[0] + '/text-to-video'
+
+        atlas_resolution = {
+            '480p': '480p', '720p': '720p', '768p': '720p',
+            '1080p': '1080p-SR', '1440p': '1440p-SR',
+        }.get(resolution, '720p')
+        atlas_ratio = ratio if ratio in ('16:9', '4:3', '1:1', '3:4', '9:16', '21:9', 'adaptive') else 'adaptive'
+        atlas_duration = max(4, min(15, int(duration)))
+        payload = {
+            'model': model,
+            'prompt': script,
+            'duration': atlas_duration,
+            'resolution': atlas_resolution,
+            'ratio': atlas_ratio,
+            'generate_audio': True,
+            'watermark': False,
+        }
+        if reference_images:
+            payload['reference_images'] = reference_images[:9]
+        if reference_videos:
+            payload['reference_videos'] = reference_videos[:3]
+        if reference_audios and (reference_images or reference_videos):
+            payload['reference_audios'] = reference_audios[:3]
+
+        JOBS[job_id]['status'] = 'running'
+        output_url = atlas_generate_media('video', payload, api_key, api_base)
+        stored_url, _ = download_and_save_video(output_url)
+        save_video_history(
+            stored_url, script, original_script=original_script or script,
+            refined_script=script if optimize else (original_script or script),
+            model=model, ratio=atlas_ratio, duration=atlas_duration, resolution=atlas_resolution,
+            ref_count=len(reference_images), user_id=user_id
+        )
+        JOBS[job_id] = {
+            'status': 'succeeded', 'video_url': stored_url, 'source_video_url': output_url,
+            'ratio': atlas_ratio, 'duration': atlas_duration, 'resolution': atlas_resolution, 'error': None
+        }
+    except Exception as e:
+        print(f'[atlas-video] failed: {e}', flush=True)
+        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': str(e)}
+
+
 # ── Image generation helpers ──────────────────────────────────
 def download_and_save_image(image_url):
     """Download image from URL and keep it in durable storage when configured."""
@@ -1571,7 +1742,12 @@ def generate_image():
 
     def run():
         try:
-            if image_cfg.get('provider') != 'ark':
+            if image_cfg.get('provider') == 'atlas':
+                local_url, filename = atlas_image_generate(
+                    prompt, image_model, ratio, custom_size,
+                    image_cfg['api_key'], image_cfg['base_url'], input_images, host_url
+                )
+            elif image_cfg.get('provider') != 'ark':
                 local_url, filename = nano_image_generate(
                     prompt, image_model, ratio, custom_size,
                     image_cfg['api_key'], image_cfg['base_url'], input_images, host_url
@@ -1679,6 +1855,15 @@ def generate():
     original_script = script
     if optimize and script.strip():
         script = refine_prompt(script, images, ratio, duration, user_id=user_id)
+
+    # ── Atlas Cloud path ──
+    if video_cfg.get('provider') == 'atlas':
+        threading.Thread(target=atlas_video_generate, args=(
+            job_id, script, images, audio_url, video_url, ratio, duration, resolution,
+            host_url, video_model, video_cfg['api_key'], video_cfg['base_url'],
+            original_script, optimize, user_id
+        ), daemon=True).start()
+        return jsonify(job_id=job_id)
 
     # ── Agnes path ──
     if video_cfg.get('provider') == 'agnes':
