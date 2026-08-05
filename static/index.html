@@ -106,6 +106,7 @@ body {
 }
 .topbar-btn:hover { border-color: var(--accent); color: var(--text); }
 .topbar-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.api-profile-select { max-width: 190px; border-color: #40547e; }
 
 /* ===== MAIN LAYOUT ===== */
 .main {
@@ -1831,6 +1832,8 @@ input[type=file] { display: none; }
           <select class="model-select" id="modelSelect" onchange="setVideoModel(this.value)">
             <option value="seedance">Seedance</option>
           </select>
+          <span class="tlabel">接口</span>
+          <select class="model-select api-profile-select" id="videoApiSelect" onchange="selectWorkbenchApi('video',this.value)"><option value="">平台内置</option></select>
           <span class="tlabel">分辨率</span>
           <select class="model-select" id="resSelect" onchange="selectedResolution=this.value">
             <option value="720p">720p</option>
@@ -1866,6 +1869,8 @@ input[type=file] { display: none; }
             <button class="ratio-btn" onclick="document.getElementById('scriptFileInput').click()">上传剧本</button>
             <button class="ratio-btn" onclick="brainstormScript()">没灵感，帮我想</button>
             <span style="flex:1;"></span>
+            <span class="tlabel" style="font-size:11px;">文本接口</span>
+            <select class="model-select api-profile-select" id="textApiSelect" onchange="selectWorkbenchApi('text',this.value)"><option value="">平台内置</option></select>
             <span class="tlabel" style="font-size:11px;">剧本模型</span>
             <button class="ratio-btn active" id="smDoubao" onclick="setScriptModel('doubao',this)">豆包</button>
             <button class="ratio-btn" id="smGlm46" onclick="setScriptModel('glm46',this)">GPT-4.1M</button>
@@ -1917,6 +1922,7 @@ input[type=file] { display: none; }
             </div>
             <textarea class="image-gen-prompt" id="imagePrompt" placeholder="写你的补充要求，例如：换成夜晚、镜头从楼梯上方俯拍、保持红色沙发" rows="3"></textarea>
             <div class="image-gen-controls">
+              <select class="model-select api-profile-select" id="imageApiSelect" onchange="selectWorkbenchApi('image',this.value)"><option value="">平台内置</option></select>
               <select class="model-select" id="imageModelSelect"></select>
               <select class="model-select" id="imageRatioSelect"></select>
               <input class="model-select" id="customSizeInput" placeholder="宽x高" style="display:none;width:100px;text-align:center;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;font-family:inherit;padding:4px 6px;outline:none;" oninput="imageCustomSize=this.value">
@@ -2278,6 +2284,7 @@ let sessionImageResults = [];
 let sessionVideoResults = [];
 let skipImageCheck = false;
 let skipVideoCheck = false;
+let apiProfileData = { api_profiles: {}, selected_api_profiles: {}, points: 0 };
 const IMAGE_MODEL_LABELS = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5' };
 const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'agnes-video-v2.0': 'Agnes Video v2.0', 'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
 
@@ -2297,17 +2304,63 @@ async function init() {
     safeFetch('/api/assets/scenes').then(r => r.json()).then(d => { assets.scenes = d || []; }).catch(function(e) { console.error('加载场景失败:', e); }),
     safeFetch('/api/assets/audios').then(r => r.json()).then(d => { assets.audios = d || []; }).catch(function(e) { console.error('加载音频失败:', e); }),
     safeFetch('/api/styles').then(r => r.json()).then(d => { styles = d || []; }).catch(function(e) { console.error('加载风格失败:', e); }),
-    safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; restoreRecentImageResults(); }).catch(function(e) { console.error('加载历史失败:', e); })
+    safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; restoreRecentImageResults(); }).catch(function(e) { console.error('加载历史失败:', e); }),
+    safeFetch('/api/settings').then(r => r.json()).then(d => { apiProfileData = d || apiProfileData; }).catch(function(e) { console.error('加载接口配置失败:', e); })
   ];
   await Promise.allSettled(fetchers);
   _initDone = true;
   buildDurBtns();
   buildModelSelect();
   buildImageSelects();
+  buildApiProfileSelects();
   renderSidebar();
   updateRefSlots();
   // If already on history tab, re-render now that data is loaded
   if (currentMainTab === 'history') renderHistory();
+}
+
+function buildApiProfileSelects() {
+  ['text','image','video'].forEach(function(kind) {
+    const sel = document.getElementById(kind + 'ApiSelect');
+    if (!sel) return;
+    const profiles = (apiProfileData.api_profiles || {})[kind] || [];
+    const selected = (apiProfileData.selected_api_profiles || {})[kind];
+    sel.innerHTML = '';
+    if (!profiles.length) {
+      const option = document.createElement('option');
+      option.value = ''; option.textContent = '未接入（平台内置）';
+      sel.appendChild(option); sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    profiles.forEach(function(profile) {
+      const option = document.createElement('option');
+      option.value = profile.id;
+      option.textContent = profile.name + (profile.configured ? '' : '（缺少密钥）');
+      option.selected = profile.id === selected;
+      sel.appendChild(option);
+    });
+    sel.title = Number(apiProfileData.points || 0) > 0 ? '积分用完后自动使用这里选中的接口' : '当前生成使用这里选中的个人接口';
+  });
+}
+
+async function selectWorkbenchApi(kind, profileId) {
+  if (!profileId) return;
+  const sel = document.getElementById(kind + 'ApiSelect');
+  if (sel) sel.disabled = true;
+  try {
+    const res = await fetch('/api/settings/' + kind + '/' + encodeURIComponent(profileId) + '/select', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '切换接口失败');
+    apiProfileData.selected_api_profiles[kind] = profileId;
+    document.getElementById('projectStatus').textContent = '接口已切换';
+    setTimeout(function() { document.getElementById('projectStatus').textContent = '就绪'; }, 1200);
+  } catch (e) {
+    alert(e.message || '切换接口失败');
+    buildApiProfileSelects();
+  } finally {
+    if (sel) sel.disabled = false;
+  }
 }
 
 // ── Duration Buttons ─────────────────────────────────────────

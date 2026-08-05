@@ -468,17 +468,62 @@ USERS_LOCK = threading.Lock()
 
 class QuotaError(Exception): pass
 
-def get_personal_api(kind, user_id=None):
-    saved = load_json(settings_path(user_id), {}).get('apis', {}).get(kind, {})
-    base_url = (saved.get('base_url') or '').rstrip('/')
-    provider = saved.get('provider', '')
+def normalize_api_profile(profile):
+    profile = dict(profile or {})
+    base_url = (profile.get('base_url') or '').rstrip('/')
+    provider = profile.get('provider', '')
     if 'api.atlascloud.ai' in base_url.lower():
         provider = 'atlas'
         base_url = ATLAS_API_BASE
-    return {
+    normalized = {
+        'id': profile.get('id') or uuid.uuid4().hex,
+        'name': (profile.get('name') or '').strip(),
         'provider': provider, 'base_url': base_url,
-        'api_key': saved.get('api_key', ''), 'model': saved.get('model', ''), 'last_test': saved.get('last_test')
+        'api_key': profile.get('api_key', ''), 'model': profile.get('model', ''),
+        'last_test': profile.get('last_test'),
+        'created_at': profile.get('created_at') or datetime.now(timezone.utc).isoformat()
     }
+    if not normalized['name']:
+        normalized['name'] = ' · '.join(filter(None, [provider or 'Custom API', normalized['model']]))
+    return normalized
+
+def get_api_profiles(kind, user_id=None):
+    path = settings_path(user_id)
+    settings = load_json(path, {})
+    stored_profiles = settings.get('api_profiles', {}).get(kind)
+    changed = not isinstance(stored_profiles, list)
+    if isinstance(stored_profiles, list):
+        profiles = [normalize_api_profile(item) for item in stored_profiles if isinstance(item, dict)]
+        changed = changed or profiles != stored_profiles
+    else:
+        legacy = settings.get('apis', {}).get(kind, {})
+        profiles = [normalize_api_profile(legacy)] if isinstance(legacy, dict) and any(legacy.get(key) for key in ('provider', 'base_url', 'api_key', 'model')) else []
+
+    selected = settings.get('selected_api_profiles', {}).get(kind)
+    ids = {item['id'] for item in profiles}
+    if selected not in ids:
+        selected = profiles[0]['id'] if profiles else None
+        changed = True
+    if changed:
+        settings.setdefault('api_profiles', {})[kind] = profiles
+        settings.setdefault('selected_api_profiles', {})[kind] = selected
+        if profiles:
+            settings.setdefault('apis', {})[kind] = dict(next(item for item in profiles if item['id'] == selected))
+        save_json(path, settings)
+    return profiles, selected
+
+def public_api_profile(profile):
+    return {
+        'id': profile.get('id'), 'name': profile.get('name', ''),
+        'provider': profile.get('provider', ''), 'base_url': profile.get('base_url', ''),
+        'model': profile.get('model', ''), 'configured': bool(profile.get('api_key')),
+        'last_test': profile.get('last_test')
+    }
+
+def get_personal_api(kind, user_id=None):
+    profiles, selected = get_api_profiles(kind, user_id)
+    profile = next((item for item in profiles if item['id'] == selected), None)
+    return dict(profile or {'provider': '', 'base_url': '', 'api_key': '', 'model': '', 'last_test': None})
 
 def use_personal_api(user_id=None):
     user_id = user_id or current_user_id()
@@ -607,27 +652,85 @@ def auth_me():
 @app.route('/api/settings', methods=['GET', 'POST'])
 @login_required
 def api_settings():
-    settings = load_json(settings_path(), {})
     if request.method == 'POST':
         body = request.json or {}
         kind = body.get('kind')
         if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
-        cfg = settings.setdefault('apis', {}).setdefault(kind, {})
+        profiles, _ = get_api_profiles(kind)
+        settings = load_json(settings_path(), {})
+        profile_id = str(body.get('profile_id') or '').strip()
+        if profile_id:
+            cfg = next((item for item in profiles if item['id'] == profile_id), None)
+            if not cfg: return jsonify(error='接口配置不存在'), 404
+        else:
+            cfg = normalize_api_profile({'id': uuid.uuid4().hex})
+            profiles.append(cfg)
+            profile_id = cfg['id']
+        if 'name' in body:
+            cfg['name'] = str(body.get('name') or '').strip()
         for key in ('provider', 'base_url', 'model'):
             if key in body: cfg[key] = str(body.get(key) or '').strip().rstrip('/') if key == 'base_url' else str(body.get(key) or '').strip()
         if body.get('api_key'): cfg['api_key'] = str(body['api_key']).strip()
+        cfg = normalize_api_profile(cfg)
+        profiles = [cfg if item['id'] == profile_id else item for item in profiles]
+        settings.setdefault('api_profiles', {})[kind] = profiles
+        settings.setdefault('selected_api_profiles', {})[kind] = profile_id
+        settings.setdefault('apis', {})[kind] = dict(cfg)
         save_json(settings_path(), settings)
-    apis = {}
-    for kind in ('text', 'image', 'video'):
-        cfg = get_personal_api(kind)
-        apis[kind] = {'provider': cfg['provider'], 'base_url': cfg['base_url'], 'model': cfg['model'], 'configured': bool(cfg['api_key']), 'last_test': cfg.get('last_test')}
-    return jsonify(apis=apis, using_personal=use_personal_api(), points=load_json(users_path(), {}).get(current_user_id(), {}).get('points', 0))
+        return jsonify(ok=True, profile=public_api_profile(cfg), selected_profile_id=profile_id)
 
-@app.route('/api/settings/<kind>/test', methods=['POST'])
+    apis = {}
+    api_profiles = {}
+    selected_profiles = {}
+    for kind in ('text', 'image', 'video'):
+        profiles, selected = get_api_profiles(kind)
+        selected_cfg = next((item for item in profiles if item['id'] == selected), {})
+        apis[kind] = public_api_profile(selected_cfg)
+        api_profiles[kind] = [public_api_profile(item) for item in profiles]
+        selected_profiles[kind] = selected
+    return jsonify(
+        apis=apis, api_profiles=api_profiles, selected_api_profiles=selected_profiles,
+        using_personal=use_personal_api(),
+        points=load_json(users_path(), {}).get(current_user_id(), {}).get('points', 0)
+    )
+
+@app.route('/api/settings/<kind>/<profile_id>/select', methods=['POST'])
 @login_required
-def personal_api_test(kind):
+def select_personal_api(kind, profile_id):
     if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
-    cfg = get_personal_api(kind)
+    profiles, _ = get_api_profiles(kind)
+    cfg = next((item for item in profiles if item['id'] == profile_id), None)
+    if not cfg: return jsonify(error='接口配置不存在'), 404
+    settings = load_json(settings_path(), {})
+    settings.setdefault('selected_api_profiles', {})[kind] = profile_id
+    settings.setdefault('apis', {})[kind] = dict(cfg)
+    save_json(settings_path(), settings)
+    return jsonify(ok=True, selected_profile_id=profile_id)
+
+@app.route('/api/settings/<kind>/<profile_id>', methods=['DELETE'])
+@login_required
+def delete_personal_api(kind, profile_id):
+    if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+    profiles, selected = get_api_profiles(kind)
+    if not any(item['id'] == profile_id for item in profiles): return jsonify(error='接口配置不存在'), 404
+    profiles = [item for item in profiles if item['id'] != profile_id]
+    if selected == profile_id:
+        selected = profiles[0]['id'] if profiles else None
+    settings = load_json(settings_path(), {})
+    settings.setdefault('api_profiles', {})[kind] = profiles
+    settings.setdefault('selected_api_profiles', {})[kind] = selected
+    if selected:
+        settings.setdefault('apis', {})[kind] = dict(next(item for item in profiles if item['id'] == selected))
+    else:
+        settings.setdefault('apis', {}).pop(kind, None)
+    save_json(settings_path(), settings)
+    return jsonify(ok=True, selected_profile_id=selected)
+
+def test_personal_api(kind, profile_id=None):
+    profiles, selected = get_api_profiles(kind)
+    target_id = profile_id or selected
+    cfg = next((item for item in profiles if item['id'] == target_id), None)
+    if not cfg: return jsonify(error='接口配置不存在'), 404
     if not cfg.get('api_key') or not cfg.get('base_url') or not cfg.get('model'): return jsonify(error='请先保存完整接口配置'), 400
     try:
         headers = {'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
@@ -636,12 +739,28 @@ def personal_api_test(kind):
         base_url = ATLAS_API_BASE if cfg.get('provider') == 'atlas' else cfg['base_url']
         r = requests.get(f"{base_url}/models", headers=headers, timeout=20)
         if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
+        tested_at = datetime.now(timezone.utc).isoformat()
+        cfg['last_test'] = tested_at
         settings = load_json(settings_path(), {})
-        settings.setdefault('apis', {}).setdefault(kind, {})['last_test'] = datetime.now(timezone.utc).isoformat()
+        settings.setdefault('api_profiles', {})[kind] = [cfg if item['id'] == target_id else item for item in profiles]
+        if selected == target_id:
+            settings.setdefault('apis', {})[kind] = dict(cfg)
         save_json(settings_path(), settings)
-        return jsonify(ok=True, message='连接成功，额度用完后可切换到此接口')
+        return jsonify(ok=True, message='连接成功，额度用完后将使用此接口', last_test=tested_at)
     except requests.RequestException as e:
         return jsonify(error=f'连接失败：{str(e)}'), 502
+
+@app.route('/api/settings/<kind>/test', methods=['POST'])
+@login_required
+def personal_api_test(kind):
+    if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+    return test_personal_api(kind)
+
+@app.route('/api/settings/<kind>/<profile_id>/test', methods=['POST'])
+@login_required
+def personal_api_profile_test(kind, profile_id):
+    if kind not in ('text', 'image', 'video'): return jsonify(error='无效接口类型'), 400
+    return test_personal_api(kind, profile_id)
 
 @app.route('/api/admin/users')
 @admin_required
