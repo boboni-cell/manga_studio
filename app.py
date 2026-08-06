@@ -532,8 +532,10 @@ def use_personal_api(user_id=None):
     user = load_json(users_path(), {}).get(user_id, {})
     return int(user.get('points') or 0) <= 0
 
-def resolve_api(kind, builtin, user_id=None, force_personal=False, profile_id=None):
+def resolve_api(kind, builtin, user_id=None, force_personal=False, profile_id=None, strict_builtin=False):
     if not force_personal and not use_personal_api(user_id): return builtin
+    if not force_personal and strict_builtin:
+        raise QuotaError('平台积分已用完，请在模型中选择「自己的 API」')
     personal = get_personal_api(kind, user_id, profile_id)
     if personal.get('api_key') and personal.get('base_url') and personal.get('model'): return personal
     if force_personal:
@@ -1889,7 +1891,8 @@ def generate_image():
     try:
         image_cfg = resolve_api(
             'image', builtin, user_id, force_personal=force_personal,
-            profile_id=body.get('api_profile_id')
+            profile_id=body.get('api_profile_id'),
+            strict_builtin='use_personal_api' in body and not force_personal
         )
     except QuotaError as e:
         return jsonify(error=str(e)), 402
@@ -1993,7 +1996,8 @@ def generate():
     try:
         video_cfg = resolve_api(
             'video', builtin, user_id, force_personal=force_personal,
-            profile_id=body.get('api_profile_id')
+            profile_id=body.get('api_profile_id'),
+            strict_builtin='use_personal_api' in body and not force_personal
         )
     except QuotaError as e:
         return jsonify(error=str(e)), 402
@@ -2501,7 +2505,8 @@ def script_brainstorm():
         api_cfg = resolve_api(
             'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
             current_user_id(), force_personal=force_personal,
-            profile_id=body.get('api_profile_id')
+            profile_id=body.get('api_profile_id'),
+            strict_builtin='use_personal_api' in body and not force_personal
         )
         text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000, api_cfg=api_cfg)
         return jsonify(text=text)
@@ -2527,7 +2532,8 @@ def script_split():
     try:
         api_cfg = resolve_api(
             'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
-            user_id, force_personal=force_personal, profile_id=body.get('api_profile_id')
+            user_id, force_personal=force_personal, profile_id=body.get('api_profile_id'),
+            strict_builtin='use_personal_api' in body and not force_personal
         )
     except QuotaError as e:
         return jsonify(error=str(e)), 402

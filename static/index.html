@@ -107,6 +107,7 @@ body {
 .topbar-btn:hover { border-color: var(--accent); color: var(--text); }
 .topbar-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .api-profile-select { max-width: 190px; border-color: #40547e; }
+.api-route-control { display:none; align-items:center; gap:4px; }
 
 /* ===== MAIN LAYOUT ===== */
 .main {
@@ -1832,8 +1833,7 @@ input[type=file] { display: none; }
           <select class="model-select" id="modelSelect" onchange="setVideoModel(this.value)">
             <option value="seedance">Seedance</option>
           </select>
-          <span class="tlabel">接口</span>
-          <select class="model-select api-profile-select" id="videoApiSelect" onchange="selectWorkbenchApi('video',this.value)"><option value="">平台内置</option></select>
+          <span class="api-route-control" id="videoApiControl"><span class="tlabel">个人接口</span><select class="model-select api-profile-select" id="videoApiSelect" onchange="selectWorkbenchApi('video',this.value)"><option value="">未接入</option></select></span>
           <span class="tlabel">分辨率</span>
           <select class="model-select" id="resSelect" onchange="selectedResolution=this.value">
             <option value="720p">720p</option>
@@ -1869,8 +1869,7 @@ input[type=file] { display: none; }
             <button class="ratio-btn" onclick="document.getElementById('scriptFileInput').click()">上传剧本</button>
             <button class="ratio-btn" onclick="brainstormScript()">没灵感，帮我想</button>
             <span style="flex:1;"></span>
-            <span class="tlabel" style="font-size:11px;">文本接口</span>
-            <select class="model-select api-profile-select" id="textApiSelect" onchange="selectWorkbenchApi('text',this.value)"><option value="">平台内置</option></select>
+            <span class="api-route-control" id="textApiControl"><span class="tlabel" style="font-size:11px;">个人接口</span><select class="model-select api-profile-select" id="textApiSelect" onchange="selectWorkbenchApi('text',this.value)"><option value="">未接入</option></select></span>
             <span class="tlabel" style="font-size:11px;">剧本模型</span>
             <button class="ratio-btn active" id="smDoubao" onclick="setScriptModel('doubao',this)">豆包</button>
             <button class="ratio-btn" id="smGlm46" onclick="setScriptModel('glm46',this)">GPT-4.1M</button>
@@ -1923,7 +1922,7 @@ input[type=file] { display: none; }
             </div>
             <textarea class="image-gen-prompt" id="imagePrompt" placeholder="写你的补充要求，例如：换成夜晚、镜头从楼梯上方俯拍、保持红色沙发" rows="3"></textarea>
             <div class="image-gen-controls">
-              <select class="model-select api-profile-select" id="imageApiSelect" onchange="selectWorkbenchApi('image',this.value)"><option value="">平台内置</option></select>
+              <span class="api-route-control" id="imageApiControl"><span class="tlabel">个人接口</span><select class="model-select api-profile-select" id="imageApiSelect" onchange="selectWorkbenchApi('image',this.value)"><option value="">未接入</option></select></span>
               <select class="model-select" id="imageModelSelect"></select>
               <select class="model-select" id="imageRatioSelect"></select>
               <input class="model-select" id="customSizeInput" placeholder="宽x高" style="display:none;width:100px;text-align:center;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;font-family:inherit;padding:4px 6px;outline:none;" oninput="imageCustomSize=this.value">
@@ -2343,6 +2342,19 @@ function buildApiProfileSelects() {
     });
     sel.title = Number(apiProfileData.points || 0) > 0 ? '积分用完后自动使用这里选中的接口' : '当前生成使用这里选中的个人接口';
   });
+  syncApiRouteControls();
+}
+
+function syncApiRouteControls() {
+  const states = {
+    text: scriptModel === 'personal-api',
+    image: imageModel === 'personal-api',
+    video: videoModel === 'personal-api'
+  };
+  Object.keys(states).forEach(function(kind) {
+    const control = document.getElementById(kind + 'ApiControl');
+    if (control) control.style.display = states[kind] ? 'inline-flex' : 'none';
+  });
 }
 
 async function selectWorkbenchApi(kind, profileId) {
@@ -2364,6 +2376,7 @@ async function selectWorkbenchApi(kind, profileId) {
       scriptModel = 'personal-api';
       document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46,#smPersonalApi').forEach(b => b.classList.toggle('active', b.id === 'smPersonalApi'));
     }
+    syncApiRouteControls();
     document.getElementById('projectStatus').textContent = '接口已切换';
     setTimeout(function() { document.getElementById('projectStatus').textContent = '就绪'; }, 1200);
   } catch (e) {
@@ -2409,6 +2422,7 @@ function setVideoModel(val) {
   videoModel = val;
   buildResSelect();
   syncVideoModelControls();
+  syncApiRouteControls();
 }
 
 function updateVideoStyleSlot() {
@@ -2499,6 +2513,7 @@ async function buildModelSelect() {
     if (res.caps) modelCaps = res.caps;
     buildResSelect();
     syncVideoModelControls();
+    syncApiRouteControls();
   } catch (e) {
     console.error('加载模型列表失败:', e);
   }
@@ -2600,7 +2615,7 @@ async function buildImageSelects() {
       opt.selected = imageModel === 'personal-api';
       mSel.appendChild(opt);
     }
-    mSel.onchange = () => { imageModel = mSel.value; };
+    mSel.onchange = () => { imageModel = mSel.value; syncApiRouteControls(); };
     // Ratio select
     const rSel = document.getElementById('imageRatioSelect');
     rSel.innerHTML = '';
@@ -2616,6 +2631,7 @@ async function buildImageSelects() {
       const customInput = document.getElementById('customSizeInput');
       customInput.style.display = imageRatio === 'custom' ? 'inline-block' : 'none';
     };
+    syncApiRouteControls();
   } catch (e) {
     console.error('加载图片模型失败:', e);
   }
@@ -2662,7 +2678,7 @@ async function _doGenerateImage() {
     res = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, image_model: imageModel, use_personal_api: imageModel === 'personal-api', api_profile_id: (apiProfileData.selected_api_profiles || {}).image, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map((r, i) => ({ url: r.url, role_label: imageRefRole(i) })), style_id: selectedStyleId || undefined })
+      body: JSON.stringify({ prompt, image_model: imageModel, use_personal_api: imageModel === 'personal-api', api_profile_id: imageModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).image : undefined, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map((r, i) => ({ url: r.url, role_label: imageRefRole(i) })), style_id: selectedStyleId || undefined })
     }).then(function(r) { return r.json(); });
   } catch (e) {
     sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
@@ -4071,7 +4087,7 @@ async function _doGenerate() {
         optimize_prompt: optimizePrompt,
         video_model: videoModel,
         use_personal_api: videoModel === 'personal-api',
-        api_profile_id: (apiProfileData.selected_api_profiles || {}).video,
+        api_profile_id: videoModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).video : undefined,
         style_id: videoStyleId || undefined,
         resolution: selectedResolution
       })
@@ -4452,7 +4468,7 @@ async function brainstormScript() {
   try {
     const r = await fetch('/api/script/brainstorm', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: (apiProfileData.selected_api_profiles || {}).text, style_id: videoStyleId || undefined })
+      body: JSON.stringify({ topic, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: scriptModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).text : undefined, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '生成灵感'));
     if (r.error) { alert(r.error); document.getElementById('scriptWSText').value = ''; return; }
     document.getElementById('scriptWSText').value = r.text;
@@ -4468,7 +4484,7 @@ async function splitScript() {
   try {
     const r = await fetch('/api/script/split', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: (apiProfileData.selected_api_profiles || {}).text, style_id: videoStyleId || undefined })
+      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: scriptModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).text : undefined, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '拆分'));
     if (r.error) { alert(r.error); return; }
     let result = r;
@@ -4499,6 +4515,7 @@ function setScriptModel(model, btn) {
   scriptModel = model;
   document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46,#smPersonalApi').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  syncApiRouteControls();
 }
 
 function renderShots(segments) {
