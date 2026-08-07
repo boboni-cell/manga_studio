@@ -755,7 +755,9 @@ def test_personal_api(kind, profile_id=None):
         if kind == 'video' and cfg.get('provider') == 'minimax':
             base_url = minimax_api_root(base_url)
             r = requests.get(f"{base_url}/v2/query/video_generation/0", headers=headers, timeout=20)
-            if r.status_code in (401, 403) or r.status_code >= 500 or (r.status_code == 404 and 'page not found' in r.text.lower()):
+            response_text = r.text.lower()
+            task_not_found = 'record not found' in response_text and '(1000)' in response_text
+            if r.status_code in (401, 403) or (r.status_code >= 500 and not task_not_found) or (r.status_code == 404 and 'page not found' in response_text):
                 return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
         else:
             r = requests.get(f"{base_url}/models", headers=headers, timeout=20)
