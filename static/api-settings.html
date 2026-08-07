@@ -44,10 +44,11 @@
       video:{title:'视频生成 API',icon:'🎥',help:'Custom 默认使用 /video/generate 和 /video/status/{id}',providers:[
         p('atlas','Atlas Cloud（全模型）','https://api.atlascloud.ai/api/v1','bytedance/seedance-2.0-mini/text-to-video'),
         p('agnes','Agnes API Hub','https://apihub.agnes-ai.com/v1','agnes-video-v2.0'),p('nano','Nano-GPT','https://nano-gpt.com/api/v1','kling-v30-std'),
+        p('minimax','MiniMax H3','https://api.minimaxi.com','MiniMax-H3'),
         p('ark','火山 Seedance','https://ark.cn-beijing.volces.com/api/v3',''),p('custom','Custom API')
       ]}
     };
-    function providerHelp(kind,provider,fallback){if(provider!=='atlas')return fallback;if(kind==='text')return 'Atlas Cloud 文本使用 OpenAI 兼容协议';if(kind==='image')return '自动调用 Atlas Cloud 图片生成与任务查询接口';return '自动调用 Atlas Cloud 视频生成与任务查询接口';}
+    function providerHelp(kind,provider,fallback){if(kind==='video'&&provider==='minimax')return '自动调用 /v2/video_generation，并通过 /v2/query/video_generation/{task_id} 查询结果';if(provider!=='atlas')return fallback;if(kind==='text')return 'Atlas Cloud 文本使用 OpenAI 兼容协议';if(kind==='image')return '自动调用 Atlas Cloud 图片生成与任务查询接口';return '自动调用 Atlas Cloud 视频生成与任务查询接口';}
     const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     let apiData={api_profiles:{},selected_api_profiles:{}},editing={text:null,image:null,video:null};
     const providerLabel=(kind,id)=>(TYPES[kind].providers.find(x=>x.id===id)||{}).label||id||'Custom API';

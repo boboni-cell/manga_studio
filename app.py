@@ -468,6 +468,13 @@ USERS_LOCK = threading.Lock()
 
 class QuotaError(Exception): pass
 
+def minimax_api_root(api_base):
+    base_url = (api_base or '').rstrip('/')
+    for suffix in ('/v2/video_generation', '/v2'):
+        if base_url.lower().endswith(suffix):
+            return base_url[:-len(suffix)]
+    return base_url
+
 def normalize_api_profile(profile):
     profile = dict(profile or {})
     base_url = (profile.get('base_url') or '').rstrip('/')
@@ -475,6 +482,9 @@ def normalize_api_profile(profile):
     if 'api.atlascloud.ai' in base_url.lower():
         provider = 'atlas'
         base_url = ATLAS_API_BASE
+    if str(profile.get('model') or '').lower() == 'minimax-h3' and any(host in base_url.lower() for host in ('api.minimaxi.com', 'api.minimax.io')):
+        provider = 'minimax'
+        base_url = minimax_api_root(base_url)
     normalized = {
         'id': profile.get('id') or uuid.uuid4().hex,
         'name': (profile.get('name') or '').strip(),
@@ -742,8 +752,14 @@ def test_personal_api(kind, profile_id=None):
         if cfg.get('provider') == 'anthropic':
             headers['anthropic-version'] = '2023-06-01'
         base_url = ATLAS_API_BASE if cfg.get('provider') == 'atlas' else cfg['base_url']
-        r = requests.get(f"{base_url}/models", headers=headers, timeout=20)
-        if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
+        if kind == 'video' and cfg.get('provider') == 'minimax':
+            base_url = minimax_api_root(base_url)
+            r = requests.get(f"{base_url}/v2/query/video_generation/0", headers=headers, timeout=20)
+            if r.status_code in (401, 403) or r.status_code >= 500 or (r.status_code == 404 and 'page not found' in r.text.lower()):
+                return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
+        else:
+            r = requests.get(f"{base_url}/models", headers=headers, timeout=20)
+            if r.status_code not in (200, 201): return jsonify(error=f'连接失败：HTTP {r.status_code} {r.text[:160]}'), 502
         tested_at = datetime.now(timezone.utc).isoformat()
         cfg['last_test'] = tested_at
         settings = load_json(settings_path(), {})
@@ -1394,6 +1410,93 @@ def agnes_video_generate(job_id, script, ratio, duration, resolution='720p', ori
                 raise Exception(f'Agnes 视频生成失败: {message}')
             time.sleep(5)
         raise Exception('Agnes 视频轮询超时（20分钟）')
+    except Exception as e:
+        JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': str(e)}
+
+
+def minimax_video_generate(job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url,
+                           ratio, duration, resolution, host_url, model_id, api_key, api_base,
+                           original_script=None, optimize=False, user_id=None):
+    """Create and poll a MiniMax H3 V2 multimodal video task."""
+    try:
+        api_root = minimax_api_root(api_base)
+        headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
+        content = [{'type': 'text', 'text': script}]
+        seen_urls = set()
+
+        def public_url(url):
+            if url and url.startswith('/static/'):
+                return host_url + url
+            return url
+
+        def append_image(url, role):
+            url = public_url(url)
+            if url and url not in seen_urls:
+                content.append({'type': 'image_url', 'image_url': {'url': url}, 'role': role})
+                seen_urls.add(url)
+
+        append_image(first_frame_url, 'first_frame')
+        append_image(last_frame_url, 'last_frame')
+        for image in images or []:
+            append_image(image.get('url'), 'reference_image')
+        if video_url:
+            content.append({'type': 'video_url', 'video_url': {'url': public_url(video_url)}, 'role': 'reference_video'})
+        if audio_url:
+            content.append({'type': 'audio_url', 'audio_url': {'url': public_url(audio_url)}, 'role': 'reference_audio'})
+
+        minimax_resolution = '2K' if resolution in ('1080p', '1440p', '2K') else '768P'
+        minimax_ratio = ratio if ratio in ('21:9', '16:9', '4:3', '1:1', '3:4', '9:16') else '16:9'
+        minimax_duration = max(4, min(15, int(duration)))
+        payload = {
+            'model': model_id or 'MiniMax-H3',
+            'content': content,
+            'resolution': minimax_resolution,
+            'duration': minimax_duration,
+            'ratio': minimax_ratio,
+        }
+
+        JOBS[job_id]['status'] = 'running'
+        response = requests.post(f'{api_root}/v2/video_generation', headers=headers, json=payload, timeout=60)
+        if response.status_code not in (200, 201, 202):
+            raise Exception(f'MiniMax 视频提交失败: HTTP {response.status_code} {response.text[:300]}')
+        created = response.json()
+        task_id = created.get('task_id') or created.get('id')
+        if not task_id:
+            raise Exception(f'MiniMax 返回中没有 task_id: {json.dumps(created, ensure_ascii=False)[:400]}')
+
+        for _ in range(240):
+            poll = requests.get(f'{api_root}/v2/query/video_generation/{task_id}', headers=headers, timeout=30)
+            if poll.status_code not in (200, 202):
+                raise Exception(f'MiniMax 视频查询失败: HTTP {poll.status_code} {poll.text[:300]}')
+            result = poll.json()
+            task = result.get('task') if isinstance(result.get('task'), dict) else result
+            status = str(task.get('status') or '').lower()
+            output_url = _find_media_url(result)
+            if status == 'succeeded' or output_url:
+                if not output_url:
+                    raise Exception('MiniMax 任务已完成但没有返回视频地址')
+                stored_url, _ = download_and_save_video(output_url)
+                save_video_history(
+                    stored_url, script, original_script=original_script or script,
+                    refined_script=script if optimize else (original_script or script),
+                    model=model_id or 'MiniMax-H3', ratio=task.get('ratio') or minimax_ratio,
+                    duration=task.get('duration') or minimax_duration,
+                    resolution=task.get('resolution') or minimax_resolution,
+                    ref_count=len(seen_urls), user_id=user_id
+                )
+                JOBS[job_id] = {
+                    'status': 'succeeded', 'video_url': stored_url, 'source_video_url': output_url,
+                    'ratio': task.get('ratio') or minimax_ratio,
+                    'duration': task.get('duration') or minimax_duration,
+                    'resolution': task.get('resolution') or minimax_resolution,
+                    'error': None
+                }
+                return
+            if status in ('failed', 'cancelled', 'canceled'):
+                error = task.get('error') or result.get('error') or '未知错误'
+                raise Exception(f'MiniMax 视频生成失败: {error}')
+            time.sleep(5)
+        raise Exception('MiniMax 视频轮询超时（20分钟）')
     except Exception as e:
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': str(e)}
 
@@ -2063,6 +2166,15 @@ def generate():
         threading.Thread(target=nano_gpt_generate, args=(
             job_id, video_model, script, images, audio_url, video_url, ratio, duration, host_url,
             resolution, original_script, optimize, video_cfg['api_key'], user_id, video_cfg['base_url']
+        ), daemon=True).start()
+        return jsonify(job_id=job_id)
+
+    # ── MiniMax H3 path ──
+    if video_cfg.get('provider') == 'minimax':
+        threading.Thread(target=minimax_video_generate, args=(
+            job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url,
+            ratio, duration, resolution, host_url, video_model, video_cfg['api_key'],
+            video_cfg['base_url'], original_script, optimize, user_id
         ), daemon=True).start()
         return jsonify(job_id=job_id)
 
