@@ -1807,6 +1807,7 @@ input[type=file] { display: none; }
                 <div class="at-tab active" onclick="switchAtTab('chars')">角色</div>
                 <div class="at-tab" onclick="switchAtTab('outfits')">服装</div>
                 <div class="at-tab" onclick="switchAtTab('scenes')">场景</div>
+                <div class="at-tab" onclick="switchAtTab('uploads')">多图参考</div>
                 <div class="at-tab" onclick="switchAtTab('audios')">音频</div>
                 <div class="at-tab" onclick="switchAtTab('history')">上段视频</div>
               </div>
@@ -2054,7 +2055,7 @@ input[type=file] { display: none; }
 <!-- Hidden File Inputs -->
 <input type="file" id="imgFileInput" accept="image/*" multiple>
 <input type="file" id="audioFileInput" accept="audio/mp3,audio/mpeg" multiple>
-<input type="file" id="directFileInput" accept="image/*,video/mp4,video/mov,video/quicktime">
+<input type="file" id="directFileInput" accept="image/*,video/mp4,video/mov,video/quicktime" multiple>
 
 <!-- Error Banner -->
 <div id="apiErrorBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#c0392b;color:#fff;font-size:12px;padding:6px 12px;text-align:center;cursor:pointer;" onclick="this.style.display='none'">⚠️ 接口加载失败，部分功能不可用（点击关闭）</div>
@@ -2251,7 +2252,7 @@ function safeFetch(url, opts) {
 
 // ── State ────────────────────────────────────────────────────
 let characters = {};
-let assets = { outfits: [], scenes: [], audios: [] };
+let assets = { outfits: [], scenes: [], audios: [], uploads: [] };
 let history = [];
 let selectedRefs = [];
 let currentSideTab = 'chars';
@@ -2303,6 +2304,7 @@ async function init() {
     safeFetch('/api/assets/outfits').then(r => r.json()).then(d => { assets.outfits = d || []; }).catch(function(e) { console.error('加载服装失败:', e); }),
     safeFetch('/api/assets/scenes').then(r => r.json()).then(d => { assets.scenes = d || []; }).catch(function(e) { console.error('加载场景失败:', e); }),
     safeFetch('/api/assets/audios').then(r => r.json()).then(d => { assets.audios = d || []; }).catch(function(e) { console.error('加载音频失败:', e); }),
+    safeFetch('/api/assets/uploads').then(r => r.json()).then(d => { assets.uploads = d || []; }).catch(function(e) { console.error('加载多图参考失败:', e); }),
     safeFetch('/api/styles').then(r => r.json()).then(d => { styles = d || []; }).catch(function(e) { console.error('加载风格失败:', e); }),
     safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; restoreRecentImageResults(); }).catch(function(e) { console.error('加载历史失败:', e); }),
     safeFetch('/api/settings').then(r => r.json()).then(d => { apiProfileData = d || apiProfileData; }).catch(function(e) { console.error('加载接口配置失败:', e); })
@@ -3169,7 +3171,7 @@ function switchSideTab(tab) {
 function switchAtTab(tab) {
   currentAtTab = tab;
   document.querySelectorAll('.at-tab').forEach((el, i) => {
-    el.classList.toggle('active', ['chars', 'outfits', 'scenes', 'audios', 'history'][i] === tab);
+    el.classList.toggle('active', ['chars', 'outfits', 'scenes', 'uploads', 'audios', 'history'][i] === tab);
   });
   renderAtGrid();
 }
@@ -3455,16 +3457,40 @@ function deleteAsset(cat, idx) {
 function openDirectUpload() {
   const inp = document.getElementById('directFileInput');
   inp.onchange = async () => {
-    const f = inp.files[0];
-    if (!f) return;
-    const r = await uploadFile(f);
-    const isVideo = f.type.startsWith('video/');
-    selectRef({
-      url: r.url,
-      role_label: isVideo ? '参考视频' : '多图参考',
-      type: isVideo ? 'video' : 'image',
-      name: f.name
-    });
+    const files = Array.from(inp.files || []);
+    if (!files.length) return;
+
+    let uploadsChanged = false;
+    let skippedImages = 0;
+    for (const f of files) {
+      let r;
+      try { r = await uploadFile(f); } catch (e) { continue; }
+      const isVideo = f.type.startsWith('video/');
+      const ref = {
+        url: r.url,
+        role_label: isVideo ? '参考视频' : '多图参考',
+        type: isVideo ? 'video' : 'image',
+        name: f.name
+      };
+      if (!isVideo && !assets.uploads.some(a => a.url === ref.url)) {
+        assets.uploads.push({ url: ref.url, name: ref.name });
+        uploadsChanged = true;
+      }
+      if (isVideo || selectedRefs.filter(item => item.type === 'image').length < 10) {
+        selectRef(ref);
+      } else {
+        skippedImages += 1;
+      }
+    }
+    if (uploadsChanged) {
+      const saveRes = await fetch('/api/assets/uploads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assets.uploads)
+      });
+      if (!saveRes.ok) alert('多图参考已上传，但素材列表保存失败，请稍后重试');
+    }
+    if (skippedImages) alert('图片参考已达上限10张，其余图片已保存到“多图参考”素材库');
   };
   inp.value = ''; inp.click();
 }
@@ -3558,6 +3584,11 @@ function renderAtGrid() {
       html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"场景参考",type:"image",name:a.name||("场景"+i)})})'>
         <img src="${a.url}" loading="lazy"><div class="at-label">${escHtml(a.name||'')}</div></div>`;
     });
+  } else if (currentAtTab === 'uploads') {
+    assets.uploads.slice().reverse().forEach((a, i) => {
+      html += `<div class="at-item" onclick="selectUploadedRef(${assets.uploads.length - 1 - i})">
+        <img src="${escAttr(a.url)}" loading="lazy"><div class="at-label">${escHtml(a.name||'多图参考')}</div></div>`;
+    });
   } else if (currentAtTab === 'audios') {
     assets.audios.forEach((a, i) => {
       html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"参考音频",type:"audio",name:a.name||("音频"+i)})})'>
@@ -3572,6 +3603,12 @@ function renderAtGrid() {
   }
   if (!html) html = `<div class="at-empty">暂无素材，请先上传</div>`;
   grid.innerHTML = html;
+}
+
+function selectUploadedRef(idx) {
+  const a = assets.uploads[idx];
+  if (!a) return;
+  selectRef({ url: a.url, role_label: '多图参考', type: 'image', name: a.name || '多图参考' });
 }
 
 // ── Inline Ref Insertion ─────────────────────────────────────
@@ -3773,7 +3810,7 @@ function updateSlotUI(slotName, refs) {
 
 // ── Focus / Clear Slots ──────────────────────────────────────
 function focusSlot(slotName) {
-  const tabMap = { character: 'chars', outfit: 'outfits', scene: 'scenes', audio: 'audios', video: 'history' };
+  const tabMap = { character: 'chars', outfit: 'outfits', scene: 'scenes', multiref: 'uploads', audio: 'audios', video: 'history' };
   if (tabMap[slotName]) {
     switchAtTab(tabMap[slotName]);
     openAtPicker();
@@ -4165,7 +4202,8 @@ function renderVideoResults() {
       '</div>';
   }
 
-  sessionVideoResults.slice().reverse().forEach(function(v, revIdx) {
+  const newestFirst = sessionVideoResults.slice().reverse();
+  newestFirst.forEach(function(v, revIdx) {
     const idx = sessionVideoResults.length - 1 - revIdx;
     if (v.generating) {
       var ar = (v.ratio || '9:16').replace(':', '/');
@@ -4229,11 +4267,8 @@ function renderVideoResults() {
   }
   el.innerHTML = html;
 
-  // Auto-scroll to latest result
-  var lastCard = el.querySelector('.result-card:last-of-type');
-  if (lastCard) {
-    lastCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }
+  // The newest result is rendered first, so keep the result area at the top.
+  el.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function showResult(url) {
