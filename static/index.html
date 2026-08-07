@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>漫剧工作室 - 专业漫剧生成工作台</title>
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<link rel="shortcut icon" href="/static/favicon.svg">
+<link rel="icon" type="image/png" href="/static/site-icon.png">
+<link rel="shortcut icon" href="/static/site-icon.png">
+<link rel="apple-touch-icon" href="/static/site-icon.png">
 <meta name="theme-color" content="#101018">
 <style>
 /* ===== RESET & VARIABLES ===== */
@@ -71,6 +72,7 @@ body {
   letter-spacing: -0.3px;
 }
 .topbar-logo .icon { font-size: 18px; }
+.topbar-logo img.icon { width: 28px; height: 28px; border-radius: 7px; object-fit: cover; flex: none; }
 .topbar-logo .accent { color: var(--accent); }
 .topbar-spacer { flex: 1; }
 .topbar-status {
@@ -1157,10 +1159,45 @@ body {
   background: var(--surface3);
 }
 .at-item:hover { border-color: var(--accent); }
+.at-item.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .at-item img, .at-item video {
   width: 100%; height: 100%;
   object-fit: cover;
   display: block;
+}
+.at-check, .at-delete {
+  position: absolute;
+  top: 5px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+}
+.at-check { left: 5px; background: var(--accent); pointer-events: none; }
+.at-delete { right: 5px; background: rgba(192,57,57,.92); cursor: pointer; }
+.at-upload-summary {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.at-upload-summary button {
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--text);
+  padding: 4px 10px;
+  cursor: pointer;
 }
 .at-label {
   position: absolute;
@@ -1667,7 +1704,7 @@ input[type=file] { display: none; }
 <!-- ===== TOP BAR ===== -->
 <div class="topbar">
   <div class="topbar-logo">
-    <span class="icon">🎬</span>
+    <img class="icon" src="/static/site-icon.png" alt="">
     <span>漫剧<span class="accent">工作室</span></span>
   </div>
   <div class="topbar-status">
@@ -3585,10 +3622,21 @@ function renderAtGrid() {
         <img src="${a.url}" loading="lazy"><div class="at-label">${escHtml(a.name||'')}</div></div>`;
     });
   } else if (currentAtTab === 'uploads') {
-    assets.uploads.slice().reverse().forEach((a, i) => {
-      html += `<div class="at-item" onclick="selectUploadedRef(${assets.uploads.length - 1 - i})">
-        <img src="${escAttr(a.url)}" loading="lazy"><div class="at-label">${escHtml(a.name||'多图参考')}</div></div>`;
-    });
+    if (!assets.uploads.length) {
+      html = `<div class="at-empty">暂无多图参考，请点击左侧“＋”上传</div>`;
+    } else {
+      const selectedCount = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0).length;
+      html += `<div class="at-upload-summary"><span>点击图片选择或取消，已选 ${selectedCount}/10 张</span><button onclick="closeAtPicker()">完成</button></div>`;
+      assets.uploads.slice().reverse().forEach((a, i) => {
+        const originalIdx = assets.uploads.length - 1 - i;
+        const selected = selectedRefs.some(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url);
+        html += `<div class="at-item${selected ? ' selected' : ''}" onclick="toggleUploadedRef(${originalIdx})">
+          <img src="${escAttr(a.url)}" loading="lazy">
+          ${selected ? '<span class="at-check">✓</span>' : ''}
+          <button class="at-delete" aria-label="删除参考图" title="删除参考图" onclick="event.stopPropagation();deleteUploadedRef(${originalIdx})">✕</button>
+          <div class="at-label">${escHtml(a.name||'多图参考')}</div></div>`;
+      });
+    }
   } else if (currentAtTab === 'audios') {
     assets.audios.forEach((a, i) => {
       html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"参考音频",type:"audio",name:a.name||("音频"+i)})})'>
@@ -3605,10 +3653,46 @@ function renderAtGrid() {
   grid.innerHTML = html;
 }
 
-function selectUploadedRef(idx) {
+function toggleUploadedRef(idx) {
   const a = assets.uploads[idx];
   if (!a) return;
-  selectRef({ url: a.url, role_label: '多图参考', type: 'image', name: a.name || '多图参考' });
+  const selectedIdx = selectedRefs.findIndex(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url);
+  if (selectedIdx >= 0) {
+    removeInlineRef(selectedRefs[selectedIdx]);
+    selectedRefs.splice(selectedIdx, 1);
+  } else {
+    const imgCount = selectedRefs.filter(r => r.type === 'image').length;
+    if (imgCount >= 10) {
+      alert('图片参考已达模型接口上限10张，请先取消一张');
+      return;
+    }
+    const ref = { url: a.url, role_label: '多图参考', type: 'image', name: a.name || '多图参考' };
+    insertInlineRef(ref);
+    selectedRefs.push(ref);
+  }
+  updateRefSlots();
+  renderAtGrid();
+}
+
+async function deleteUploadedRef(idx) {
+  const a = assets.uploads[idx];
+  if (!a || !confirm('确定从多图参考素材库删除“' + (a.name || '这张图片') + '”吗？')) return;
+  const nextUploads = assets.uploads.filter((_, i) => i !== idx);
+  const saveRes = await fetch('/api/assets/uploads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(nextUploads)
+  });
+  if (!saveRes.ok) {
+    alert('删除失败，请稍后重试');
+    return;
+  }
+  const removedRefs = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url);
+  removedRefs.forEach(removeInlineRef);
+  selectedRefs = selectedRefs.filter(r => !(r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url));
+  assets.uploads = nextUploads;
+  updateRefSlots();
+  renderAtGrid();
 }
 
 // ── Inline Ref Insertion ─────────────────────────────────────
