@@ -22,14 +22,14 @@ def load_env_file(path):
 
 load_env_file(os.path.join(BASE, '.env'))
 
+DATABASE_URL = os.environ.get('DATABASE_URL', '').strip()
 try:
-    from supabase import create_client
-    SUPABASE_URL = os.environ.get('SUPABASE_URL', '').strip()
-    SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '').strip()
-    _supabase = create_client(SUPABASE_URL, SUPABASE_KEY) if (SUPABASE_URL and SUPABASE_KEY) else None
+    import psycopg
+    from psycopg.types.json import Jsonb
 except Exception as e:
-    print(f'[Supabase] disabled: {e}')
-    _supabase = None
+    print(f'[Postgres] driver unavailable: {e}', flush=True)
+    psycopg = None
+    Jsonb = None
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.secret_key = os.environ.get('APP_SECRET_KEY', os.urandom(24).hex())
@@ -169,35 +169,86 @@ SCRIPT_JOBS = {}
 JOB_OWNERS = {}
 HISTORY_LOCK = threading.Lock()
 
+_postgres_ready = False
+
+def data_key(path):
+    return os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
+
+def init_postgres():
+    global _postgres_ready
+    if not DATABASE_URL or not psycopg:
+        return False
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS kv_store (
+                    key TEXT PRIMARY KEY,
+                    data JSONB NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ''')
+        _postgres_ready = True
+    except Exception as e:
+        print(f'[Postgres] unavailable, using /app/data: {e}', flush=True)
+    return _postgres_ready
+
+def postgres_save(key, data, overwrite=True):
+    if not _postgres_ready:
+        return False
+    conflict = 'DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()' if overwrite else 'DO NOTHING'
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            conn.execute(
+                f'INSERT INTO kv_store (key, data) VALUES (%s, %s) ON CONFLICT (key) {conflict}',
+                (key, Jsonb(data))
+            )
+        return True
+    except Exception as e:
+        print(f'[Postgres] write failed for {key}: {e}', flush=True)
+        return False
+
+def migrate_local_json_to_postgres():
+    if not _postgres_ready:
+        return {'scanned': 0, 'imported': 0}
+    scanned = imported = 0
+    for root, _, files in os.walk(DATA):
+        for filename in files:
+            if not filename.endswith('.json'):
+                continue
+            path = os.path.join(root, filename)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                scanned += 1
+                if postgres_save(data_key(path), data, overwrite=False):
+                    imported += 1
+            except Exception as e:
+                print(f'[Postgres] migration skipped {path}: {e}', flush=True)
+    print(f'[Postgres] local bootstrap scanned={scanned} imported={imported}', flush=True)
+    return {'scanned': scanned, 'imported': imported}
+
 def load_json(path, default):
-    """Load data from Supabase or local JSON file."""
+    """Load from Postgres first, falling back to the local JSON copy."""
     key = os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
-    if _supabase:
+    if _postgres_ready:
         try:
-            r = _supabase.table('kv_store').select('data').eq('key', key).execute()
-            if r.data:
-                return r.data[0]['data']
-        except Exception:
-            pass
+            with psycopg.connect(DATABASE_URL) as conn:
+                row = conn.execute('SELECT data FROM kv_store WHERE key = %s', (key,)).fetchone()
+            if row:
+                return row[0]
+        except Exception as e:
+            print(f'[Postgres] read failed for {key}, using /app/data: {e}', flush=True)
     try:
         with open(path, 'r', encoding='utf-8') as f: return json.load(f)
     except: return default
 
 def save_json(path, data):
-    """Save data to Supabase and local JSON file."""
-    key = os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
+    """Write the local recovery copy, then upsert the Postgres primary copy."""
+    key = data_key(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    if _supabase:
-        try:
-            _supabase.table('kv_store').upsert({
-                'key': key,
-                'data': data,
-                'updated_at': datetime.now(timezone.utc).isoformat()
-            }, on_conflict='key').execute()
-        except Exception:
-            pass
+    postgres_save(key, data)
 
 def current_user_id():
     return session.get('user_id')
@@ -373,6 +424,8 @@ def init_data():
         if changed:
             save_json(users_path(), users)
 
+init_postgres()
+migrate_local_json_to_postgres()
 init_data()
 
 # ── Object storage upload helper ──────────────────────────────
