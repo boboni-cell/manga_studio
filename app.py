@@ -193,6 +193,7 @@ def init_postgres():
     return _postgres_ready
 
 def postgres_save(key, data, overwrite=True):
+    global _postgres_ready
     if not _postgres_ready:
         return False
     conflict = 'DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()' if overwrite else 'DO NOTHING'
@@ -204,6 +205,7 @@ def postgres_save(key, data, overwrite=True):
             )
         return True
     except Exception as e:
+        _postgres_ready = False
         print(f'[Postgres] write failed for {key}: {e}', flush=True)
         return False
 
