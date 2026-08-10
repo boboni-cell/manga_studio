@@ -97,6 +97,7 @@ THIRD_PARTY_MODEL_ID = "third-party"
 AGNES_API_BASE = "https://apihub.agnes-ai.com/v1"
 AGNES_VIDEO_MODEL_ID = "agnes-video-v2.0"
 AGNES_IMAGE_MODEL_ID = "agnes-image-2.1-flash"
+MINIMAX_VIDEO_MODEL_ID = "MiniMax-H3"
 ATLAS_API_BASE = "https://api.atlascloud.ai/api/v1"
 
 ALL_MODELS = ["seedance", AGNES_VIDEO_MODEL_ID] + sorted(NANO_GPT_NAMES) + ([THIRD_PARTY_MODEL_ID] if THIRD_PARTY_API_KEY or THIRD_PARTY_API_BASE else [])
@@ -114,6 +115,15 @@ MODEL_CAPS = {
         "supports_reference_images": False,
         "resolutions": ["480p", "720p", "1080p"],
         "ratios": ["16:9", "9:16", "1:1", "4:3", "3:4"],
+        "min_duration": 4,
+        "max_duration": 15,
+    },
+    MINIMAX_VIDEO_MODEL_ID: {
+        "supports_first_frame": True,
+        "supports_last_frame": True,
+        "supports_reference_images": True,
+        "resolutions": ["768p", "2K"],
+        "ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
         "min_duration": 4,
         "max_duration": 15,
     },
@@ -578,12 +588,17 @@ def get_api_profiles(kind, user_id=None):
     return profiles, selected
 
 def public_api_profile(profile):
-    return {
+    public = {
         'id': profile.get('id'), 'name': profile.get('name', ''),
         'provider': profile.get('provider', ''), 'base_url': profile.get('base_url', ''),
         'model': profile.get('model', ''), 'configured': bool(profile.get('api_key')),
         'last_test': profile.get('last_test')
     }
+    model_name = str(profile.get('model') or '').lower()
+    capabilities = next((caps for name, caps in MODEL_CAPS.items() if name.lower() == model_name), None)
+    if capabilities:
+        public['capabilities'] = capabilities
+    return public
 
 def get_personal_api(kind, user_id=None, profile_id=None):
     profiles, selected = get_api_profiles(kind, user_id)
@@ -1501,7 +1516,9 @@ def minimax_video_generate(job_id, script, images, audio_url, video_url, first_f
         if audio_url:
             content.append({'type': 'audio_url', 'audio_url': {'url': public_url(audio_url)}, 'role': 'reference_audio'})
 
-        minimax_resolution = '2K' if resolution in ('1080p', '1440p', '2K') else '768P'
+        minimax_resolution = {'768p': '768P', '768P': '768P', '2K': '2K', '2k': '2K'}.get(resolution)
+        if not minimax_resolution:
+            raise Exception(f'MiniMax H3 不支持分辨率 {resolution}，仅支持 768p 和 2K')
         minimax_ratio = ratio if ratio in ('21:9', '16:9', '4:3', '1:1', '3:4', '9:16') else '16:9'
         minimax_duration = max(4, min(15, int(duration)))
         payload = {
@@ -2162,14 +2179,18 @@ def generate():
     except QuotaError as e:
         return jsonify(error=str(e)), 402
     video_model = video_cfg['model']
-    if video_cfg.get('provider') == 'agnes':
-        agnes_caps = MODEL_CAPS[AGNES_VIDEO_MODEL_ID]
-        if ratio not in agnes_caps['ratios']:
-            return jsonify(error=f'Agnes Video v2.0 不支持比例 {ratio}'), 400
-        if resolution not in agnes_caps['resolutions']:
-            return jsonify(error=f'Agnes Video v2.0 不支持分辨率 {resolution}'), 400
-        if duration < agnes_caps['min_duration'] or duration > agnes_caps['max_duration']:
-            return jsonify(error=f"Agnes Video v2.0 时长仅支持 {agnes_caps['min_duration']}-{agnes_caps['max_duration']} 秒"), 400
+    video_caps = MODEL_CAPS.get(video_model) or MODEL_CAPS.get(selected_model)
+    if video_caps:
+        supported_ratios = video_caps.get('ratios') or []
+        supported_resolutions = video_caps.get('resolutions') or []
+        if supported_ratios and ratio not in supported_ratios:
+            return jsonify(error=f'{video_model} 不支持比例 {ratio}'), 400
+        if supported_resolutions and resolution not in supported_resolutions:
+            return jsonify(error=f'{video_model} 不支持分辨率 {resolution}，请选择 {" / ".join(supported_resolutions)}'), 400
+        min_duration = video_caps.get('min_duration')
+        max_duration = video_caps.get('max_duration')
+        if min_duration is not None and duration < min_duration or max_duration is not None and duration > max_duration:
+            return jsonify(error=f'{video_model} 时长仅支持 {min_duration}-{max_duration} 秒'), 400
     JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
 

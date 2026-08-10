@@ -2561,7 +2561,7 @@ async function buildModelSelect() {
 function buildResSelect() {
   let sel = document.getElementById('resSelect');
   if (!sel) return;
-  const caps = modelCaps[videoModel] || {};
+  const caps = currentVideoCaps();
   const resolutions = caps.resolutions || ['480p','720p'];
   sel.innerHTML = '';
   resolutions.forEach(r => {
@@ -2577,8 +2577,16 @@ function buildResSelect() {
   }
 }
 
+function currentVideoCaps() {
+  if (videoModel !== 'personal-api') return modelCaps[videoModel] || {};
+  const profiles = (apiProfileData.api_profiles || {}).video || [];
+  const selectedId = (apiProfileData.selected_api_profiles || {}).video;
+  const profile = profiles.find(p => p.id === selectedId);
+  return (profile && (profile.capabilities || modelCaps[profile.model])) || {};
+}
+
 function syncVideoModelControls() {
-  const caps = modelCaps[videoModel] || {};
+  const caps = currentVideoCaps();
   const ratios = caps.ratios || [];
   const ratioButtons = Array.from(document.querySelectorAll('.ratio-btn[data-r]'));
   ratioButtons.forEach(function(btn) {
