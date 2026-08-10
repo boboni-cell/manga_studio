@@ -2379,7 +2379,7 @@ function buildApiProfileSelects() {
       option.selected = profile.id === selected;
       sel.appendChild(option);
     });
-    sel.title = Number(apiProfileData.points || 0) > 0 ? '积分用完后自动使用这里选中的接口' : '当前生成使用这里选中的个人接口';
+    sel.title = '当前生成使用这里选中的个人接口（不扣平台积分）';
   });
   syncApiRouteControls();
 }

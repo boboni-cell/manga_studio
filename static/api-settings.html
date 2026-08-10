@@ -18,7 +18,7 @@
   <main>
     <h1>我的 API</h1>
     <p class="sub">每个账号可以保存多个接口配置；密钥只保存在当前账号中，其他账号看不到。</p>
-    <div class="notice">平台会先使用赠送积分和内置模型。当积分用完后，文本、图片、视频任务才分别切换到你在下面接入的 API。</div>
+    <div class="notice">平台内置模型按管理员设置的单价扣分；积分不足时可在工作台选择你接入的个人 API，个人 API 不扣平台积分。</div>
     <div class="summary"><span class="pill" id="points">积分：--</span><span class="pill" id="routeState">当前线路：--</span></div>
     <div class="grid" id="apiGrid"></div>
   </main>
@@ -57,8 +57,8 @@
       const r=await fetch('/api/settings'),d=await r.json();
       if(!r.ok){apiGrid.innerHTML='<div class="bad">'+esc(d.error||'加载失败')+'</div>';return;}
       apiData=d;
-      points.textContent='积分：'+(d.points||0);
-      routeState.textContent='当前线路：'+(d.using_personal?'个人 API':'平台内置 API');
+      points.textContent=d.unlimited_points?'积分：管理员不限':'积分：'+(d.points||0);
+      routeState.textContent=d.unlimited_points?'计费：管理员免积分':'计费：内置模型按后台定价';
       Object.keys(TYPES).forEach(kind=>{const profiles=d.api_profiles[kind]||[],active=d.selected_api_profiles[kind];editing[kind]=profiles.some(x=>x.id===active)?active:(profiles[0]||{}).id||null;});
       apiGrid.innerHTML=Object.keys(TYPES).map(renderCard).join('');
       Object.keys(TYPES).forEach(fillEditor);

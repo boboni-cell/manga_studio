@@ -280,6 +280,7 @@ def styles_path(user_id=None): return user_data_path('styles', user_id)
 def settings_path(user_id=None): return user_data_path('api_settings', user_id)
 def users_path(): return os.path.join(DATA, 'users.json')
 def invitations_path(): return os.path.join(DATA, 'invitations.json')
+def model_pricing_path(): return os.path.join(DATA, 'model_pricing.json')
 
 def insert_history(entry, limit=100, user_id=None):
     with HISTORY_LOCK:
@@ -613,14 +614,12 @@ def use_personal_api(user_id=None):
     return int(user.get('points') or 0) <= 0
 
 def resolve_api(kind, builtin, user_id=None, force_personal=False, profile_id=None, strict_builtin=False):
-    if not force_personal and not use_personal_api(user_id): return builtin
-    if not force_personal and strict_builtin:
-        raise QuotaError('平台积分已用完，请在模型中选择「自己的 API」')
+    if not force_personal: return builtin
     personal = get_personal_api(kind, user_id, profile_id)
     if personal.get('api_key') and personal.get('base_url') and personal.get('model'): return personal
     if force_personal:
         raise QuotaError('请选择一个已保存且配置完整的个人 API')
-    raise QuotaError('平台积分已用完，请先在「我的 API」中接入自己的接口')
+    return builtin
 
 def get_user_api_settings(user_id=None):
     return {
@@ -632,6 +631,72 @@ def is_admin(user_id=None):
     user_id = (user_id or current_user_id() or '').lower()
     admins = {item.strip().lower() for item in os.environ.get('ADMIN_USERS', '').split(',') if item.strip()}
     return user_id in admins
+
+def model_pricing_catalog():
+    labels = {
+        'doubao': '豆包', 'glm46': 'GPT-4.1 Mini', 'claude46': 'Claude 4.6',
+        'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney',
+        AGNES_IMAGE_MODEL_ID: 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5',
+        'seedance': 'Seedance（火山）', AGNES_VIDEO_MODEL_ID: 'Agnes Video v2.0',
+        'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine',
+        'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro',
+        THIRD_PARTY_MODEL_ID: '第三方内置模型',
+    }
+    groups = {
+        'text': list(SCRIPT_MODELS),
+        'image': list(ALL_IMAGE_MODELS),
+        'video': list(dict.fromkeys(ALL_MODELS)),
+    }
+    return [
+        {'kind': kind, 'model': model, 'label': labels.get(model, model),
+         'unit': 'second' if kind == 'video' else 'request'}
+        for kind, models in groups.items() for model in models
+    ]
+
+def load_model_pricing():
+    stored = load_json(model_pricing_path(), {})
+    return stored if isinstance(stored, dict) else {}
+
+def model_point_cost(kind, model, quantity=1):
+    pricing = load_model_pricing()
+    unit_price = max(0, int((pricing.get(kind) or {}).get(model) or 0))
+    multiplier = max(1, int(quantity or 1)) if kind == 'video' else 1
+    return unit_price * multiplier
+
+def reserve_model_points(kind, model, user_id=None, quantity=1, personal=False):
+    user_id = (user_id or current_user_id() or '').lower()
+    if personal or is_admin(user_id): return 0
+    cost = model_point_cost(kind, model, quantity)
+    if cost <= 0: return 0
+    with USERS_LOCK:
+        users = load_json(users_path(), {})
+        user = users.get(user_id)
+        if not user: raise QuotaError('用户不存在')
+        balance = max(0, int(user.get('points') or 0))
+        if balance < cost:
+            unit = f'（{quantity}秒 × {cost // max(1, int(quantity or 1))}分）' if kind == 'video' else ''
+            raise QuotaError(f'积分不足：本次需要 {cost} 分{unit}，当前剩余 {balance} 分。可选择「自己的 API」')
+        user['points'] = balance - cost
+        save_json(users_path(), users)
+    return cost
+
+def refund_model_points(user_id, cost):
+    if not cost or is_admin(user_id): return
+    with USERS_LOCK:
+        users = load_json(users_path(), {})
+        if user_id not in users: return
+        users[user_id]['points'] = max(0, int(users[user_id].get('points') or 0)) + int(cost)
+        save_json(users_path(), users)
+
+def start_metered_job(target, args, job_id, user_id, point_cost):
+    def runner():
+        try:
+            target(*args)
+        except Exception as exc:
+            JOBS[job_id] = {'status': 'failed', 'error': str(exc)}
+        if point_cost and JOBS.get(job_id, {}).get('status') == 'failed':
+            refund_model_points(user_id, point_cost)
+    threading.Thread(target=runner, daemon=True).start()
 
 def admin_required(f):
     @functools.wraps(f)
@@ -732,7 +797,8 @@ def logout():
 @login_required
 def auth_me():
     user = load_json(users_path(), {}).get(current_user_id(), {})
-    return jsonify(username=user.get('username', current_user_id()), is_admin=is_admin(), model_permissions=user.get('model_permissions', []), points=user.get('points', 0))
+    admin = is_admin()
+    return jsonify(username=user.get('username', current_user_id()), is_admin=admin, model_permissions=user.get('model_permissions', []), points=None if admin else user.get('points', 0), unlimited_points=admin)
 
 @app.route('/api/settings', methods=['GET', 'POST'])
 @login_required
@@ -773,10 +839,12 @@ def api_settings():
         apis[kind] = public_api_profile(selected_cfg)
         api_profiles[kind] = [public_api_profile(item) for item in profiles]
         selected_profiles[kind] = selected
+    admin = is_admin()
     return jsonify(
         apis=apis, api_profiles=api_profiles, selected_api_profiles=selected_profiles,
         using_personal=use_personal_api(),
-        points=load_json(users_path(), {}).get(current_user_id(), {}).get('points', 0)
+        points=None if admin else load_json(users_path(), {}).get(current_user_id(), {}).get('points', 0),
+        unlimited_points=admin
     )
 
 @app.route('/api/settings/<kind>/<profile_id>/select', methods=['POST'])
@@ -862,7 +930,8 @@ def admin_users():
     result = []
     for user_id, user in users.items():
         history = load_json(history_path(user_id), [])
-        result.append({'id': user_id, 'username': user.get('username', user_id), 'created_at': user.get('created_at', ''), 'disabled': bool(user.get('disabled')), 'is_admin': is_admin(user_id), 'history_count': len(history) if isinstance(history, list) else 0, 'permissions': user.get('model_permissions', []), 'points': user.get('points', 0)})
+        admin = is_admin(user_id)
+        result.append({'id': user_id, 'username': user.get('username', user_id), 'created_at': user.get('created_at', ''), 'disabled': bool(user.get('disabled')), 'is_admin': admin, 'history_count': len(history) if isinstance(history, list) else 0, 'permissions': user.get('model_permissions', []), 'points': None if admin else user.get('points', 0)})
     result.sort(key=lambda item: item['created_at'], reverse=True)
     return jsonify(users=result, total=len(result))
 
@@ -877,6 +946,47 @@ def admin_user_status(user_id):
     users[user_id]['disabled'] = disabled
     save_json(users_path(), users)
     return jsonify(ok=True)
+
+@app.route('/api/admin/users/<user_id>/points', methods=['POST'])
+@admin_required
+def admin_user_points(user_id):
+    user_id = user_id.lower()
+    users = load_json(users_path(), {})
+    if user_id not in users: return jsonify(error='用户不存在'), 404
+    if is_admin(user_id): return jsonify(error='管理员账号不使用积分'), 400
+    try:
+        points = int((request.json or {}).get('points'))
+    except (TypeError, ValueError):
+        return jsonify(error='积分必须是整数'), 400
+    if points < 0: return jsonify(error='积分不能小于 0'), 400
+    with USERS_LOCK:
+        users = load_json(users_path(), {})
+        if user_id not in users: return jsonify(error='用户不存在'), 404
+        users[user_id]['points'] = points
+        save_json(users_path(), users)
+    return jsonify(ok=True, points=points)
+
+@app.route('/api/admin/model-pricing', methods=['GET', 'POST'])
+@admin_required
+def admin_model_pricing():
+    catalog = model_pricing_catalog()
+    allowed = {(item['kind'], item['model']) for item in catalog}
+    if request.method == 'POST':
+        body = request.json or {}
+        kind = str(body.get('kind') or '')
+        model = str(body.get('model') or '')
+        if (kind, model) not in allowed: return jsonify(error='模型不在平台内置列表中'), 400
+        try:
+            points = int(body.get('points'))
+        except (TypeError, ValueError):
+            return jsonify(error='积分必须是整数'), 400
+        if points < 0: return jsonify(error='积分不能小于 0'), 400
+        pricing = load_model_pricing()
+        pricing.setdefault(kind, {})[model] = points
+        save_json(model_pricing_path(), pricing)
+    pricing = load_model_pricing()
+    rows = [dict(item, points=max(0, int((pricing.get(item['kind']) or {}).get(item['model']) or 0))) for item in catalog]
+    return jsonify(models=rows)
 
 @app.route('/api/admin/personal-apis')
 @admin_required
@@ -2049,6 +2159,8 @@ def generate_image():
     prompt = body.get('prompt', '').strip()
     selected_model = body.get('image_model', 'gpt-image-2')
     force_personal = bool(body.get('use_personal_api')) or selected_model == 'personal-api'
+    if not force_personal and selected_model not in ALL_IMAGE_MODELS:
+        return jsonify(error='无效的图片模型'), 400
     if selected_model == AGNES_IMAGE_MODEL_ID:
         builtin = {'provider': 'agnes', 'base_url': AGNES_API_BASE, 'api_key': AGNES_API_KEY, 'model': AGNES_IMAGE_MODEL_ID}
     elif selected_model in NANO_GPT_IMAGE_MODELS:
@@ -2088,6 +2200,11 @@ def generate_image():
             if style.get('thumbnail_url'):
                 input_images.append({'url': style['thumbnail_url'], 'role_label': '风格参考'})
 
+    try:
+        point_cost = reserve_model_points('image', selected_model, user_id, personal=force_personal)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
+
     job_id = uuid.uuid4().hex
     JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'url': None, 'name': None, 'error': None,
@@ -2125,7 +2242,7 @@ def generate_image():
         except Exception as e:
             JOBS[job_id] = {'status': 'failed', 'url': None, 'error': str(e)}
 
-    threading.Thread(target=run, daemon=True).start()
+    start_metered_job(run, (), job_id, user_id, point_cost)
     return jsonify(job_id=job_id)
 
 
@@ -2159,6 +2276,8 @@ def generate():
     optimize    = body.get('optimize_prompt', True)
     selected_model = body.get('video_model', 'seedance')
     force_personal = bool(body.get('use_personal_api')) or selected_model == 'personal-api'
+    if not force_personal and selected_model not in ALL_MODELS:
+        return jsonify(error='无效的视频模型'), 400
     if selected_model == AGNES_VIDEO_MODEL_ID:
         builtin = {'provider': 'agnes', 'base_url': AGNES_API_BASE, 'api_key': AGNES_API_KEY, 'model': AGNES_VIDEO_MODEL_ID}
     elif selected_model in NANO_GPT_NAMES:
@@ -2191,9 +2310,6 @@ def generate():
         max_duration = video_caps.get('max_duration')
         if min_duration is not None and duration < min_duration or max_duration is not None and duration > max_duration:
             return jsonify(error=f'{video_model} 时长仅支持 {min_duration}-{max_duration} 秒'), 400
-    JOB_OWNERS[job_id] = user_id
-    JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
-
     # Inject style
     if style_id:
         styles, changed = ensure_default_styles(load_json(styles_path(), []))
@@ -2218,21 +2334,28 @@ def generate():
     if optimize and script.strip():
         script = refine_prompt(script, images, ratio, duration, user_id=user_id)
 
+    try:
+        point_cost = reserve_model_points('video', selected_model, user_id, quantity=duration, personal=force_personal)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
+    JOB_OWNERS[job_id] = user_id
+    JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
+
     # ── Atlas Cloud path ──
     if video_cfg.get('provider') == 'atlas':
-        threading.Thread(target=atlas_video_generate, args=(
+        start_metered_job(atlas_video_generate, (
             job_id, script, images, audio_url, video_url, ratio, duration, resolution,
             host_url, video_model, video_cfg['api_key'], video_cfg['base_url'],
             original_script, optimize, user_id
-        ), daemon=True).start()
+        ), job_id, user_id, point_cost)
         return jsonify(job_id=job_id)
 
     # ── Agnes path ──
     if video_cfg.get('provider') == 'agnes':
-        threading.Thread(target=agnes_video_generate, args=(
+        start_metered_job(agnes_video_generate, (
             job_id, script, ratio, duration, resolution, original_script, optimize,
             video_cfg['api_key'], user_id, video_cfg['base_url'], video_model
-        ), daemon=True).start()
+        ), job_id, user_id, point_cost)
         return jsonify(job_id=job_id)
 
     # ── Nano-GPT path ──
@@ -2240,20 +2363,21 @@ def generate():
         if not video_cfg.get('api_key'):
             JOBS[job_id] = {'status': 'failed', 'video_url': None,
                             'error': 'NANO_GPT_API_KEY 未设置。请 export NANO_GPT_API_KEY=sk-nano-xxx 后重启服务'}
+            refund_model_points(user_id, point_cost)
             return jsonify(job_id=job_id)
-        threading.Thread(target=nano_gpt_generate, args=(
+        start_metered_job(nano_gpt_generate, (
             job_id, video_model, script, images, audio_url, video_url, ratio, duration, host_url,
             resolution, original_script, optimize, video_cfg['api_key'], user_id, video_cfg['base_url']
-        ), daemon=True).start()
+        ), job_id, user_id, point_cost)
         return jsonify(job_id=job_id)
 
     # ── MiniMax H3 path ──
     if video_cfg.get('provider') == 'minimax':
-        threading.Thread(target=minimax_video_generate, args=(
+        start_metered_job(minimax_video_generate, (
             job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url,
             ratio, duration, resolution, host_url, video_model, video_cfg['api_key'],
             video_cfg['base_url'], original_script, optimize, user_id
-        ), daemon=True).start()
+        ), job_id, user_id, point_cost)
         return jsonify(job_id=job_id)
 
     # ── Third-party path ──
@@ -2261,12 +2385,13 @@ def generate():
         if not video_cfg.get('api_key') or not video_cfg.get('base_url'):
             JOBS[job_id] = {'status': 'failed', 'video_url': None,
                             'error': '第三方模型未配置。请设置 THIRD_PARTY_API_BASE 和 THIRD_PARTY_API_KEY 环境变量后重启服务'}
+            refund_model_points(user_id, point_cost)
             return jsonify(job_id=job_id)
-        threading.Thread(target=third_party_video_adapter, args=(
+        start_metered_job(third_party_video_adapter, (
             job_id, script, images, audio_url, video_url, ratio, duration, host_url,
             video_model, resolution, original_script, optimize,
             video_cfg['base_url'], video_cfg['api_key'], user_id
-        ), daemon=True).start()
+        ), job_id, user_id, point_cost)
         return jsonify(job_id=job_id)
 
     # ── Ark Seedance path (default) ──
@@ -2359,7 +2484,7 @@ def generate():
         except Exception as e:
             JOBS[job_id] = {'status':'failed','video_url':None,'error':str(e)}
 
-    threading.Thread(target=run, daemon=True).start()
+    start_metered_job(run, (), job_id, user_id, point_cost)
     return jsonify(job_id=job_id)
 
 @app.route('/api/status/<job_id>')
@@ -2678,6 +2803,8 @@ def script_brainstorm():
     topic = body.get('topic', '').strip()
     script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
     force_personal = bool(body.get('use_personal_api')) or script_model == 'personal-api'
+    if not force_personal and script_model not in SCRIPT_MODELS:
+        return jsonify(error='无效的文本模型'), 400
     if not topic:
         return jsonify(error='请输入主题或关键词'), 400
 
@@ -2691,6 +2818,7 @@ def script_brainstorm():
         '直接输出剧本文本，不要markdown格式，不要角色列表。\n'
         + style_rule
     )
+    point_cost = 0
     try:
         api_cfg = resolve_api(
             'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
@@ -2698,11 +2826,13 @@ def script_brainstorm():
             profile_id=body.get('api_profile_id'),
             strict_builtin='use_personal_api' in body and not force_personal
         )
+        point_cost = reserve_model_points('text', script_model, current_user_id(), personal=force_personal)
         text = call_script_text_model(script_model, system_prompt, topic, temperature=0.8, max_tokens=2000, api_cfg=api_cfg)
         return jsonify(text=text)
     except QuotaError as e:
         return jsonify(error=str(e)), 402
     except Exception as e:
+        refund_model_points(current_user_id(), point_cost)
         return jsonify(error=f'生成失败: {str(e)}'), 500
 
 
@@ -2719,12 +2849,16 @@ def script_split():
     user_id = current_user_id()
     script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
     force_personal = bool(body.get('use_personal_api')) or script_model == 'personal-api'
+    if not force_personal and script_model not in SCRIPT_MODELS:
+        return jsonify(error='无效的文本模型'), 400
+    point_cost = 0
     try:
         api_cfg = resolve_api(
             'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
             user_id, force_personal=force_personal, profile_id=body.get('api_profile_id'),
             strict_builtin='use_personal_api' in body and not force_personal
         )
+        point_cost = reserve_model_points('text', script_model, user_id, personal=force_personal)
     except QuotaError as e:
         return jsonify(error=str(e)), 402
     JOB_OWNERS[job_id] = user_id
@@ -2743,6 +2877,7 @@ def script_split():
                 'finished_at': time.time()
             })
         except Exception as e:
+            refund_model_points(user_id, point_cost)
             SCRIPT_JOBS[job_id].update({
                 'status': 'error',
                 'error': str(e),
