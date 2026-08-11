@@ -337,11 +337,14 @@ def ensure_default_styles(styles):
     return merged, changed
 
 # Ensure data directory and files exist (for fresh Volume mounts)
+LIVE_ACTION_STYLE_ID = 'style_1'
+LIVE_ACTION_GLOBAL_MARKER = '【全局真人影视风格｜全程生效】'
+
 DEFAULT_STYLES = [{'id': 'style_1',
   'name': '真人短剧',
   'thumbnail_url': 'https://movie1.tos-cn-beijing.volces.com/6765e87c2c4540c09f4ede7be5e2bb2b',
-  'prompt': '整体呈现真人短剧剧照风格，画面像真实拍摄的竖屏短剧或网络剧。人物外貌自然好看，五官清晰稳定，皮肤真实不过度磨皮，不要塑料感和廉价网红滤镜。服装、发型、妆容符合现实生活审美，表情有戏但不过分夸张。光线以柔和自然光或室内影视灯为主，面部受光清楚，背景不过曝不死黑。构图服务剧情，人物关系明确，画面干净，情绪直接，适合连续生成真人AI短剧视频。',
-  'negative_prompt': '低清晰度，模糊，画面脏乱，构图混乱，人物五官变形，脸部崩坏，年龄漂移，性别变化，多余人物，肢体畸形，手指错误，手部融合，服装穿模，身体比例异常，主体被裁切，背景物体扭曲，字幕，水印，文字，Logo，边框，拼贴，多格漫画',
+  'prompt': '真人影视质感，8K超高清，RAW胶片质感。人物面部写实，保留原生细腻真实皮肤肌理、毛孔、细纹、泪光和自然刘海，五官稳定且有充分面部细节。根据剧情使用过肩拍摄和轻微俯视视角，前景人物背部或肩部遮挡并虚化。户外柔焦夜景，微弱暖调环境微光，浅景深、背景虚化，低饱和清冷电影色调。轻微呼吸运镜，画面丝滑流畅，动态舒缓自然，表情克制，无夸张大幅度动作，营造细腻、破碎、伤感的情绪氛围。',
+  'negative_prompt': '五官扭曲，夸张大哭大笑，浓重滤镜，过度磨皮，塑料假脸，畸形肢体，手指错误，服装穿模，高饱和强光，画面卡顿，水印文字，多余人物，红眼特效，浓妆',
   'use_for_image': True,
   'use_for_video': True,
   'created_at': '2026-06-14 12:00'},
@@ -1226,9 +1229,40 @@ def call_platform_text(system_prompt, user_content, temperature=0.7, max_tokens=
     if r.status_code != 200: raise Exception(f'文本 API 调用失败: {r.status_code} {r.text[:300]}')
     return r.json()['choices'][0]['message']['content'].strip()
 
-def refine_prompt(script, images, ratio, duration, ark_api_key=None, user_id=None):
+def load_prompt_style(style_id, user_id=None):
+    if not style_id:
+        return None
+    styles, changed = ensure_default_styles(load_json(styles_path(user_id), []))
+    if changed:
+        save_json(styles_path(user_id), styles)
+    return next((item for item in styles if item.get('id') == style_id), None)
+
+
+def refine_prompt(script, images, ratio, duration, ark_api_key=None, user_id=None, style_id=None):
     """Use text model to optimize the user's script into a video-ready Chinese prompt."""
     role_desc = '、'.join([img.get('role_label', '参考图') for img in images]) if images else '无参考图'
+    live_style = load_prompt_style(style_id, user_id) if style_id == LIVE_ACTION_STYLE_ID else None
+
+    if live_style and LIVE_ACTION_GLOBAL_MARKER in script and '精准分镜时序脚本】' in script:
+        return script
+
+    live_action_rule = ''
+    output_rule = '5. 输出纯中文，不要英文，不要 markdown，不超过 500 字'
+    max_tokens = 1000
+    if live_style:
+        live_action_rule = (
+            '5. 当前已选“真人短剧”风格。必须严格按以下四段输出：\n'
+            f'{LIVE_ACTION_GLOBAL_MARKER}\n{live_style.get("prompt", "").strip()}\n'
+            f'【负面词】\n{live_style.get("negative_prompt", "").strip()}\n'
+            f'【{duration}秒精准分镜时序脚本】\n'
+            '00:00-00:01｜1秒｜景别、机位/运镜、人物表情、视线、动作、情绪和画面重点。\n'
+            f'按每1秒一条连续写到00:{int(duration):02d}，时间不得缺口、重叠或超出{duration}秒；每秒都必须是可拍摄、可视化的具体变化，不得只写“保持”。\n'
+            '【连续性与质量约束】\n'
+            '写明人物身份、服装、场景、光线的连续性，以及动作和运镜的自然衔接。\n'
+            '6. 不要解释，不要 markdown，不要省略任何一秒。'
+        )
+        output_rule = ''
+        max_tokens = 3000
 
     system_prompt = (
         '你是一个专业的漫剧分镜优化师。用户会提供一段分镜描述和参考素材信息，'
@@ -1238,7 +1272,7 @@ def refine_prompt(script, images, ratio, duration, ark_api_key=None, user_id=Non
         '2. 必须提及画幅比例和时长信息\n'
         '3. 明确区分各参考图的用途（人物/服装/场景），不得混用\n'
         '4. 保留用户原始描述中的风格要求；原文没有风格要求时，不得自行添加真人拍摄、真实摄影、动漫、漫画、3D或其他视觉风格\n'
-        '5. 输出纯中文，不要英文，不要 markdown，不超过 500 字'
+        + output_rule + ('\n' if output_rule and live_action_rule else '') + live_action_rule
     )
 
     user_prompt = (
@@ -1250,8 +1284,14 @@ def refine_prompt(script, images, ratio, duration, ark_api_key=None, user_id=Non
     )
 
     try:
-        refined = call_platform_text(system_prompt, user_prompt, temperature=0.7, max_tokens=1000, user_id=user_id)
+        refined = call_platform_text(system_prompt, user_prompt, temperature=0.7, max_tokens=max_tokens, user_id=user_id)
         if refined:
+            if live_style and LIVE_ACTION_GLOBAL_MARKER not in refined:
+                refined = (
+                    f'{LIVE_ACTION_GLOBAL_MARKER}\n{live_style.get("prompt", "").strip()}\n'
+                    f'【负面词】\n{live_style.get("negative_prompt", "").strip()}\n'
+                    f'【{duration}秒精准分镜时序脚本】\n{refined}'
+                )
             return refined
     except Exception as e:
         print(f'[refine_prompt] 优化失败，使用原始脚本: {e}')
@@ -2312,27 +2352,26 @@ def generate():
             return jsonify(error=f'{video_model} 时长仅支持 {min_duration}-{max_duration} 秒'), 400
     # Inject style
     if style_id:
-        styles, changed = ensure_default_styles(load_json(styles_path(), []))
-        if changed:
-            save_json(styles_path(), styles)
-        style = next((s for s in styles if s.get('id') == style_id), None)
+        style = load_prompt_style(style_id, user_id)
         if style:
             # add thumbnail as reference
             if style.get('thumbnail_url'):
                 images.append({'url': style['thumbnail_url'], 'role_label': '风格参考'})
-            # prepend style prompt to script
-            if style.get('prompt'):
-                script = style.get('prompt', '') + '\n' + script
-            # append negative prompt to quality constraints
-            if style.get('negative_prompt'):
-                script += '\n【风格约束】避免：' + style.get('negative_prompt', '')
+            # A storyboard prompt may already contain the complete live-action block.
+            if LIVE_ACTION_GLOBAL_MARKER not in script:
+                if style.get('prompt'):
+                    prefix = LIVE_ACTION_GLOBAL_MARKER + '\n' if style_id == LIVE_ACTION_STYLE_ID else ''
+                    script = prefix + style.get('prompt', '') + '\n' + script
+                if style.get('negative_prompt'):
+                    script += '\n【风格约束】避免：' + style.get('negative_prompt', '')
             # add style reference instruction
             style_instruction = '\n【风格参考】已提供风格参考图，该图仅用于约束画面风格、色彩倾向、光影质感、材质表现和视觉语言。不要把风格参考当作角色身份、服装设计或具体场景结构。角色以角色参考为准，场景以场景参考为准。'
-            script = script.rstrip() + style_instruction + '\n'
+            if '【风格参考】' not in script:
+                script = script.rstrip() + style_instruction + '\n'
 
     original_script = script
     if optimize and script.strip():
-        script = refine_prompt(script, images, ratio, duration, user_id=user_id)
+        script = refine_prompt(script, images, ratio, duration, user_id=user_id, style_id=style_id)
 
     try:
         point_cost = reserve_model_points('video', selected_model, user_id, quantity=duration, personal=force_personal)
@@ -2909,10 +2948,7 @@ def script_style_rule(style_id, target='video_prompt', user_id=None):
             return '用户未选择风格：不要添加真人拍摄、真实摄影、动漫、漫画、3D或其他视觉风格描述。'
         return '【风格规则】用户未选择风格。所有 video_prompt 只写剧情、镜头、动作和技术质量，不得主动添加真人拍摄、真实摄影、动漫、漫画、3D或其他视觉风格词。'
 
-    styles, changed = ensure_default_styles(load_json(styles_path(user_id), []))
-    if changed:
-        save_json(styles_path(user_id), styles)
-    style = next((item for item in styles if item.get('id') == style_id), None)
+    style = load_prompt_style(style_id, user_id)
     if not style:
         if target == 'script':
             return '所选风格不存在：不要添加任何视觉风格描述。'
@@ -2922,7 +2958,74 @@ def script_style_rule(style_id, target='video_prompt', user_id=None):
     prompt = style.get('prompt', '').strip()
     if target == 'script':
         return f'【用户已选风格：{name}】场景氛围和视觉描述必须遵守以下要求，不得改成其他风格：{prompt}'
+    if style_id == LIVE_ACTION_STYLE_ID:
+        return (
+            f'【用户已选风格：{name}】每个段落必须遵守以下全局风格：{prompt}\n'
+            f'【负面词】{style.get("negative_prompt", "").strip()}\n'
+            '每个 JSON 对象必须额外输出 timeline 字段，值为字符串数组。'
+            '根据该对象的 duration，从00:00开始到结束，每1秒一条，时间必须连续，不得缺口、重叠或超时。'
+            '每条严格使用“00:00-00:01｜1秒｜景别，机位/运镜，人物表情、视线、动作、情绪和画面重点”格式。'
+            '每秒都要写出具体变化，不得只写“保持”。video_prompt 只写整体连续镜头指令和技术约束，不要重复 timeline。'
+        )
     return f'【用户已选风格：{name}】每个 video_prompt 必须遵守以下风格要求，不得添加其他风格：{prompt}'
+
+
+def format_shot_timeline(shot):
+    timeline = shot.get('timeline')
+    if not timeline:
+        timeline = shot.get('beats') or []
+    if isinstance(timeline, str):
+        return timeline.strip()
+    if not isinstance(timeline, list):
+        return ''
+
+    lines = []
+    for item in timeline:
+        if isinstance(item, str):
+            if item.strip():
+                lines.append(item.strip())
+            continue
+        if not isinstance(item, dict):
+            continue
+        time_range = item.get('time') or item.get('range') or ''
+        if not time_range and item.get('start') and item.get('end'):
+            time_range = f'{item["start"]}-{item["end"]}'
+        seconds = item.get('duration') or item.get('seconds') or ''
+        if isinstance(seconds, (int, float)):
+            seconds = f'{seconds:g}秒'
+        details = '，'.join(str(value).strip() for value in (
+            item.get('shot'), item.get('camera'), item.get('action'), item.get('emotion'), item.get('focus')
+        ) if value)
+        prefix = '｜'.join(part for part in (str(time_range).strip(), str(seconds).strip()) if part)
+        line = f'{prefix}｜{details}' if prefix and details else (prefix or details)
+        if line:
+            lines.append(line)
+    return '\n'.join(lines)
+
+
+def apply_live_action_prompt_blocks(shots, style_id, user_id=None):
+    if style_id != LIVE_ACTION_STYLE_ID:
+        return shots
+    style = load_prompt_style(style_id, user_id)
+    if not style:
+        return shots
+    for shot in shots:
+        if not isinstance(shot, dict):
+            continue
+        duration = shot.get('duration') or 5
+        timeline_text = format_shot_timeline(shot)
+        base_prompt = (shot.get('video_prompt') or shot.get('visual_prompt') or shot.get('prompt') or '').strip()
+        if LIVE_ACTION_GLOBAL_MARKER in base_prompt:
+            shot['video_prompt'] = base_prompt
+            continue
+        shot['timeline_text'] = timeline_text
+        shot['video_prompt'] = (
+            f'{LIVE_ACTION_GLOBAL_MARKER}\n{style.get("prompt", "").strip()}\n'
+            f'【负面词】\n{style.get("negative_prompt", "").strip()}\n'
+            f'【{duration}秒精准分镜时序脚本】\n{timeline_text}\n'
+            f'【连续性与质量约束】\n{base_prompt}'
+        ).strip()
+    return shots
 
 
 def build_script_shots(body, api_cfg=None, user_id=None):
@@ -2950,7 +3053,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             'video_prompt 结尾只加技术质量约束：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。除上述风格规则外不得自行补充风格词。\n'
             '不要 Markdown，不要解释，只输出 JSON 数组。'
         )
-        max_tokens = 1200
+        max_tokens = 2200 if body.get('style_id') == LIVE_ACTION_STYLE_ID else 1200
     else:
         system_prompt = (
             '你是专业AI短剧分镜导演。用户会提供剧本、剧情梗概或灵感，你要把它拆成"可直接生成的视频段落"，而不是机械拆成单个镜头。\n\n'
@@ -2978,7 +3081,10 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             + mode_instructions.get(mode, mode_instructions['smart']) + '\n\n'
             '输出格式必须是 JSON 数组，不要 Markdown，不要解释，只输出 JSON 数组。'
         )
-        max_tokens = 2600 if len(script_text) < 800 else 4000
+        if body.get('style_id') == LIVE_ACTION_STYLE_ID:
+            max_tokens = 5000 if len(script_text) < 800 else 7000
+        else:
+            max_tokens = 2600 if len(script_text) < 800 else 4000
     try:
         raw = call_script_text_model(script_model, system_prompt, script_text, temperature=0.6, max_tokens=max_tokens, api_cfg=api_cfg)
         if raw.startswith('```'):
@@ -2986,6 +3092,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
         if raw.endswith('```'):
             raw = raw.rsplit('\n', 1)[0]
         shots = parse_script_shots_json(raw, script_model, api_cfg=api_cfg)
+        shots = apply_live_action_prompt_blocks(shots, body.get('style_id'), user_id)
         insert_history({
             'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
             'type': 'script',

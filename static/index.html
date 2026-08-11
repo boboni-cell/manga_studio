@@ -4647,7 +4647,8 @@ function setScriptModel(model, btn) {
 
 function renderShots(segments) {
   const el = document.getElementById('scriptShots');
-  el.innerHTML = segments.map(s => {
+  _currentSegments = Array.isArray(segments) ? segments : [];
+  el.innerHTML = _currentSegments.map((s, segmentIndex) => {
     const no = s.segment_no || s.shot_no;
     const beats = Array.isArray(s.beats) ? s.beats : [];
     const chars = Array.isArray(s.characters) ? s.characters.join('、') : (s.characters || '');
@@ -4659,7 +4660,7 @@ function renderShots(segments) {
             <span style="color:var(--accent);">${escHtml(b.time || '')}</span> ${escHtml(b.shot || '')} · ${escHtml(b.camera || '')}<br>${escHtml(b.action || '')}
           </div>`).join('')}
       </div>` : '';
-    const vp = s.video_prompt || s.visual_prompt || s.prompt || s.story_action || s.action || '';
+    const vp = getSegmentVideoPrompt(s);
     return `
     <div class="shot-card" id="shot_${no}">
       <div class="shot-header">
@@ -4674,15 +4675,35 @@ function renderShots(segments) {
       ${s.story_action || s.action ? `<div class="shot-prompt"><b>剧情：</b>${escHtml(s.story_action || s.action)}</div>` : ''}
       ${s.dialogue ? `<div class="shot-prompt"><b>台词：</b>${escHtml(s.dialogue)}</div>` : ''}
       ${beatsHtml}
-      <div class="shot-prompt" style="color:var(--accent-dim);margin-top:6px;">${escHtml(vp)}</div>
+      <div class="shot-prompt" style="color:var(--accent-dim);margin-top:6px;white-space:pre-wrap;">${escHtml(vp)}</div>
       <div class="shot-actions">
-        <button onclick="fillShotPrompt('${escAttr(vp)}')">填入当前镜头</button>
-        <button onclick="fillImagePrompt('${escAttr(vp)}','${escAttr(s.story_action || s.action || '')}')">填入图片生成</button>
+        <button onclick="fillShotPromptByIndex(${segmentIndex})">填入当前镜头</button>
+        <button onclick="fillImagePromptByIndex(${segmentIndex})">填入图片生成</button>
         <button onclick="markShotGenerated('${no}')">标记已生成</button>
       </div>
     </div>`;
   }).join('');
   updateShotProgress();
+}
+
+function getSegmentVideoPrompt(segment) {
+  const vp = segment.video_prompt || segment.visual_prompt || segment.prompt || segment.story_action || segment.action || '';
+  if (vp.includes('精准分镜时序脚本')) return vp;
+  let timeline = segment.timeline_text || '';
+  if (!timeline && Array.isArray(segment.timeline)) {
+    timeline = segment.timeline.map(item => typeof item === 'string' ? item : '').filter(Boolean).join('\n');
+  }
+  return timeline ? `${vp}\n【${segment.duration || 5}秒精准分镜时序脚本】\n${timeline}`.trim() : vp;
+}
+
+function fillShotPromptByIndex(index) {
+  const segment = _currentSegments[index];
+  if (segment) fillShotPrompt(getSegmentVideoPrompt(segment));
+}
+
+function fillImagePromptByIndex(index) {
+  const segment = _currentSegments[index];
+  if (segment) fillImagePrompt(getSegmentVideoPrompt(segment), segment.story_action || segment.action || '');
 }
 
 function fillShotPrompt(prompt) {
