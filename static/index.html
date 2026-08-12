@@ -563,6 +563,12 @@ body {
   gap: 3px;
 }
 .ref-slot:hover { border-color: var(--border-light); }
+.ref-slot.model-unsupported {
+  opacity: 0.38;
+  cursor: not-allowed;
+  border-color: var(--border);
+}
+.ref-slot.model-unsupported:hover { border-color: var(--border); }
 .ref-slot.filled {
   border-style: solid;
   border-color: var(--border-light);
@@ -682,10 +688,23 @@ body {
   transition: border-color 0.15s;
 }
 .slot-gallery-item:hover { border-color: var(--accent); }
-.slot-gallery-item img {
+.slot-gallery-item img,
+.slot-gallery-item video {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.slot-gallery-item .at-audio {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 4px;
 }
 .slot-gallery-item .gallery-item-del {
   position: absolute;
@@ -1759,63 +1778,63 @@ input[type=file] { display: none; }
       <div class="shot-editor">
         <!-- Reference Slots -->
         <div class="ref-slots" id="refSlots">
-          <div class="ref-slot" data-slot="character" onclick="showSlotGallery(this,'character')">
+          <div class="ref-slot" data-slot="character" onclick="handleSlotClick(this,'character')">
             <span class="slot-icon">👤</span>
             <span class="slot-label">角色参考</span>
             <span class="slot-count" id="slotCountChar">0</span>
             <img class="slot-preview" id="slotPreviewChar" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('character')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="outfit" onclick="showSlotGallery(this,'outfit')">
+          <div class="ref-slot" data-slot="outfit" onclick="handleSlotClick(this,'outfit')">
             <span class="slot-icon">👗</span>
             <span class="slot-label">服装参考</span>
             <span class="slot-count" id="slotCountOutfit">0</span>
             <img class="slot-preview" id="slotPreviewOutfit" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('outfit')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="scene" onclick="showSlotGallery(this,'scene')">
+          <div class="ref-slot" data-slot="scene" onclick="handleSlotClick(this,'scene')">
             <span class="slot-icon">🏞</span>
             <span class="slot-label">场景参考</span>
             <span class="slot-count" id="slotCountScene">0</span>
             <img class="slot-preview" id="slotPreviewScene" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('scene')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="storyboard" onclick="showSlotGallery(this,'storyboard')">
+          <div class="ref-slot" data-slot="storyboard" onclick="handleSlotClick(this,'storyboard')">
             <span class="slot-icon">🎬</span>
             <span class="slot-label">分镜参考</span>
             <span class="slot-count" id="slotCountStoryboard">0</span>
             <img class="slot-preview" id="slotPreviewStoryboard" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('storyboard')" title="清除">✕</button>
           </div>
-          <div class="ref-slot audio-slot" data-slot="audio" onclick="focusSlot('audio')">
+          <div class="ref-slot audio-slot" data-slot="audio" onclick="handleSlotClick(this,'audio')">
             <span class="slot-icon">🎵</span>
             <span class="slot-label">音频参考</span>
             <span class="slot-count" id="slotCountAudio">0</span>
             <span class="slot-preview" id="slotPreviewAudio" style="display:none">🎵 <span class="audio-name"></span></span>
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('audio')" title="移除音频">✕</button>
           </div>
-          <div class="ref-slot" data-slot="firstframe" onclick="showSlotGallery(this,'firstframe')">
+          <div class="ref-slot" data-slot="firstframe" onclick="handleSlotClick(this,'firstframe')">
             <span class="slot-icon">🎞️</span>
             <span class="slot-label">首帧图</span>
             <span class="slot-count" id="slotCountFirstframe">0</span>
             <img class="slot-preview" id="slotPreviewFirstframe" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('firstframe')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="lastframe" onclick="showSlotGallery(this,'lastframe')">
+          <div class="ref-slot" data-slot="lastframe" onclick="handleSlotClick(this,'lastframe')">
             <span class="slot-icon">🏁</span>
             <span class="slot-label">尾帧图</span>
             <span class="slot-count" id="slotCountLastframe">0</span>
             <img class="slot-preview" id="slotPreviewLastframe" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('lastframe')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="multiref" onclick="showSlotGallery(this,'multiref')">
+          <div class="ref-slot" data-slot="multiref" onclick="handleSlotClick(this,'multiref')">
             <span class="slot-icon">🗂</span>
             <span class="slot-label">多图参考</span>
             <span class="slot-count" id="slotCountMultiref">0</span>
             <img class="slot-preview" id="slotPreviewMultiref" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('multiref')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="video" onclick="showSlotGallery(this,'video')">
+          <div class="ref-slot" data-slot="video" onclick="handleSlotClick(this,'video')">
             <span class="slot-icon">🎬</span>
             <span class="slot-label">上一段视频</span>
             <span class="slot-count" id="slotCountVideo">0</span>
@@ -2093,6 +2112,7 @@ input[type=file] { display: none; }
 <input type="file" id="imgFileInput" accept="image/*" multiple>
 <input type="file" id="audioFileInput" accept="audio/mp3,audio/mpeg" multiple>
 <input type="file" id="directFileInput" accept="image/*,video/mp4,video/mov,video/quicktime" multiple>
+<input type="file" id="slotFileInput">
 
 <!-- Error Banner -->
 <div id="apiErrorBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#c0392b;color:#fff;font-size:12px;padding:6px 12px;text-align:center;cursor:pointer;" onclick="this.style.display='none'">⚠️ 接口加载失败，部分功能不可用（点击关闭）</div>
@@ -2585,6 +2605,28 @@ function currentVideoCaps() {
   return (profile && (profile.capabilities || modelCaps[profile.model])) || {};
 }
 
+function slotSupportedByCurrentModel(slotName) {
+  const caps = currentVideoCaps();
+  if (slotName === 'firstframe') return caps.supports_first_frame !== false;
+  if (slotName === 'lastframe') return caps.supports_last_frame !== false;
+  if (slotName === 'video') return caps.supports_reference_video !== false;
+  if (slotName === 'audio') return caps.supports_reference_audio !== false;
+  if (['character','outfit','scene','storyboard','multiref'].includes(slotName)) {
+    return caps.supports_reference_images !== false;
+  }
+  return true;
+}
+
+function syncReferenceSlotCapabilities() {
+  document.querySelectorAll('.ref-slot[data-slot]').forEach(function(slot) {
+    const slotName = slot.dataset.slot;
+    const supported = slotSupportedByCurrentModel(slotName);
+    slot.classList.toggle('model-unsupported', !supported);
+    slot.setAttribute('aria-disabled', supported ? 'false' : 'true');
+    slot.title = supported ? '点击选择或上传' : '当前模型不支持' + getSlotLabel(slotName);
+  });
+}
+
 function syncVideoModelControls() {
   const caps = currentVideoCaps();
   const ratios = caps.ratios || [];
@@ -2611,6 +2653,7 @@ function syncVideoModelControls() {
     const next = durationButtons.find(function(btn) { return !btn.disabled; });
     if (next) setDuration(parseInt(next.textContent, 10), next);
   }
+  syncReferenceSlotCapabilities();
 }
 
 function restoreRecentImageResults() {
@@ -3909,6 +3952,60 @@ function focusSlot(slotName) {
   }
 }
 
+const SLOT_UPLOAD_CONFIG = {
+  character: { accept: 'image/*', multiple: true, role: '角色参考', type: 'image' },
+  outfit: { accept: 'image/*', multiple: true, role: '服装参考', type: 'image' },
+  scene: { accept: 'image/*', multiple: true, role: '场景参考', type: 'image' },
+  storyboard: { accept: 'image/*', multiple: false, role: '分镜构图参考', type: 'image', replace: true },
+  firstframe: { accept: 'image/*', multiple: false, role: '首帧图', type: 'image', replace: true },
+  lastframe: { accept: 'image/*', multiple: false, role: '尾帧图', type: 'image', replace: true },
+  multiref: { accept: 'image/*', multiple: true, role: '多图参考', type: 'image' },
+  audio: { accept: 'audio/*', multiple: false, role: '参考音频', type: 'audio', replace: true },
+  video: { accept: 'video/*', multiple: false, role: '参考视频', type: 'video', replace: true }
+};
+
+function handleSlotClick(slotEl, slotName) {
+  if (!slotSupportedByCurrentModel(slotName)) {
+    alert('当前模型不支持' + getSlotLabel(slotName) + '，请更换模型后再上传');
+    return;
+  }
+  const refs = getSlotRefs(slotName);
+  if (refs.length) showSlotGallery(slotEl, slotName);
+  else openSlotUpload(slotName);
+}
+
+function openSlotUpload(slotName) {
+  if (!slotSupportedByCurrentModel(slotName)) {
+    alert('当前模型不支持' + getSlotLabel(slotName));
+    return;
+  }
+  const config = SLOT_UPLOAD_CONFIG[slotName];
+  const input = document.getElementById('slotFileInput');
+  if (!config || !input) return;
+  input.accept = config.accept;
+  input.multiple = config.multiple;
+  input.onchange = async function() {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    let replaced = false;
+    for (const file of files) {
+      try {
+        const uploaded = await uploadFile(file);
+        if (config.replace && !replaced) {
+          clearSlot(slotName);
+          replaced = true;
+        }
+        selectRef({ url: uploaded.url, role_label: config.role, type: config.type, name: file.name });
+      } catch (e) {
+        console.error('槽位上传失败:', slotName, e);
+      }
+    }
+    closeSlotGallery();
+  };
+  input.value = '';
+  input.click();
+}
+
 // ── Slot Gallery Popover ─────────────────────────────────────
 var _gallerySlot = null;
 
@@ -3939,14 +4036,21 @@ function showSlotGallery(slotEl, slotName) {
   grid.innerHTML = refs.map(function(r, i) {
     var url = r.url || '';
     var label = r.role_label || r.name || '';
+    var preview = r.type === 'video'
+      ? '<video src="' + escAttr(url) + '" muted playsinline></video>'
+      : r.type === 'audio'
+        ? '<div class="at-audio"><div class="icon">🎵</div><div>' + escHtml(r.name || '音频') + '</div></div>'
+        : '<img src="' + escAttr(url) + '" loading="lazy" onclick="viewSlotImage(\'' + escAttr(url) + '\')">';
     return '<div class="slot-gallery-item" title="' + escAttr(label) + '">' +
-      '<img src="' + escAttr(url) + '" loading="lazy" onclick="viewSlotImage(\'' + escAttr(url) + '\')">' +
+      preview +
       '<button class="gallery-item-del" onclick="event.stopPropagation();removeSlotRef(\'' + slotName + '\',' + i + ')">✕</button>' +
       '</div>';
   }).join('');
 
   var footer = document.getElementById('slotGalleryFooter');
-  footer.innerHTML = '<button class="ratio-btn" onclick="clearSlot(\'' + slotName + '\')">清空此槽</button>';
+  var uploadLabel = SLOT_UPLOAD_CONFIG[slotName] && SLOT_UPLOAD_CONFIG[slotName].replace ? '替换' : '继续上传';
+  footer.innerHTML = '<button class="ratio-btn" onclick="openSlotUpload(\'' + slotName + '\')">' + uploadLabel + '</button>' +
+    '<button class="ratio-btn" onclick="clearSlot(\'' + slotName + '\')">清空此槽</button>';
 }
 
 function closeSlotGallery() {
@@ -4186,6 +4290,17 @@ async function _doGenerate() {
   const firstFrame = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('首帧') >= 0);
   const lastFrame = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('尾帧') >= 0);
   const storyboard = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('分镜构图') >= 0);
+  const caps = currentVideoCaps();
+  const usableImages = images.filter(function(image) {
+    const label = image.role_label || '';
+    if (label.indexOf('首帧') >= 0 || label.indexOf('尾帧') >= 0 || label.indexOf('分镜构图') >= 0) return false;
+    return caps.supports_reference_images !== false;
+  });
+  const usableAudio = caps.supports_reference_audio === false ? null : audio;
+  const usableVideo = caps.supports_reference_video === false ? null : video;
+  const usableFirstFrame = caps.supports_first_frame === false ? null : firstFrame;
+  const usableLastFrame = caps.supports_last_frame === false ? null : lastFrame;
+  const usableStoryboard = caps.supports_reference_images === false ? null : storyboard;
 
   document.getElementById('sendBtn').disabled = true;
   document.getElementById('projectStatus').textContent = '生成中...';
@@ -4205,12 +4320,12 @@ async function _doGenerate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         script,
-        images,
-        audio_url: audio ? audio.url : undefined,
-        video_url: video ? video.url : undefined,
-        first_frame_url: firstFrame ? firstFrame.url : undefined,
-        last_frame_url: lastFrame ? lastFrame.url : undefined,
-        storyboard_ref_url: storyboard ? storyboard.url : undefined,
+        images: usableImages,
+        audio_url: usableAudio ? usableAudio.url : undefined,
+        video_url: usableVideo ? usableVideo.url : undefined,
+        first_frame_url: usableFirstFrame ? usableFirstFrame.url : undefined,
+        last_frame_url: usableLastFrame ? usableLastFrame.url : undefined,
+        storyboard_ref_url: usableStoryboard ? usableStoryboard.url : undefined,
         ratio: selectedRatio,
         duration: selectedDuration,
         optimize_prompt: optimizePrompt,

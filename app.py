@@ -104,15 +104,17 @@ ALL_MODELS = ["seedance", AGNES_VIDEO_MODEL_ID] + sorted(NANO_GPT_NAMES) + ([THI
 
 # Model capabilities
 MODEL_CAPS = {
-    "seedance": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
-    "kling-v30-std": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["720p"]},
-    "grok-imagine-video": {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
-    "vidu-q3": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
-    "seedance-v15-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "resolutions": ["480p","720p"]},
+    "seedance": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "supports_reference_audio": True, "supports_reference_video": True, "resolutions": ["480p","720p"]},
+    "kling-v30-std": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "supports_reference_audio": False, "supports_reference_video": True, "resolutions": ["720p"]},
+    "grok-imagine-video": {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "supports_reference_audio": False, "supports_reference_video": False, "resolutions": ["480p","720p","1080p"]},
+    "vidu-q3": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "supports_reference_audio": False, "supports_reference_video": False, "resolutions": ["480p","720p","1080p"]},
+    "seedance-v15-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "supports_reference_audio": True, "supports_reference_video": True, "resolutions": ["480p","720p"]},
     AGNES_VIDEO_MODEL_ID: {
         "supports_first_frame": False,
         "supports_last_frame": False,
         "supports_reference_images": False,
+        "supports_reference_audio": False,
+        "supports_reference_video": False,
         "resolutions": ["480p", "720p", "1080p"],
         "ratios": ["16:9", "9:16", "1:1", "4:3", "3:4"],
         "min_duration": 4,
@@ -122,12 +124,14 @@ MODEL_CAPS = {
         "supports_first_frame": True,
         "supports_last_frame": True,
         "supports_reference_images": True,
+        "supports_reference_audio": True,
+        "supports_reference_video": True,
         "resolutions": ["768p", "2K"],
         "ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
         "min_duration": 4,
         "max_duration": 15,
     },
-    THIRD_PARTY_MODEL_ID: {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "resolutions": ["480p","720p","1080p"]},
+    THIRD_PARTY_MODEL_ID: {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "supports_reference_audio": True, "supports_reference_video": True, "resolutions": ["480p","720p","1080p"]},
 }
 
 # Image generation configs
@@ -1299,7 +1303,7 @@ def refine_prompt(script, images, ratio, duration, ark_api_key=None, user_id=Non
 
 
 # ── Nano-GPT video generation adapter ─────────────────────────
-def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, ratio, duration, host_url,
+def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, host_url,
                       resolution='720p', original_script=None, optimize=False, api_key=None, user_id=None, base_url=None):
     """Generate video via Nano-GPT API. Runs in a background thread."""
     try:
@@ -1329,12 +1333,17 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
             'camera_fixed': False,
         }
         ref_images = []
-        for img in images:
-            url = img.get('url', '')
-            if url.startswith('/static/'):
+        seen_urls = set()
+        def append_ref(url, label):
+            if url and url.startswith('/static/'):
                 url = host_url + url
-            if url:
-                ref_images.append({'url': url, 'label': img.get('role_label', 'reference')})
+            if url and url not in seen_urls:
+                ref_images.append({'url': url, 'label': label})
+                seen_urls.add(url)
+        append_ref(first_frame_url, 'first_frame')
+        append_ref(last_frame_url, 'last_frame')
+        for img in images:
+            append_ref(img.get('url', ''), img.get('role_label', 'reference'))
         if ref_images:
             payload['reference_images'] = ref_images
             payload['image_urls'] = [img['url'] for img in ref_images]
@@ -1342,6 +1351,9 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, r
         if video_url:
             payload['reference_video'] = video_url
             payload['video_url'] = video_url
+        if audio_url:
+            final_audio = host_url + audio_url if audio_url.startswith('/static/') else audio_url
+            payload['reference_audio'] = final_audio
 
         JOBS[job_id]['status'] = 'running'
         print(f'[nano-start] model={model_key}', flush=True)
@@ -1725,7 +1737,7 @@ def minimax_video_generate(job_id, script, images, audio_url, video_url, first_f
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': str(e)}
 
 
-def third_party_video_adapter(job_id, script, images, audio_url, video_url, ratio, duration, host_url,
+def third_party_video_adapter(job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, host_url,
                               model_key=THIRD_PARTY_MODEL_ID, resolution='720p',
                               original_script=None, optimize=False, api_base=None, api_key=None, user_id=None):
     """Generic adapter for any third-party video generation API.
@@ -1761,6 +1773,17 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
             'duration': duration,
             'reference_images': ref_images,
         }
+        # Prefer the OpenAI-compatible /videos route; keep the legacy custom route as fallback.
+        width, height = {'1:1': (768, 768), '9:16': (768, 1152), '16:9': (1152, 768)}.get(ratio, (768, 1152))
+        openai_payload = {'model': model_key, 'prompt': script, 'width': width, 'height': height}
+        if first_frame_url:
+            first_frame_url = host_url + first_frame_url if first_frame_url.startswith('/static/') else first_frame_url
+            payload['first_frame_url'] = first_frame_url
+            openai_payload['first_frame_url'] = first_frame_url
+        if last_frame_url:
+            last_frame_url = host_url + last_frame_url if last_frame_url.startswith('/static/') else last_frame_url
+            payload['last_frame_url'] = last_frame_url
+            openai_payload['last_frame_url'] = last_frame_url
         if audio_url:
             final_audio = host_url + audio_url if audio_url.startswith('/static/') else audio_url
             payload['reference_audio'] = final_audio
@@ -1769,9 +1792,6 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, rati
 
         JOBS[job_id]['status'] = 'running'
 
-        # Prefer the OpenAI-compatible /videos route; keep the legacy custom route as fallback.
-        width, height = {'1:1': (768, 768), '9:16': (768, 1152), '16:9': (1152, 768)}.get(ratio, (768, 1152))
-        openai_payload = {'model': model_key, 'prompt': script, 'width': width, 'height': height}
         r = requests.post(f'{api_base}/videos', headers=headers, json=openai_payload, timeout=30)
         status_url = None
         if r.status_code in (404, 405):
@@ -2350,6 +2370,20 @@ def generate():
         max_duration = video_caps.get('max_duration')
         if min_duration is not None and duration < min_duration or max_duration is not None and duration > max_duration:
             return jsonify(error=f'{video_model} 时长仅支持 {min_duration}-{max_duration} 秒'), 400
+        if not video_caps.get('supports_first_frame', True):
+            first_frame_url = None
+        if not video_caps.get('supports_last_frame', True):
+            last_frame_url = None
+        if not video_caps.get('supports_reference_images', True):
+            images = []
+            storyboard_ref_url = None
+        if not video_caps.get('supports_reference_audio', True):
+            audio_url = None
+        if not video_caps.get('supports_reference_video', True):
+            video_url = None
+    reference_images = list(images)
+    if storyboard_ref_url:
+        reference_images.append({'url': storyboard_ref_url, 'role_label': '分镜构图参考'})
     # Inject style
     if style_id:
         style = load_prompt_style(style_id, user_id)
@@ -2383,7 +2417,7 @@ def generate():
     # ── Atlas Cloud path ──
     if video_cfg.get('provider') == 'atlas':
         start_metered_job(atlas_video_generate, (
-            job_id, script, images, audio_url, video_url, ratio, duration, resolution,
+            job_id, script, reference_images, audio_url, video_url, ratio, duration, resolution,
             host_url, video_model, video_cfg['api_key'], video_cfg['base_url'],
             original_script, optimize, user_id
         ), job_id, user_id, point_cost)
@@ -2405,7 +2439,7 @@ def generate():
             refund_model_points(user_id, point_cost)
             return jsonify(job_id=job_id)
         start_metered_job(nano_gpt_generate, (
-            job_id, video_model, script, images, audio_url, video_url, ratio, duration, host_url,
+            job_id, video_model, script, reference_images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, host_url,
             resolution, original_script, optimize, video_cfg['api_key'], user_id, video_cfg['base_url']
         ), job_id, user_id, point_cost)
         return jsonify(job_id=job_id)
@@ -2413,7 +2447,7 @@ def generate():
     # ── MiniMax H3 path ──
     if video_cfg.get('provider') == 'minimax':
         start_metered_job(minimax_video_generate, (
-            job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url,
+            job_id, script, reference_images, audio_url, video_url, first_frame_url, last_frame_url,
             ratio, duration, resolution, host_url, video_model, video_cfg['api_key'],
             video_cfg['base_url'], original_script, optimize, user_id
         ), job_id, user_id, point_cost)
@@ -2427,7 +2461,7 @@ def generate():
             refund_model_points(user_id, point_cost)
             return jsonify(job_id=job_id)
         start_metered_job(third_party_video_adapter, (
-            job_id, script, images, audio_url, video_url, ratio, duration, host_url,
+            job_id, script, reference_images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, host_url,
             video_model, resolution, original_script, optimize,
             video_cfg['base_url'], video_cfg['api_key'], user_id
         ), job_id, user_id, point_cost)
@@ -2438,7 +2472,7 @@ def generate():
         try:
             # build role description
             lines = ['【严格参考说明，必须遵守】']
-            for i, img in enumerate(images, 1):
+            for i, img in enumerate(reference_images, 1):
                 lines.append(f'- 图{i+1}：{img["role_label"]}，仅参考此用途，不得混用')
             lines.append('请严格区分各参考图用途，不得将穿搭图用于脸部，不得将场景图用于人物。')
             # Storyboard reference instructions
@@ -2460,7 +2494,7 @@ def generate():
             prefix = '\n'.join(lines) + '\n' + QUALITY_PROMPT
 
             content = [{'type': 'text', 'text': prefix + '\n' + script}]
-            for img in images:
+            for img in reference_images:
                 url = img['url']
                 if url.startswith('/static/'):
                     url = host_url + url
@@ -2473,11 +2507,11 @@ def generate():
             if first_frame_url:
                 url = first_frame_url
                 if url.startswith('/static/'): url = host_url + url
-                content.append({'type':'image_url','image_url':{'url':url},'role':'reference_image'})
+                content.append({'type':'image_url','image_url':{'url':url},'role':'first_frame'})
             if last_frame_url:
                 url = last_frame_url
                 if url.startswith('/static/'): url = host_url + url
-                content.append({'type':'image_url','image_url':{'url':url},'role':'reference_image'})
+                content.append({'type':'image_url','image_url':{'url':url},'role':'last_frame'})
 
             try:
                 if 'content' in locals() and isinstance(content, list):
@@ -2510,7 +2544,7 @@ def generate():
                         ratio=ratio,
                         duration=duration,
                         resolution=resolution,
-                        ref_count=len(images),
+                        ref_count=len(reference_images),
                         user_id=user_id
                     )
                     JOBS[job_id] = {'status':'succeeded','video_url':stored_vurl,'source_video_url':vurl,'error':None}
