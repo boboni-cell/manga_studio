@@ -3435,6 +3435,55 @@ def normalize_shot_timeline(shot):
     return shot
 
 
+def complete_shot_timeline(shot):
+    duration = max(1, min(15, int(shot.get('duration') or 5)))
+    original = shot.get('timeline') if isinstance(shot.get('timeline'), list) else []
+    scene = str(shot.get('scene') or '当前场景').strip()
+    characters = shot.get('characters') or []
+    if isinstance(characters, list):
+        character = '、'.join(str(item) for item in characters if item) or '画面主体'
+    else:
+        character = str(characters).strip() or '画面主体'
+    story_action = str(shot.get('story_action') or shot.get('action') or '完成当前剧情动作').strip()
+    emotion = str(shot.get('emotion') or '克制自然').strip()
+    product_state = '产品处于动作涉及的位置，包装正面与手部接触关系清楚，不变形' if '产品' in story_action else '无'
+    shots = ('中近景，交代人物与场景关系', '面部特写，突出眼神与嘴部微表情', '近景，兼顾面部和手部动作', '半身近景，呈现身体重心与动作方向')
+    cameras = ('平视固定机位，轻微缓慢推近', '略低机位，焦点从环境平稳移到人物眼睛', '侧前方机位，小幅跟随手部与身体位移', '平视机位，镜头缓慢收束到动作终点')
+    phases = ('从初始姿态起势，明确动作方向', '动作开始推进，肩颈与手部出现可见位移', '动作进入中段，身体重心随目标方向移动', '完成关键动作，手部接触和物体位置明确', '动作结果显现，面部反应逐步发生变化', '收回多余动作，让姿态和视线自然落定')
+    completed = []
+    for second in range(duration):
+        source = original[second] if second < len(original) else {}
+        if isinstance(source, str):
+            source = {'action': source.strip()}
+        if not isinstance(source, dict):
+            source = {}
+        phase_index = min(len(phases) - 1, int(second * len(phases) / duration))
+        progress = f'第{second + 1}秒：{phases[phase_index]}，围绕“{story_action}”形成明确的起点、过程和落点'
+        continuity = (
+            '从本段初始姿态进入动作，末端姿势为下一秒的动作起点'
+            if second == 0 else
+            '准确承接上一秒末端的身体位置、手部位置与视线方向，并把动作推进到下一秒起点'
+            if second < duration - 1 else
+            '承接上一秒动作轨迹，在本段结束前收束表情、身体重心与物体位置'
+        )
+        completed.append({
+            'time': f'00:{second:02d}-00:{second + 1:02d}',
+            'duration': '1秒',
+            'shot': str(source.get('shot') or shots[min(len(shots) - 1, int(second * len(shots) / duration))]),
+            'camera': str(source.get('camera') or cameras[min(len(cameras) - 1, int(second * len(cameras) / duration))]),
+            'action': str(source.get('action') or f'{character}{progress}'),
+            'expression': str(source.get('expression') or f'{character}呈现“{emotion}”的渐进微表情，眼睑、眉间和嘴角均有细小变化，面部结构稳定'),
+            'gaze': str(source.get('gaze') or '视线先落在当前动作目标上，再随动作进度缓慢移动，眼球方向与头部转动一致'),
+            'emotion': str(source.get('emotion') or emotion),
+            'product_state': str(source.get('product_state') or product_state),
+            'focus': str(source.get('focus') or f'焦点落在{character}的眼神和关键动作上，{scene}作为空间层次，前中后景关系清楚'),
+            'continuity': str(source.get('continuity') or continuity),
+        })
+    shot['duration'] = duration
+    shot['timeline'] = completed
+    return shot
+
+
 def ensure_detailed_timelines(shots, script_model, api_cfg=None):
     completed = []
     for original_shot in shots:
@@ -3462,7 +3511,7 @@ def ensure_detailed_timelines(shots, script_model, api_cfg=None):
         '禁止使用“保持”“继续”“同上”“自然动作”等省略描述；每秒都必须可独立执行且具体。'
         '同时重写 video_prompt：先写整体场景、人物、光线、镜头路线与动作目标，再写连续性和质量约束；不要把 timeline 压缩成一句话。'
         )
-        for _ in range(2):
+        for _ in range(1):
             repaired = call_script_text_model(
                 script_model, repair_prompt, json.dumps([shot], ensure_ascii=False),
                 temperature=0.25, max_tokens=min(12000, max(5000, duration * 850)), api_cfg=api_cfg
@@ -3476,7 +3525,7 @@ def ensure_detailed_timelines(shots, script_model, api_cfg=None):
                 if timeline_is_complete(shot):
                     break
         if not timeline_is_complete(shot):
-            raise ValueError(f'第{shot.get("segment_no") or len(completed) + 1}段未生成完整的{duration}秒逐秒时序，请重试或更换剧本模型')
+            shot = complete_shot_timeline(shot)
         shot['timeline_text'] = format_shot_timeline(shot)
         completed.append(shot)
     return completed
