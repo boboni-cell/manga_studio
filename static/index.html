@@ -4301,10 +4301,10 @@ async function _doGenerate() {
   const usableFirstFrame = caps.supports_first_frame === false ? null : firstFrame;
   const usableLastFrame = caps.supports_last_frame === false ? null : lastFrame;
   const usableStoryboard = caps.supports_reference_images === false ? null : storyboard;
-  const strictSeedanceFrames = videoModel === 'seedance' && !!usableFirstFrame;
+  const strictSeedanceFrames = (videoModel === 'seedance' || videoModel === 'personal-api') && !!usableFirstFrame;
 
-  if (videoModel === 'seedance' && usableLastFrame && !usableFirstFrame) {
-    alert('Seedance 严格尾帧模式必须同时选择首帧图');
+  if ((videoModel === 'seedance' || videoModel === 'personal-api') && usableLastFrame && !usableFirstFrame) {
+    alert('严格尾帧模式必须同时选择首帧图');
     return;
   }
 
@@ -4777,14 +4777,17 @@ function renderShots(segments) {
   _currentSegments = Array.isArray(segments) ? segments : [];
   el.innerHTML = _currentSegments.map((s, segmentIndex) => {
     const no = s.segment_no || s.shot_no;
-    const beats = Array.isArray(s.beats) ? s.beats : [];
+    const timeline = Array.isArray(s.timeline) ? s.timeline : [];
+    const beats = timeline.length ? timeline : (Array.isArray(s.beats) ? s.beats : []);
     const chars = Array.isArray(s.characters) ? s.characters.join('、') : (s.characters || '');
     const beatsHtml = beats.length > 0 ? `
       <div style="margin-top:6px;">
-        <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">🎥 镜头变化 (${beats.length} beat${beats.length>1?'s':''})</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-bottom:3px;">🎥 精准逐秒时序（${beats.length} 秒）</div>
         ${beats.map(b => `
           <div style="font-size:10px;color:var(--text-dim);padding:3px 6px;margin:2px 0;background:var(--surface2);border-radius:4px;line-height:1.5;">
-            <span style="color:var(--accent);">${escHtml(b.time || '')}</span> ${escHtml(b.shot || '')} · ${escHtml(b.camera || '')}<br>${escHtml(b.action || '')}
+            <span style="color:var(--accent);">${escHtml(b.time || '')}</span> ${escHtml(b.shot || '')} · ${escHtml(b.camera || '')}<br>
+            ${escHtml(b.action || '')}<br>
+            ${b.expression ? `<span>表情：${escHtml(b.expression)}</span>` : ''}${b.gaze ? ` <span>视线：${escHtml(b.gaze)}</span>` : ''}${b.product_state ? `<br><span>产品：${escHtml(b.product_state)}</span>` : ''}${b.focus ? `<br><span>画面重点：${escHtml(b.focus)}</span>` : ''}${b.continuity ? `<br><span>衔接：${escHtml(b.continuity)}</span>` : ''}
           </div>`).join('')}
       </div>` : '';
     const vp = getSegmentVideoPrompt(s);

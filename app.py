@@ -108,7 +108,17 @@ MODEL_CAPS = {
     "kling-v30-std": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "supports_reference_audio": False, "supports_reference_video": True, "resolutions": ["720p"]},
     "grok-imagine-video": {"supports_first_frame": False, "supports_last_frame": False, "supports_reference_images": True, "supports_reference_audio": False, "supports_reference_video": False, "resolutions": ["480p","720p","1080p"]},
     "vidu-q3": {"supports_first_frame": True, "supports_last_frame": False, "supports_reference_images": True, "supports_reference_audio": False, "supports_reference_video": False, "resolutions": ["480p","720p","1080p"]},
-    "seedance-v15-pro": {"supports_first_frame": True, "supports_last_frame": True, "supports_reference_images": True, "supports_reference_audio": True, "supports_reference_video": True, "resolutions": ["480p","720p"]},
+    "seedance-v15-pro": {
+        "supports_first_frame": True,
+        "supports_last_frame": False,
+        "supports_reference_images": False,
+        "supports_reference_audio": False,
+        "supports_reference_video": False,
+        "resolutions": ["480p", "720p", "1080p"],
+        "ratios": ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+        "min_duration": 4,
+        "max_duration": 12,
+    },
     AGNES_VIDEO_MODEL_ID: {
         "supports_first_frame": False,
         "supports_last_frame": False,
@@ -601,7 +611,7 @@ def get_api_profiles(kind, user_id=None):
         save_json(path, settings)
     return profiles, selected
 
-def public_api_profile(profile):
+def public_api_profile(profile, kind=None):
     public = {
         'id': profile.get('id'), 'name': profile.get('name', ''),
         'provider': profile.get('provider', ''), 'base_url': profile.get('base_url', ''),
@@ -610,9 +620,86 @@ def public_api_profile(profile):
     }
     model_name = str(profile.get('model') or '').lower()
     capabilities = next((caps for name, caps in MODEL_CAPS.items() if name.lower() == model_name), None)
+    if not capabilities and kind == 'video' and profile.get('provider') == 'nano':
+        capabilities = nano_video_model_capabilities(profile)
     if capabilities:
         public['capabilities'] = capabilities
     return public
+
+_NANO_VIDEO_MODEL_CACHE = {}
+
+def nano_video_model_info(profile):
+    if not profile or profile.get('provider') != 'nano' or not profile.get('api_key') or not profile.get('model'):
+        return None
+    api_root = (profile.get('base_url') or NANO_GPT_BASE).rstrip('/')
+    if api_root.endswith('/v1'):
+        api_root = api_root[:-3]
+    cache_key = (api_root, profile['api_key'])
+    cached = _NANO_VIDEO_MODEL_CACHE.get(cache_key)
+    if cached and time.time() - cached['time'] < 300:
+        items = cached['items']
+        return next((item for item in items if item.get('id') == profile.get('model')), None)
+    try:
+        response = requests.get(
+            f'{api_root}/v1/video-models',
+            headers={'x-api-key': profile['api_key']}, timeout=20
+        )
+        if response.status_code != 200:
+            return None
+        items = response.json().get('data', [])
+        _NANO_VIDEO_MODEL_CACHE[cache_key] = {'time': time.time(), 'items': items}
+        return next((item for item in items if item.get('id') == profile.get('model')), None)
+    except (requests.RequestException, ValueError):
+        return None
+
+def nano_video_model_capabilities(profile, model_info=None):
+    info = model_info or nano_video_model_info(profile)
+    if not info:
+        return None
+    declared = info.get('capabilities') or {}
+    parameter_defs = ((info.get('supported_parameters') or {}).get('parameters') or {})
+    parameter_names = set(parameter_defs)
+    pricing = info.get('pricing') or {}
+    resolutions = []
+    resolution_def = parameter_defs.get('resolution') or {}
+    for option in resolution_def.get('options') or []:
+        value = option.get('value') if isinstance(option, dict) else option
+        if value is not None:
+            resolutions.append(str(value))
+    duration_def = parameter_defs.get('duration') or {}
+    durations = []
+    for option in duration_def.get('options') or []:
+        value = option.get('value') if isinstance(option, dict) else option
+        try:
+            durations.append(int(value))
+        except (TypeError, ValueError):
+            pass
+    ratio_def = parameter_defs.get('aspect_ratio') or {}
+    ratios = []
+    for option in ratio_def.get('options') or []:
+        value = option.get('value') if isinstance(option, dict) else option
+        if value is not None:
+            ratios.append(str(value))
+    caps = {
+        'supports_first_frame': bool(declared.get('image_to_video')),
+        'supports_last_frame': bool({'last_image', 'lastImage', 'lastFrameUrl', 'last_frame_url'} & parameter_names),
+        'supports_reference_images': bool({'referenceImages', 'reference_images'} & parameter_names),
+        'supports_reference_audio': bool(declared.get('audio_input')),
+        'supports_reference_video': bool(declared.get('video_to_video')),
+    }
+    if resolutions:
+        caps['resolutions'] = resolutions
+    if ratios:
+        caps['ratios'] = ratios
+    if durations:
+        caps['min_duration'] = min(durations)
+        caps['max_duration'] = max(durations)
+    else:
+        if pricing.get('min_duration') is not None:
+            caps['min_duration'] = pricing['min_duration']
+        if pricing.get('max_duration') is not None:
+            caps['max_duration'] = pricing['max_duration']
+    return caps
 
 def get_personal_api(kind, user_id=None, profile_id=None):
     profiles, selected = get_api_profiles(kind, user_id)
@@ -841,7 +928,7 @@ def api_settings():
         settings.setdefault('selected_api_profiles', {})[kind] = profile_id
         settings.setdefault('apis', {})[kind] = dict(cfg)
         save_json(settings_path(), settings)
-        return jsonify(ok=True, profile=public_api_profile(cfg), selected_profile_id=profile_id)
+        return jsonify(ok=True, profile=public_api_profile(cfg, kind), selected_profile_id=profile_id)
 
     apis = {}
     api_profiles = {}
@@ -849,8 +936,8 @@ def api_settings():
     for kind in ('text', 'image', 'video'):
         profiles, selected = get_api_profiles(kind)
         selected_cfg = next((item for item in profiles if item['id'] == selected), {})
-        apis[kind] = public_api_profile(selected_cfg)
-        api_profiles[kind] = [public_api_profile(item) for item in profiles]
+        apis[kind] = public_api_profile(selected_cfg, kind)
+        api_profiles[kind] = [public_api_profile(item, kind) for item in profiles]
         selected_profiles[kind] = selected
     admin = is_admin()
     return jsonify(
@@ -1378,22 +1465,36 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, f
             'generateAudio': True,
             'camera_fixed': False,
         }
+        model_info = nano_video_model_info({
+            'provider': 'nano', 'base_url': base_url or NANO_GPT_BASE,
+            'api_key': api_key, 'model': model_real
+        })
+        parameter_names = set((((model_info or {}).get('supported_parameters') or {}).get('parameters') or {}))
+        def public_media_url(url):
+            return host_url + url if url and url.startswith('/static/') else url
+
+        if first_frame_url:
+            payload['imageUrl'] = public_media_url(first_frame_url)
+            payload['mode'] = 'image-to-video'
+        if last_frame_url:
+            last_field = next((name for name in ('last_image', 'lastImage', 'lastFrameUrl', 'last_frame_url') if name in parameter_names), None)
+            if not last_field:
+                raise ValueError(f'{model_real} 的 Nano API 没有尾帧参数，不能严格保持尾帧')
+            payload[last_field] = public_media_url(last_frame_url)
+
         ref_images = []
         seen_urls = set()
         def append_ref(url, label):
-            if url and url.startswith('/static/'):
-                url = host_url + url
+            url = public_media_url(url)
             if url and url not in seen_urls:
                 ref_images.append({'url': url, 'label': label})
                 seen_urls.add(url)
-        append_ref(first_frame_url, 'first_frame')
-        append_ref(last_frame_url, 'last_frame')
         for img in images:
             append_ref(img.get('url', ''), img.get('role_label', 'reference'))
         if ref_images:
-            payload['reference_images'] = ref_images
-            payload['image_urls'] = [img['url'] for img in ref_images]
-            payload['images'] = [img['url'] for img in ref_images]
+            reference_field = 'referenceImages' if 'referenceImages' in parameter_names else 'reference_images' if 'reference_images' in parameter_names else None
+            if reference_field:
+                payload[reference_field] = [img['url'] for img in ref_images]
         if video_url:
             payload['reference_video'] = video_url
             payload['video_url'] = video_url
@@ -2451,6 +2552,15 @@ def generate():
         return jsonify(error=str(e)), 402
     video_model = video_cfg['model']
     video_caps = MODEL_CAPS.get(video_model) or MODEL_CAPS.get(selected_model)
+    if force_personal and video_cfg.get('provider') == 'nano':
+        discovered_caps = nano_video_model_capabilities(video_cfg)
+        if not discovered_caps:
+            return jsonify(error=f'无法读取 {video_model} 的 Nano 视频能力，暂不能安全提交首尾帧'), 400
+        video_caps = discovered_caps
+    if first_frame_url and video_caps and not video_caps.get('supports_first_frame', False):
+        return jsonify(error=f'{video_model} 的 API 不支持首帧输入，请更换支持图生视频的模型'), 400
+    if last_frame_url and video_caps and not video_caps.get('supports_last_frame', False):
+        return jsonify(error=f'{video_model} 的 API 没有尾帧参数，不能严格保持尾帧，请更换支持尾帧的模型'), 400
     if video_caps:
         supported_ratios = video_caps.get('ratios') or []
         supported_resolutions = video_caps.get('resolutions') or []
@@ -2462,10 +2572,6 @@ def generate():
         max_duration = video_caps.get('max_duration')
         if min_duration is not None and duration < min_duration or max_duration is not None and duration > max_duration:
             return jsonify(error=f'{video_model} 时长仅支持 {min_duration}-{max_duration} 秒'), 400
-        if not video_caps.get('supports_first_frame', True):
-            first_frame_url = None
-        if not video_caps.get('supports_last_frame', True):
-            last_frame_url = None
         if not video_caps.get('supports_reference_images', True):
             images = []
             storyboard_ref_url = None
@@ -3141,13 +3247,57 @@ def format_shot_timeline(shot):
         if isinstance(seconds, (int, float)):
             seconds = f'{seconds:g}秒'
         details = '，'.join(str(value).strip() for value in (
-            item.get('shot'), item.get('camera'), item.get('action'), item.get('emotion'), item.get('focus')
+            item.get('shot'), item.get('camera'), item.get('action'), item.get('expression'),
+            item.get('gaze'), item.get('emotion'), item.get('product_state'),
+            item.get('focus'), item.get('continuity')
         ) if value)
         prefix = '｜'.join(part for part in (str(time_range).strip(), str(seconds).strip()) if part)
         line = f'{prefix}｜{details}' if prefix and details else (prefix or details)
         if line:
             lines.append(line)
     return '\n'.join(lines)
+
+
+def timeline_is_complete(shot):
+    try:
+        duration = max(1, int(shot.get('duration') or 0))
+    except (TypeError, ValueError):
+        return False
+    timeline = shot.get('timeline')
+    if not isinstance(timeline, list) or len(timeline) != duration:
+        return False
+    required = ('time', 'shot', 'camera', 'action', 'expression', 'focus', 'continuity')
+    return all(
+        isinstance(item, dict)
+        and all(str(item.get(key) or '').strip() for key in required)
+        for item in timeline
+    )
+
+
+def ensure_detailed_timelines(shots, script_model, api_cfg=None):
+    if all(isinstance(shot, dict) and timeline_is_complete(shot) for shot in shots):
+        return shots
+    repair_prompt = (
+        '你是严格的逐秒分镜补全器。只输出合法 JSON 数组，不要 Markdown，不要解释。'
+        '保留每个对象原有剧情与字段，为每个对象补全 timeline。timeline 必须恰好等于 duration 条，'
+        '从00:00开始每1秒一条，连续、无缺口、无重叠、不得超时。每条必须是对象，字段完整：'
+        'time（00:00-00:01格式）、duration（固定1秒）、shot（景别与构图）、camera（机位、镜头高度、焦段感和运镜）、'
+        'action（这一秒开始到结束的具体动作变化）、expression（面部肌理、眼神、嘴部与微表情变化）、'
+        'gaze（视线落点及变化）、emotion（外显与内在情绪）、product_state（产品位置、朝向、可见信息和手部接触；无产品写“无”）、'
+        'focus（主体、前中后景、景深与光线重点）、continuity（与上一秒和下一秒如何连续）。'
+        '禁止使用“保持”“继续”“同上”“自然动作”等省略描述；每秒都必须可独立执行且具体。'
+        '同时重写 video_prompt：先写整体场景、人物、光线、镜头路线与动作目标，再写连续性和质量约束；不要把 timeline 压缩成一句话。'
+    )
+    repaired = call_script_text_model(
+        script_model, repair_prompt, json.dumps(shots, ensure_ascii=False),
+        temperature=0.35, max_tokens=max(5000, len(shots) * 1800), api_cfg=api_cfg
+    )
+    completed = parse_script_shots_json(repaired, script_model, api_cfg=api_cfg)
+    if not all(isinstance(shot, dict) and timeline_is_complete(shot) for shot in completed):
+        raise ValueError('模型未按要求生成完整逐秒时序，请重试或更换剧本模型')
+    for shot in completed:
+        shot['timeline_text'] = format_shot_timeline(shot)
+    return completed
 
 
 def apply_live_action_prompt_blocks(shots, style_id, user_id=None):
@@ -3185,7 +3335,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
     style_rule = script_style_rule(body.get('style_id'), user_id=user_id)
 
     mode_instructions = {
-        'short': '\n当前模式：短镜头模式。每个输出项只包含 1 个 beat，时长 4-6 秒，适合快速反应、特写、动作切点。',
+        'short': '\n当前模式：短镜头模式。每段时长 4-7 秒，逐秒设计景别、动作和情绪变化，适合特写、反应和动作切点；禁止用一个笼统 beat 概括整段。',
         'long': '\n当前模式：长段落模式。每个输出项优先包含 2-3 个 beat，时长 8-15 秒，适合连续剧情推进。',
         'smart': '\n当前模式：智能段落模式（默认）。能合并就合并，该拆才拆，同一场景、同一情绪、同一动作线尽量合成一个段落。'
     }
@@ -3193,9 +3343,11 @@ def build_script_shots(body, api_cfg=None, user_id=None):
     if compact_request:
         system_prompt = (
             '你是AI短剧分镜导演。把用户短句扩成1个可直接生成的视频段落，不要过度拆分。\n'
-            '只输出 JSON 数组，数组内只放1个对象。字段必须有：segment_no、duration、scene、characters、emotion、story_action、beats、dialogue、video_prompt。\n'
-            'duration 用6-8秒。beats 只写1-2个，写清时间、景别、运镜、动作重点。\n'
-            'video_prompt 必须是直接命令式，融合成一段连续视频指令，保留用户原意，适当补环境和情绪，不写废话。\n'
+            '只输出 JSON 数组，数组内只放1个对象。字段必须有：segment_no、duration、scene、characters、emotion、story_action、beats、timeline、dialogue、video_prompt。\n'
+            'duration 用6-8秒。timeline 必须恰好等于 duration 条，从00:00开始每1秒一条，连续且不超时。\n'
+            'timeline 每条必须完整包含：time、duration（固定1秒）、shot、camera、action、expression、gaze、emotion、product_state、focus、continuity。\n'
+            '每秒写清构图、机位高度、焦段感、运镜、人物姿势与位移、手部动作、面部微表情、视线落点、产品位置和前中后景变化。禁止“保持”“继续”“同上”等省略词。\n'
+            'video_prompt 必须是详细的直接命令式整体指令，写清场景空间、人物状态、光线、完整镜头路线、动作目标、衔接和质量约束，不得只写一句剧情概述。\n'
             + style_rule + '\n'
             'video_prompt 结尾只加技术质量约束：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。除上述风格规则外不得自行补充风格词。\n'
             '不要 Markdown，不要解释，只输出 JSON 数组。'
@@ -3215,10 +3367,11 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             '6. 每段默认 6-10 秒；动作简单可 4-6 秒；信息密集或包含 2-3 个 beat 可 10-15 秒。\n'
             '7. 每段必须能单独生成，不依赖上一段才能看懂画面。\n'
             '8. 台词要短，符合短剧口语，不能像旁白作文。\n\n'
-            '每个视频段落必须包含：segment_no、duration、scene、characters（数组）、emotion、story_action、beats（1-3个）、dialogue、video_prompt。\n\n'
+            '每个视频段落必须包含：segment_no、duration、scene、characters（数组）、emotion、story_action、beats、timeline、dialogue、video_prompt。\n\n'
             'beats 写法：每个 beat 写清楚时间比例（如"前3秒"）、景别、机位/运镜、人物动作、画面重点。\n\n'
+            'timeline 写法（强制）：必须恰好等于 duration 条，从00:00开始每1秒一条，连续、无缺口、无重叠、不得超时。每条是对象并完整包含：time、duration（固定1秒）、shot（景别与构图）、camera（机位高度、焦段感和运镜）、action（这一秒内动作的起点、过程、终点）、expression（面部肌理、眼神、嘴部和微表情变化）、gaze（视线落点）、emotion、product_state（产品位置、朝向、可见信息和手部接触，无产品写“无”）、focus（主体、前中后景、景深和光线重点）、continuity（前后秒衔接）。禁止“保持”“继续”“同上”“自然动作”等省略描述。\n\n'
             'video_prompt 写法：\n'
-            '1. 必须把 beats 融合成一段连续视频指令，使用直接命令式。\n'
+            '1. 必须写成可直接执行的详细连续视频指令，先说明场景空间、人物初始状态和光线，再说明完整镜头路线与动作目标。\n'
             '2. 写清楚机位如何变化、人物如何运动、台词什么时候说。\n'
             '3. 同一场景内多个 beat 要强调"同一连续镜头感"或"自然剪辑感"。\n'
             '4. 保持人物、服装、场景一致。\n'
@@ -3229,9 +3382,9 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             '输出格式必须是 JSON 数组，不要 Markdown，不要解释，只输出 JSON 数组。'
         )
         if body.get('style_id') == LIVE_ACTION_STYLE_ID:
-            max_tokens = 5000 if len(script_text) < 800 else 7000
+            max_tokens = 7000 if len(script_text) < 800 else 10000
         else:
-            max_tokens = 2600 if len(script_text) < 800 else 4000
+            max_tokens = 6000 if len(script_text) < 800 else 9000
     try:
         raw = call_script_text_model(script_model, system_prompt, script_text, temperature=0.6, max_tokens=max_tokens, api_cfg=api_cfg)
         if raw.startswith('```'):
@@ -3239,6 +3392,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
         if raw.endswith('```'):
             raw = raw.rsplit('\n', 1)[0]
         shots = parse_script_shots_json(raw, script_model, api_cfg=api_cfg)
+        shots = ensure_detailed_timelines(shots, script_model, api_cfg=api_cfg)
         shots = apply_live_action_prompt_blocks(shots, body.get('style_id'), user_id)
         insert_history({
             'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
