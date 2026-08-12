@@ -3563,6 +3563,8 @@ def build_script_shots(body, api_cfg=None, user_id=None):
     if not script_text:
         raise Exception('请输入剧本文本')
     compact_request = len(script_text) < 120 and mode != 'long'
+    duration_match = re.search(r'(?<!\d)([4-9]|1[0-5])\s*(?:秒|s(?:ec(?:onds?)?)?)(?!\w)', script_text, re.IGNORECASE)
+    requested_duration = int(duration_match.group(1)) if duration_match else None
     style_rule = script_style_rule(body.get('style_id'), user_id=user_id)
 
     mode_instructions = {
@@ -3575,7 +3577,8 @@ def build_script_shots(body, api_cfg=None, user_id=None):
         system_prompt = (
             '你是AI短剧分镜导演。把用户短句扩成1个可直接生成的视频段落，不要过度拆分。\n'
             '只输出 JSON 数组，数组内只放1个对象。字段必须有：segment_no、duration、scene、characters、emotion、story_action、beats、timeline、dialogue、video_prompt。\n'
-            'duration 用6-8秒。timeline 必须恰好等于 duration 条，从00:00开始每1秒一条，连续且不超时。\n'
+            + (f'duration 必须严格使用用户指定的{requested_duration}秒。' if requested_duration else 'duration 用6-8秒。')
+            + 'timeline 必须恰好等于 duration 条，从00:00开始每1秒一条，连续且不超时。\n'
             'timeline 每条必须完整包含：time、duration（固定1秒）、shot、camera、action、expression、gaze、emotion、product_state、focus、continuity。\n'
             '每秒写清构图、机位高度、焦段感、运镜、人物姿势与位移、手部动作、面部微表情、视线落点、产品位置和前中后景变化。禁止“保持”“继续”“同上”等省略词。\n'
             'video_prompt 必须是详细的直接命令式整体指令，写清场景空间、人物状态、光线、完整镜头路线、动作目标、衔接和质量约束，不得只写一句剧情概述。\n'
@@ -3583,7 +3586,7 @@ def build_script_shots(body, api_cfg=None, user_id=None):
             'video_prompt 结尾只加技术质量约束：人物身份稳定，表情自然，动作连贯，手部和肢体正常，服装不穿模，场景保持一致，画面清晰，无字幕，无水印。除上述风格规则外不得自行补充风格词。\n'
             '不要 Markdown，不要解释，只输出 JSON 数组。'
         )
-        max_tokens = 2200 if body.get('style_id') == LIVE_ACTION_STYLE_ID else 1200
+        max_tokens = min(12000, max(6000, (requested_duration or 8) * 750))
     else:
         system_prompt = (
             '你是专业AI短剧分镜导演。用户会提供剧本、剧情梗概或灵感，你要把它拆成"可直接生成的视频段落"，而不是机械拆成单个镜头。\n\n'
@@ -3623,6 +3626,9 @@ def build_script_shots(body, api_cfg=None, user_id=None):
         if raw.endswith('```'):
             raw = raw.rsplit('\n', 1)[0]
         shots = parse_script_shots_json(raw, script_model, api_cfg=api_cfg)
+        if compact_request and requested_duration and shots:
+            shots = shots[:1]
+            shots[0]['duration'] = requested_duration
         shots = ensure_detailed_timelines(shots, script_model, api_cfg=api_cfg)
         shots = apply_live_action_prompt_blocks(shots, body.get('style_id'), user_id)
         insert_history({
