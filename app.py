@@ -1,4 +1,4 @@
-import os, json, uuid, time, threading, requests, functools, sys, re, secrets, tempfile, shutil
+import os, json, uuid, time, threading, requests, functools, sys, re, secrets, tempfile
 import tos
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -489,6 +489,9 @@ def upload_to_r2(file_data, object_key, content_type='application/octet-stream',
     """Upload bytes or stream to R2, return (public_url, success)."""
     if not r2_configured():
         return None, False
+    if content_length is not None and int(content_length) <= 0:
+        print(f'[R2] refused empty object: {object_key}', flush=True)
+        return None, False
     try:
         kwargs = {
             'Bucket': R2_BUCKET,
@@ -498,7 +501,12 @@ def upload_to_r2(file_data, object_key, content_type='application/octet-stream',
         }
         if content_length:
             kwargs['ContentLength'] = content_length
-        get_r2_client().put_object(**kwargs)
+        client = get_r2_client()
+        client.put_object(**kwargs)
+        stored_size = int(client.head_object(Bucket=R2_BUCKET, Key=object_key).get('ContentLength') or 0)
+        if stored_size <= 0 or (content_length is not None and stored_size != int(content_length)):
+            client.delete_object(Bucket=R2_BUCKET, Key=object_key)
+            raise Exception(f'对象大小校验失败：expected={content_length} stored={stored_size}')
         return r2_public_url(object_key), True
     except Exception as e:
         print(f'[R2] upload failed: {e}', flush=True)
@@ -2160,11 +2168,16 @@ def download_and_save_video(video_url):
         content_length = int(content_length) if content_length and content_length.isdigit() else None
 
         # urllib3 response bodies are not seekable. boto3 may need to rewind a
-        # body while calculating checksums/retrying, so spool the download into
-        # a seekable file before uploading it to R2.
+        # body while calculating checksums/retrying, so download into a seekable
+        # file first. Iterate explicitly: some response.raw wrappers can expose
+        # an empty body even though iter_content() yields the media correctly.
         with tempfile.TemporaryFile(mode='w+b') as media_file:
-            shutil.copyfileobj(r.raw, media_file)
+            for chunk in r.iter_content(1024 * 1024):
+                if chunk:
+                    media_file.write(chunk)
             actual_length = media_file.tell()
+            if actual_length <= 0:
+                raise Exception('供应商返回了空视频文件（0 字节）')
             media_file.seek(0)
             public_url, ok = upload_to_tos(media_file, name, ct, content_length=actual_length)
         if ok:
@@ -2191,6 +2204,9 @@ def migrate_tos_history_videos_to_r2():
         ))
         for old_url in tos_urls:
             try:
+                probe = requests.head(old_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30, allow_redirects=True)
+                if probe.status_code >= 400 or int(probe.headers.get('Content-Length') or 0) <= 0:
+                    raise Exception('源视频为空或不可读取，保留原历史地址')
                 new_url, _ = download_and_save_video(old_url)
                 if not new_url or not new_url.startswith(R2_PUBLIC_BASE):
                     raise Exception('R2 未返回公开地址')

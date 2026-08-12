@@ -4444,7 +4444,7 @@ function renderVideoResults() {
       var playableUrl = '/api/history/media?url=' + encodeURIComponent(v.url || '');
       html += '<div class="result-card" style="margin:0;" id="vcard_' + idx + '">' +
         (tagsHtml ? '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 8px 0;">' + tagsHtml + '</div>' : '') +
-        '<video src="' + escAttr(playableUrl) + '" controls playsinline preload="metadata" onclick="event.preventDefault();openVideoLightbox(\'' + escAttr(playableUrl) + '\',' + idx + ')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="cursor:pointer;"></video>' +
+        '<video src="' + escAttr(playableUrl) + '" controls playsinline preload="metadata" onclick="event.preventDefault();openVideoLightbox(\'' + escAttr(playableUrl) + '\',' + idx + ',\'' + escAttr(v.url) + '\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="cursor:pointer;"></video>' +
         '<div class="video-fallback" style="display:none;aspect-ratio:9/16;align-items:center;justify-content:center;background:var(--surface3);color:var(--text-muted);font-size:13px;gap:8px;flex-direction:column;min-height:150px;">' +
         '<span style="font-size:28px;">🎬</span><span>视频加载失败</span>' +
         '<a href="/api/history/media?download=1&amp;url=' + encodeURIComponent(v.url || '') + '" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a></div>' +
@@ -4492,7 +4492,7 @@ function showResult(url) {
 // ── Video Lightbox ───────────────────────────────────────────
 var _lightboxVideoIdx = -1;
 
-function openVideoLightbox(url, idx) {
+function openVideoLightbox(url, idx, originalUrl) {
   _lightboxVideoIdx = idx;
   var lb = document.getElementById('videoLightbox');
   var video = document.getElementById('lbVideo');
@@ -4506,13 +4506,14 @@ function openVideoLightbox(url, idx) {
   var actionsEl = document.getElementById('lbActions');
   var ratio = v ? (v.ratio || '9:16') : '9:16';
   var safeUrl = escAttr(url);
+  var safeOriginalUrl = escAttr(originalUrl || (v && v.url) || url);
   actionsEl.innerHTML =
-    '<button onclick="copyVideoLink(\'' + safeUrl + '\',this)" title="复制链接">📋 复制链接</button>' +
-    '<button onclick="downloadGeneratedVideo(\'' + safeUrl + '\')" title="下载视频">⬇ 下载</button>' +
-    (v ? '<button onclick="upscaleVideo(\'' + safeUrl + '\',\'' + ratio + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' : '') +
-    (v ? '<button onclick="extractAndSetFrame(\'' + safeUrl + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' : '') +
-    (v ? '<button onclick="extractAndSetFrame(\'' + safeUrl + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' : '') +
-    (v ? '<button class="lb-primary" onclick="setAsPreviousVideo(\'' + safeUrl + '\',' + idx + ')" title="设为上一段视频">🔗 设为上一段</button>' : '');
+    '<button onclick="copyVideoLink(\'' + safeOriginalUrl + '\',this)" title="复制链接">📋 复制链接</button>' +
+    '<button onclick="downloadGeneratedVideo(\'' + safeOriginalUrl + '\')" title="下载视频">⬇ 下载</button>' +
+    (v ? '<button onclick="upscaleVideo(\'' + safeOriginalUrl + '\',\'' + ratio + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' : '') +
+    (v ? '<button onclick="extractAndSetFrame(\'' + safeOriginalUrl + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' : '') +
+    (v ? '<button onclick="extractAndSetFrame(\'' + safeOriginalUrl + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' : '') +
+    (v ? '<button class="lb-primary" onclick="setAsPreviousVideo(\'' + safeOriginalUrl + '\',' + idx + ')" title="设为上一段视频">🔗 设为上一段</button>' : '');
 }
 
 function closeVideoLightbox() {
