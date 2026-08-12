@@ -1152,7 +1152,7 @@ def upload():
         return jsonify(url=public_url, name=name, storage=storage_name_for_url(public_url))
 
     if persistent_storage_configured():
-        return jsonify(error='永久存储上传失败，请检查 R2/TOS 配置后重试'), 503
+        return jsonify(error='文件存储失败，请稍后重试'), 503
 
     # Fallback to local
     path = os.path.join(UPLOAD, name)
@@ -1231,51 +1231,6 @@ def history_media_by_url():
     if request.args.get('download') == '1':
         headers['Content-Disposition'] = f'attachment; filename="generation{ext}"'
     return Response(stream_download(), status=upstream.status_code, headers=headers)
-
-@app.route('/api/history/<int:item_index>/media')
-@login_required
-def history_media(item_index):
-    history = load_json(history_path(), [])
-    if item_index < 0 or item_index >= len(history):
-        return jsonify(error='历史记录不存在'), 404
-    item = history[item_index]
-    media_url = item.get('image_url') if item.get('type') == 'image' else item.get('video_url')
-    if not media_url:
-        return jsonify(error='媒体地址不存在'), 404
-    if media_url.startswith('/'):
-        media_url = request.host_url.rstrip('/') + media_url
-
-    upstream_headers = {'User-Agent': 'Mozilla/5.0'}
-    if request.headers.get('Range'):
-        upstream_headers['Range'] = request.headers['Range']
-    try:
-        upstream = requests.get(media_url, headers=upstream_headers, timeout=180, stream=True)
-    except requests.RequestException as e:
-        return jsonify(error=f'媒体读取失败：{e}'), 502
-    if upstream.status_code not in (200, 206):
-        upstream.close()
-        return jsonify(error=f'媒体读取失败：HTTP {upstream.status_code}'), 502
-
-    def stream_media():
-        try:
-            for chunk in upstream.iter_content(256 * 1024):
-                if chunk:
-                    yield chunk
-        finally:
-            upstream.close()
-
-    headers = {
-        'Content-Type': upstream.headers.get('Content-Type', 'application/octet-stream'),
-        'Accept-Ranges': upstream.headers.get('Accept-Ranges', 'bytes'),
-        'Cache-Control': 'private, max-age=3600',
-    }
-    for key in ('Content-Length', 'Content-Range'):
-        if upstream.headers.get(key):
-            headers[key] = upstream.headers[key]
-    if request.args.get('download') == '1':
-        ext = os.path.splitext(media_url.split('?', 1)[0])[1] or ('.png' if item.get('type') == 'image' else '.mp4')
-        headers['Content-Disposition'] = f'attachment; filename="generation-{item_index + 1}{ext}"'
-    return Response(stream_media(), status=upstream.status_code, headers=headers)
 
 # ── models ────────────────────────────────────────────────────
 @app.route('/api/models', methods=['GET'])
@@ -2134,7 +2089,7 @@ def download_and_save_image(image_url):
         return public_url, name
 
     if persistent_storage_configured():
-        raise Exception('图片生成成功，但永久存储上传失败；未保存到临时磁盘，请检查 R2/TOS 配置后重试')
+        raise Exception('图片生成成功，但文件存储失败，请稍后重试')
 
     # Fallback to local
     path = os.path.join(UPLOAD, name)
@@ -2187,7 +2142,7 @@ def download_and_save_video(video_url):
         print(f'[video-cache] failed: {e}', flush=True)
 
     if persistent_storage_configured():
-        raise Exception('视频生成成功，但永久存储上传失败；请检查 R2 配置后重试')
+        raise Exception('视频生成成功，但文件存储失败，请稍后重试')
     return video_url, None
 
 def migrate_tos_history_videos_to_r2():
@@ -2313,7 +2268,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             if ok:
                 return public_url, name
             if persistent_storage_configured():
-                raise Exception('图片生成成功，但永久存储上传失败；请检查 R2/TOS 配置后重试')
+                raise Exception('图片生成成功，但文件存储失败，请稍后重试')
             path = os.path.join(UPLOAD, name)
             with open(path, 'wb') as f:
                 f.write(img_bytes)
