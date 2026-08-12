@@ -2221,7 +2221,7 @@ async function uploadFile(file) {
         throw new Error(data.error || ('上传失败 HTTP ' + res.status));
       }
       if (!data.url) throw new Error('上传成功但没有返回图片地址');
-      showTempBanner('上传成功：' + (data.storage || 'unknown'), 'ok');
+      showTempBanner('上传成功', 'ok');
       hideTempBannerSoon();
       return data;
     } finally {
@@ -2230,7 +2230,7 @@ async function uploadFile(file) {
   }
 
   try {
-    showTempBanner('正在获取上传签名：' + file.name, 'warn');
+    showTempBanner('正在准备上传：' + file.name, 'warn');
     var signRes = await fetch('/api/tos-presign', {
       method: 'POST',
       credentials: 'same-origin',
@@ -2246,7 +2246,7 @@ async function uploadFile(file) {
       throw new Error(signData.error || '直传签名缺少上传地址');
     }
 
-    showTempBanner('正在直传 TOS：' + file.name, 'warn');
+    showTempBanner('正在上传：' + file.name, 'warn');
     var putController = new AbortController();
     var putTimer = setTimeout(function() { putController.abort(); }, 180000);
     try {
@@ -2256,12 +2256,12 @@ async function uploadFile(file) {
         body: file,
         signal: putController.signal
       });
-      if (!putRes.ok) throw new Error('TOS 直传失败 HTTP ' + putRes.status);
+      if (!putRes.ok) throw new Error('上传失败 HTTP ' + putRes.status);
     } finally {
       clearTimeout(putTimer);
     }
 
-    showTempBanner('上传成功：tos-direct', 'ok');
+    showTempBanner('上传成功', 'ok');
     hideTempBannerSoon();
     return {
       url: signData.public_url,
@@ -2274,7 +2274,7 @@ async function uploadFile(file) {
       alert(e.message);
       throw e;
     }
-    console.warn('TOS direct upload failed, falling back to server upload:', e);
+    console.warn('Direct upload failed, falling back to server upload:', e);
     try {
       return await uploadViaServer();
     } catch (fallbackError) {
@@ -4441,12 +4441,13 @@ function renderVideoResults() {
       if (tgs.indexOf('已入历史') >= 0) tagsHtml += '<span class="meta-badge" style="background:#059669;color:#fff;font-size:9px;">📋 已入历史</span>';
       if (tgs.indexOf('已设为上一段') >= 0) tagsHtml += '<span class="meta-badge" style="background:#d97706;color:#fff;font-size:9px;">🔗 已设为上一段</span>';
 
+      var playableUrl = '/api/history/media?url=' + encodeURIComponent(v.url || '');
       html += '<div class="result-card" style="margin:0;" id="vcard_' + idx + '">' +
         (tagsHtml ? '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 8px 0;">' + tagsHtml + '</div>' : '') +
-        '<video src="' + escAttr(v.url) + '" controls playsinline preload="metadata" onclick="event.preventDefault();openVideoLightbox(\'' + escAttr(v.url) + '\',' + idx + ')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="cursor:pointer;"></video>' +
+        '<video src="' + escAttr(playableUrl) + '" controls playsinline preload="metadata" onclick="event.preventDefault();openVideoLightbox(\'' + escAttr(playableUrl) + '\',' + idx + ')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="cursor:pointer;"></video>' +
         '<div class="video-fallback" style="display:none;aspect-ratio:9/16;align-items:center;justify-content:center;background:var(--surface3);color:var(--text-muted);font-size:13px;gap:8px;flex-direction:column;min-height:150px;">' +
         '<span style="font-size:28px;">🎬</span><span>视频加载失败</span>' +
-        '<a href="' + escAttr(v.url) + '" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a></div>' +
+        '<a href="/api/history/media?download=1&amp;url=' + encodeURIComponent(v.url || '') + '" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a></div>' +
         '<div class="result-meta"><div class="meta-left">' +
         '<span class="meta-badge">' + (VIDEO_MODEL_LABELS[v.model] || v.model) + '</span>' +
         '<span class="meta-badge">' + (v.ratio || '-') + '</span>' +
@@ -4458,7 +4459,7 @@ function renderVideoResults() {
         '<div style="font-size:10px;color:var(--text-muted);padding:0 8px 6px;">' + escHtml(v.prompt || '') + ' · 素材 ' + (v.refCount || 0) + '</div>' +
         '<div class="result-actions" style="padding:0 8px 8px;display:flex;flex-wrap:wrap;gap:4px;">' +
         '<button onclick="copyVideoLink(\'' + escAttr(v.url) + '\',this)" title="复制链接">📋 复制链接</button>' +
-        '<button onclick="window.open(\'' + escAttr(v.url) + '\')" title="下载视频">⬇ 下载</button>' +
+        '<button onclick="downloadGeneratedVideo(\'' + escAttr(v.url) + '\')" title="下载视频">⬇ 下载</button>' +
         '<button onclick="upscaleVideo(\'' + escAttr(v.url) + '\',\'' + (v.ratio || '9:16') + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' +
         '<button onclick="extractAndSetFrame(\'' + escAttr(v.url) + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' +
         '<button onclick="extractAndSetFrame(\'' + escAttr(v.url) + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' +
@@ -4507,7 +4508,7 @@ function openVideoLightbox(url, idx) {
   var safeUrl = escAttr(url);
   actionsEl.innerHTML =
     '<button onclick="copyVideoLink(\'' + safeUrl + '\',this)" title="复制链接">📋 复制链接</button>' +
-    '<button onclick="window.open(\'' + safeUrl + '\')" title="下载视频">⬇ 下载</button>' +
+    '<button onclick="downloadGeneratedVideo(\'' + safeUrl + '\')" title="下载视频">⬇ 下载</button>' +
     (v ? '<button onclick="upscaleVideo(\'' + safeUrl + '\',\'' + ratio + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' : '') +
     (v ? '<button onclick="extractAndSetFrame(\'' + safeUrl + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' : '') +
     (v ? '<button onclick="extractAndSetFrame(\'' + safeUrl + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' : '') +
@@ -4543,6 +4544,10 @@ function copyVideoLink(url, btn) {
     document.execCommand('copy'); document.body.removeChild(ta);
     if (btn) { var orig2 = btn.textContent; btn.textContent = '✅ 已复制'; setTimeout(function() { btn.textContent = orig2; }, 1500); }
   });
+}
+
+function downloadGeneratedVideo(url) {
+  window.location.href = '/api/history/media?download=1&url=' + encodeURIComponent(url);
 }
 
 function deleteVideoResult(idx) {
@@ -4914,7 +4919,7 @@ function renderHistory() {
       </div>`;
       return;
     }
-    const mediaUrl = isImage ? h.image_url : h.video_url;
+    const mediaUrl = isImage ? h.image_url : ('/api/history/media?url=' + encodeURIComponent(h.video_url || ''));
     const safeUrl = escAttr(mediaUrl || '');
     const wasOptimized = h.original_script && h.refined_script && h.original_script !== h.refined_script;
     const displayScript = h.script || h.original_script || '无描述';
@@ -4930,7 +4935,7 @@ function renderHistory() {
           <div class="video-fallback" style="display:none;aspect-ratio:16/9;align-items:center;justify-content:center;background:var(--surface3);color:var(--text-muted);font-size:13px;gap:8px;flex-direction:column;">
             <span style="font-size:28px;">🎬</span>
             <span>视频缩略图加载失败</span>
-            <a href="${safeUrl}" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a>
+            <a href="/api/history/media?download=1&url=${encodeURIComponent(h.video_url || '')}" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a>
           </div>`}
           <div class="timeline-card-body">
             <div class="info">
@@ -4938,8 +4943,8 @@ function renderHistory() {
               <div class="script" title="${escHtml((h.original_script || displayScript) + (wasOptimized ? '\n\n--- AI优化后 ---\n' + h.refined_script : ''))}">${escHtml(displayScript)}</div>
             </div>
             <div class="timeline-actions">
-              <button onclick="window.open('${safeUrl}')">下载</button>
-              ${!isImage ? `<button class="primary" onclick="useHistoryVideo('${safeUrl}')">接续此段</button>` : ''}
+              <button onclick="window.location.href='${isImage ? safeUrl : `/api/history/media?download=1&url=${encodeURIComponent(h.video_url || '')}`}'">下载</button>
+              ${!isImage ? `<button class="primary" onclick="useHistoryVideo('${escAttr(h.video_url || '')}')">接续此段</button>` : ''}
               <button onclick="reeditHistoryItem(${i})">重新编辑</button>
             </div>
           </div>

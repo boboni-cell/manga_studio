@@ -1,8 +1,8 @@
-import os, json, uuid, time, threading, requests, functools, sys, re, secrets
+import os, json, uuid, time, threading, requests, functools, sys, re, secrets, tempfile, shutil
 import tos
 from datetime import datetime, timezone
 from urllib.parse import quote
-from flask import Flask, request, jsonify, send_from_directory, redirect, session
+from flask import Flask, request, jsonify, send_from_directory, redirect, session, Response
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from volcenginesdkarkruntime import Ark
@@ -505,18 +505,16 @@ def upload_to_r2(file_data, object_key, content_type='application/octet-stream',
         return None, False
 
 def is_persistent_storage_url(url):
-    return bool(
-        url and (
-            (R2_PUBLIC_BASE and url.startswith(R2_PUBLIC_BASE)) or
-            (TOS_PUBLIC_BASE and url.startswith(TOS_PUBLIC_BASE))
-        )
-    )
+    if not url:
+        return False
+    if r2_configured():
+        return bool(R2_PUBLIC_BASE and url.startswith(R2_PUBLIC_BASE))
+    return bool(TOS_PUBLIC_BASE and url.startswith(TOS_PUBLIC_BASE))
 
 def upload_to_tos(file_data, object_key, content_type='application/octet-stream', content_length=None):
     """Upload bytes or stream to durable object storage, return (public_url, success)."""
-    public_url, ok = upload_to_r2(file_data, object_key, content_type, content_length)
-    if ok:
-        return public_url, True
+    if r2_configured():
+        return upload_to_r2(file_data, object_key, content_type, content_length)
 
     try:
         client = get_tos_client()
@@ -1185,6 +1183,91 @@ def save_assets_api(cat):
 @login_required
 def get_history():
     return jsonify(load_json(history_path(), []))
+
+@app.route('/api/history/media')
+@login_required
+def history_media_by_url():
+    media_url = request.args.get('url', '')
+    history = load_json(history_path(), [])
+    item = next((entry for entry in history if entry.get('video_url') == media_url), None)
+    if not item:
+        return jsonify(error='媒体记录不存在'), 404
+    try:
+        upstream_headers = {'User-Agent': 'Mozilla/5.0'}
+        if request.headers.get('Range'):
+            upstream_headers['Range'] = request.headers['Range']
+        upstream = requests.get(media_url, headers=upstream_headers, timeout=180, stream=True)
+    except requests.RequestException as e:
+        return jsonify(error=f'媒体读取失败：{e}'), 502
+    if upstream.status_code not in (200, 206):
+        upstream.close()
+        return jsonify(error=f'媒体读取失败：HTTP {upstream.status_code}'), 502
+
+    def stream_download():
+        try:
+            for chunk in upstream.iter_content(256 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    ext = os.path.splitext(media_url.split('?', 1)[0])[1] or '.mp4'
+    headers = {
+        'Content-Type': upstream.headers.get('Content-Type', 'video/mp4'),
+        'Accept-Ranges': upstream.headers.get('Accept-Ranges', 'bytes'),
+        'Cache-Control': 'private, max-age=3600',
+    }
+    for key in ('Content-Length', 'Content-Range'):
+        if upstream.headers.get(key):
+            headers[key] = upstream.headers[key]
+    if request.args.get('download') == '1':
+        headers['Content-Disposition'] = f'attachment; filename="generation{ext}"'
+    return Response(stream_download(), status=upstream.status_code, headers=headers)
+
+@app.route('/api/history/<int:item_index>/media')
+@login_required
+def history_media(item_index):
+    history = load_json(history_path(), [])
+    if item_index < 0 or item_index >= len(history):
+        return jsonify(error='历史记录不存在'), 404
+    item = history[item_index]
+    media_url = item.get('image_url') if item.get('type') == 'image' else item.get('video_url')
+    if not media_url:
+        return jsonify(error='媒体地址不存在'), 404
+    if media_url.startswith('/'):
+        media_url = request.host_url.rstrip('/') + media_url
+
+    upstream_headers = {'User-Agent': 'Mozilla/5.0'}
+    if request.headers.get('Range'):
+        upstream_headers['Range'] = request.headers['Range']
+    try:
+        upstream = requests.get(media_url, headers=upstream_headers, timeout=180, stream=True)
+    except requests.RequestException as e:
+        return jsonify(error=f'媒体读取失败：{e}'), 502
+    if upstream.status_code not in (200, 206):
+        upstream.close()
+        return jsonify(error=f'媒体读取失败：HTTP {upstream.status_code}'), 502
+
+    def stream_media():
+        try:
+            for chunk in upstream.iter_content(256 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    headers = {
+        'Content-Type': upstream.headers.get('Content-Type', 'application/octet-stream'),
+        'Accept-Ranges': upstream.headers.get('Accept-Ranges', 'bytes'),
+        'Cache-Control': 'private, max-age=3600',
+    }
+    for key in ('Content-Length', 'Content-Range'):
+        if upstream.headers.get(key):
+            headers[key] = upstream.headers[key]
+    if request.args.get('download') == '1':
+        ext = os.path.splitext(media_url.split('?', 1)[0])[1] or ('.png' if item.get('type') == 'image' else '.mp4')
+        headers['Content-Disposition'] = f'attachment; filename="generation-{item_index + 1}{ext}"'
+    return Response(stream_media(), status=upstream.status_code, headers=headers)
 
 # ── models ────────────────────────────────────────────────────
 @app.route('/api/models', methods=['GET'])
@@ -2053,7 +2136,7 @@ def download_and_save_image(image_url):
 
 
 def download_and_save_video(video_url):
-    """Download a remote generated video, upload it to object storage, fallback to original URL."""
+    """Download a remote generated video and persist it to configured storage."""
     if not video_url or not video_url.startswith('http'):
         return video_url, None
     if is_persistent_storage_url(video_url):
@@ -2076,17 +2159,55 @@ def download_and_save_video(video_url):
         content_length = r.headers.get('Content-Length')
         content_length = int(content_length) if content_length and content_length.isdigit() else None
 
-        if content_length:
-            public_url, ok = upload_to_tos(r.raw, name, ct, content_length=content_length)
-        else:
-            public_url, ok = upload_to_tos(r.content, name, ct)
+        # urllib3 response bodies are not seekable. boto3 may need to rewind a
+        # body while calculating checksums/retrying, so spool the download into
+        # a seekable file before uploading it to R2.
+        with tempfile.TemporaryFile(mode='w+b') as media_file:
+            shutil.copyfileobj(r.raw, media_file)
+            actual_length = media_file.tell()
+            media_file.seek(0)
+            public_url, ok = upload_to_tos(media_file, name, ct, content_length=actual_length)
         if ok:
-            print(f'[video-cache] cached to TOS: {public_url}', flush=True)
+            print(f'[video-cache] cached to {storage_name_for_url(public_url)}: {public_url}', flush=True)
             return public_url, name
     except Exception as e:
         print(f'[video-cache] failed: {e}', flush=True)
 
+    if persistent_storage_configured():
+        raise Exception('视频生成成功，但永久存储上传失败；请检查 R2 配置后重试')
     return video_url, None
+
+def migrate_tos_history_videos_to_r2():
+    """Copy existing TOS history videos to R2 without deleting old objects."""
+    if not r2_configured():
+        return
+    users = load_json(users_path(), {})
+    migrated = failed = 0
+    for user_id in users:
+        snapshot = load_json(history_path(user_id), [])
+        tos_urls = list(dict.fromkeys(
+            item.get('video_url') for item in snapshot
+            if item.get('type') == 'video' and str(item.get('video_url') or '').startswith(TOS_PUBLIC_BASE)
+        ))
+        for old_url in tos_urls:
+            try:
+                new_url, _ = download_and_save_video(old_url)
+                if not new_url or not new_url.startswith(R2_PUBLIC_BASE):
+                    raise Exception('R2 未返回公开地址')
+                with HISTORY_LOCK:
+                    current = load_json(history_path(user_id), [])
+                    changed = False
+                    for item in current:
+                        if item.get('type') == 'video' and item.get('video_url') == old_url:
+                            item['video_url'] = new_url
+                            changed = True
+                    if changed:
+                        save_json(history_path(user_id), current)
+                        migrated += 1
+            except Exception as e:
+                failed += 1
+                print(f'[R2-migrate] skipped {old_url}: {e}', flush=True)
+    print(f'[R2-migrate] history videos migrated={migrated} failed={failed}', flush=True)
 
 
 def build_image_content(prompt, input_images, host_url):
@@ -3161,6 +3282,8 @@ def build_script_shots(body, api_cfg=None, user_id=None):
         raise Exception(f'解析分镜结果失败: {str(e)}\n模型原文：{raw[:800]}')
     except Exception as e:
         raise Exception(f'拆分失败: {str(e)}')
+
+threading.Thread(target=migrate_tos_history_videos_to_r2, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', '5001'))
