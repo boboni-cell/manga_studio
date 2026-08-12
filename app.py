@@ -622,11 +622,116 @@ def public_api_profile(profile, kind=None):
     capabilities = next((caps for name, caps in MODEL_CAPS.items() if name.lower() == model_name), None)
     if not capabilities and kind == 'video' and profile.get('provider') == 'nano':
         capabilities = nano_video_model_capabilities(profile)
+    elif not capabilities and kind == 'video' and profile.get('provider') == 'atlas':
+        capabilities = atlas_video_model_capabilities(profile)
+    elif not capabilities and kind == 'video' and profile.get('provider') == 'ark':
+        capabilities = MODEL_CAPS.get('seedance')
     if capabilities:
         public['capabilities'] = capabilities
     return public
 
 _NANO_VIDEO_MODEL_CACHE = {}
+_ATLAS_MODEL_CACHE = {'time': 0, 'items': []}
+_ATLAS_SCHEMA_CACHE = {}
+
+def atlas_model_items():
+    if _ATLAS_MODEL_CACHE['items'] and time.time() - _ATLAS_MODEL_CACHE['time'] < 3600:
+        return _ATLAS_MODEL_CACHE['items']
+    try:
+        response = requests.get(f'{ATLAS_API_BASE}/models', timeout=20)
+        if response.status_code != 200:
+            return []
+        body = response.json()
+        items = body.get('data', body) if isinstance(body, dict) else body
+        if not isinstance(items, list):
+            return []
+        _ATLAS_MODEL_CACHE.update(time=time.time(), items=items)
+        return items
+    except (requests.RequestException, ValueError):
+        return []
+
+def atlas_model_schema(model_id):
+    if model_id in _ATLAS_SCHEMA_CACHE:
+        return _ATLAS_SCHEMA_CACHE[model_id]
+    item = next((row for row in atlas_model_items() if row.get('model') == model_id), None)
+    schema_url = (item or {}).get('schema')
+    if not schema_url:
+        return None
+    try:
+        response = requests.get(schema_url, timeout=20)
+        if response.status_code != 200:
+            return None
+        schema = response.json()
+        _ATLAS_SCHEMA_CACHE[model_id] = schema
+        return schema
+    except (requests.RequestException, ValueError):
+        return None
+
+def atlas_input_properties(model_id):
+    schema = atlas_model_schema(model_id) or {}
+    components = schema.get('components') or {}
+    schemas = components.get('schemas') or {}
+    input_schema = schemas.get('Input') or schema.get('input_schema') or {}
+    return input_schema.get('properties') or {}
+
+def atlas_image_variant(model_id):
+    if not model_id:
+        return None
+    if model_id.endswith('/image-to-video'):
+        return model_id
+    if model_id.endswith(('/text-to-video', '/reference-to-video')):
+        candidate = model_id.rsplit('/', 1)[0] + '/image-to-video'
+        if any(row.get('model') == candidate for row in atlas_model_items()):
+            return candidate
+    return None
+
+def _schema_enum(properties, *names):
+    for name in names:
+        definition = properties.get(name) or {}
+        values = definition.get('enum')
+        if isinstance(values, list):
+            return values
+    return []
+
+def atlas_video_model_capabilities(profile):
+    model_id = str((profile or {}).get('model') or '')
+    effective_model = atlas_image_variant(model_id) or model_id
+    properties = atlas_input_properties(effective_model)
+    if not properties:
+        return None
+    names = set(properties)
+    duration_def = properties.get('duration') or {}
+    durations = _schema_enum(properties, 'duration')
+    numeric_durations = []
+    for value in durations:
+        try:
+            parsed = int(value)
+            if parsed > 0:
+                numeric_durations.append(parsed)
+        except (TypeError, ValueError):
+            pass
+    caps = {
+        'supports_first_frame': bool(names & {'image', 'image_url', 'imageUrl', 'first_frame_url', 'firstFrameUrl'}),
+        'supports_last_frame': bool(names & {'last_image', 'lastImage', 'last_frame_url', 'lastFrameUrl'}),
+        'supports_reference_images': bool(names & {'reference_images', 'images'}),
+        'supports_reference_audio': bool(names & {'reference_audios', 'audio_url'}),
+        'supports_reference_video': bool(names & {'reference_videos', 'video_url'}),
+    }
+    resolutions = [str(value) for value in _schema_enum(properties, 'resolution')]
+    ratios = [str(value) for value in _schema_enum(properties, 'ratio', 'aspect_ratio')]
+    if resolutions:
+        caps['resolutions'] = resolutions
+    if ratios:
+        caps['ratios'] = ratios
+    if numeric_durations:
+        caps['min_duration'] = min(numeric_durations)
+        caps['max_duration'] = max(numeric_durations)
+    else:
+        if duration_def.get('minimum') is not None:
+            caps['min_duration'] = duration_def['minimum']
+        if duration_def.get('maximum') is not None:
+            caps['max_duration'] = duration_def['maximum']
+    return caps
 
 def nano_video_model_info(profile):
     if not profile or profile.get('provider') != 'nano' or not profile.get('api_key') or not profile.get('model'):
@@ -2105,7 +2210,7 @@ def atlas_image_generate(prompt, model_id, ratio, custom_size, api_key, api_base
     return download_and_save_image(output_url)
 
 
-def atlas_video_generate(job_id, script, images, audio_url, video_url, ratio, duration, resolution,
+def atlas_video_generate(job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, resolution,
                          host_url, model_id, api_key, api_base, original_script, optimize, user_id):
     try:
         reference_images = []
@@ -2122,29 +2227,64 @@ def atlas_video_generate(job_id, script, images, audio_url, video_url, ratio, du
         if audio_url:
             reference_audios.append(host_url + audio_url if audio_url.startswith('/static/') else audio_url)
 
+        first_frame = host_url + first_frame_url if first_frame_url and first_frame_url.startswith('/static/') else first_frame_url
+        last_frame = host_url + last_frame_url if last_frame_url and last_frame_url.startswith('/static/') else last_frame_url
         has_references = bool(reference_images or reference_videos or reference_audios)
         model = model_id
-        if has_references and model.endswith('/text-to-video'):
+        if first_frame:
+            model = atlas_image_variant(model) or model
+        elif has_references and model.endswith('/text-to-video'):
             model = model.rsplit('/', 1)[0] + '/reference-to-video'
         elif not has_references and model.endswith('/reference-to-video'):
             model = model.rsplit('/', 1)[0] + '/text-to-video'
 
-        atlas_resolution = {
+        properties = atlas_input_properties(model)
+        allowed_resolutions = [str(value) for value in _schema_enum(properties, 'resolution')]
+        allowed_ratios = [str(value) for value in _schema_enum(properties, 'ratio', 'aspect_ratio')]
+        allowed_durations = [int(value) for value in _schema_enum(properties, 'duration') if str(value).lstrip('-').isdigit() and int(value) > 0]
+        resolution_fallback = {
             '480p': '480p', '720p': '720p', '768p': '720p',
             '1080p': '1080p-SR', '1440p': '1440p-SR',
         }.get(resolution, '720p')
-        atlas_ratio = ratio if ratio in ('16:9', '4:3', '1:1', '3:4', '9:16', '21:9', 'adaptive') else 'adaptive'
-        atlas_duration = max(4, min(15, int(duration)))
+        atlas_resolution = resolution if resolution in allowed_resolutions else resolution_fallback
+        if allowed_resolutions and atlas_resolution not in allowed_resolutions:
+            raise Exception(f'{model} 不支持分辨率 {resolution}')
+        atlas_ratio = ratio
+        if allowed_ratios and atlas_ratio not in allowed_ratios:
+            raise Exception(f'{model} 不支持比例 {ratio}')
+        atlas_duration = int(duration)
+        duration_def = properties.get('duration') or {}
+        if allowed_durations and atlas_duration not in allowed_durations:
+            raise Exception(f'{model} 不支持 {duration} 秒时长')
+        if duration_def.get('minimum') is not None and atlas_duration < duration_def['minimum'] or duration_def.get('maximum') is not None and atlas_duration > duration_def['maximum']:
+            raise Exception(f'{model} 不支持 {duration} 秒时长')
         payload = {
             'model': model,
             'prompt': script,
             'duration': atlas_duration,
             'resolution': atlas_resolution,
-            'ratio': atlas_ratio,
-            'generate_audio': True,
-            'watermark': False,
         }
-        if reference_images:
+        if 'generate_audio' in properties:
+            payload['generate_audio'] = True
+        if 'watermark' in properties:
+            payload['watermark'] = False
+        if 'aspect_ratio' in properties:
+            payload['aspect_ratio'] = atlas_ratio
+        else:
+            payload['ratio'] = atlas_ratio
+        if first_frame:
+            first_field = next((name for name in ('image', 'image_url', 'imageUrl', 'first_frame_url', 'firstFrameUrl') if name in properties), None)
+            if not first_field:
+                raise Exception(f'{model} 的 Atlas API 没有首帧字段，已停止提交')
+            payload[first_field] = first_frame
+            if last_frame:
+                last_field = next((name for name in ('last_image', 'lastImage', 'last_frame_url', 'lastFrameUrl') if name in properties), None)
+                if not last_field:
+                    raise Exception(f'{model} 的 Atlas API 没有尾帧字段，已停止提交')
+                payload[last_field] = last_frame
+        elif last_frame:
+            raise Exception('Atlas 严格尾帧模式必须同时提供首帧图')
+        elif reference_images:
             payload['reference_images'] = reference_images[:9]
         if reference_videos:
             payload['reference_videos'] = reference_videos[:3]
@@ -2158,7 +2298,7 @@ def atlas_video_generate(job_id, script, images, audio_url, video_url, ratio, du
             stored_url, script, original_script=original_script or script,
             refined_script=script if optimize else (original_script or script),
             model=model, ratio=atlas_ratio, duration=atlas_duration, resolution=atlas_resolution,
-            ref_count=len(reference_images), user_id=user_id
+            ref_count=len(reference_images) + int(bool(first_frame)) + int(bool(last_frame)), user_id=user_id
         )
         JOBS[job_id] = {
             'status': 'succeeded', 'video_url': stored_url, 'source_video_url': output_url,
@@ -2554,9 +2694,18 @@ def generate():
     video_caps = MODEL_CAPS.get(video_model) or MODEL_CAPS.get(selected_model)
     if force_personal and video_cfg.get('provider') == 'nano':
         discovered_caps = nano_video_model_capabilities(video_cfg)
-        if not discovered_caps:
+        if not discovered_caps and (first_frame_url or last_frame_url):
             return jsonify(error=f'无法读取 {video_model} 的 Nano 视频能力，暂不能安全提交首尾帧'), 400
-        video_caps = discovered_caps
+        if discovered_caps:
+            video_caps = discovered_caps
+    elif force_personal and video_cfg.get('provider') == 'atlas':
+        discovered_caps = atlas_video_model_capabilities(video_cfg)
+        if not discovered_caps and (first_frame_url or last_frame_url):
+            return jsonify(error=f'无法读取 {video_model} 的 Atlas 视频能力，暂不能安全提交首尾帧'), 400
+        if discovered_caps:
+            video_caps = discovered_caps
+    elif force_personal and video_cfg.get('provider') == 'ark':
+        video_caps = MODEL_CAPS.get('seedance')
     if first_frame_url and video_caps and not video_caps.get('supports_first_frame', False):
         return jsonify(error=f'{video_model} 的 API 不支持首帧输入，请更换支持图生视频的模型'), 400
     if last_frame_url and video_caps and not video_caps.get('supports_last_frame', False):
@@ -2579,7 +2728,7 @@ def generate():
             audio_url = None
         if not video_caps.get('supports_reference_video', True):
             video_url = None
-    if selected_model == 'seedance' and last_frame_url and not first_frame_url:
+    if (selected_model == 'seedance' or video_cfg.get('provider') == 'ark') and last_frame_url and not first_frame_url:
         return jsonify(error='Seedance 严格尾帧模式必须同时提供首帧图'), 400
 
     reference_images = list(images)
@@ -2618,7 +2767,7 @@ def generate():
     # ── Atlas Cloud path ──
     if video_cfg.get('provider') == 'atlas':
         start_metered_job(atlas_video_generate, (
-            job_id, script, reference_images, audio_url, video_url, ratio, duration, resolution,
+            job_id, script, reference_images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, resolution,
             host_url, video_model, video_cfg['api_key'], video_cfg['base_url'],
             original_script, optimize, user_id
         ), job_id, user_id, point_cost)

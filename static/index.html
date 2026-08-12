@@ -4821,7 +4821,22 @@ function getSegmentVideoPrompt(segment) {
   if (vp.includes('精准分镜时序脚本')) return vp;
   let timeline = segment.timeline_text || '';
   if (!timeline && Array.isArray(segment.timeline)) {
-    timeline = segment.timeline.map(item => typeof item === 'string' ? item : '').filter(Boolean).join('\n');
+    timeline = segment.timeline.map(item => {
+      if (typeof item === 'string') return item.trim();
+      if (!item || typeof item !== 'object') return '';
+      const range = item.time || item.range || ((item.start && item.end) ? `${item.start}-${item.end}` : '');
+      const seconds = item.duration || item.seconds || '1秒';
+      const detail = [
+        item.shot, item.camera, item.action,
+        item.expression ? `表情：${item.expression}` : '',
+        item.gaze ? `视线：${item.gaze}` : '',
+        item.emotion ? `情绪：${item.emotion}` : '',
+        item.product_state ? `产品：${item.product_state}` : '',
+        item.focus ? `画面重点：${item.focus}` : '',
+        item.continuity ? `衔接：${item.continuity}` : ''
+      ].filter(Boolean).join('，');
+      return [range, seconds, detail].filter(Boolean).join('｜');
+    }).filter(Boolean).join('\n');
   }
   return timeline ? `${vp}\n【${segment.duration || 5}秒精准分镜时序脚本】\n${timeline}`.trim() : vp;
 }
