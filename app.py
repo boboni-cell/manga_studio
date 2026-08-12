@@ -3416,36 +3416,69 @@ def timeline_is_complete(shot):
     if not isinstance(timeline, list) or len(timeline) != duration:
         return False
     required = ('time', 'shot', 'camera', 'action', 'expression', 'focus', 'continuity')
-    return all(
-        isinstance(item, dict)
-        and all(str(item.get(key) or '').strip() for key in required)
-        for item in timeline
-    )
+    for second, item in enumerate(timeline):
+        if not isinstance(item, dict) or not all(str(item.get(key) or '').strip() for key in required):
+            return False
+        if item.get('time') != f'00:{second:02d}-00:{second + 1:02d}':
+            return False
+    return True
+
+
+def normalize_shot_timeline(shot):
+    timeline = shot.get('timeline')
+    if not isinstance(timeline, list):
+        return shot
+    for second, item in enumerate(timeline):
+        if isinstance(item, dict):
+            item['time'] = f'00:{second:02d}-00:{second + 1:02d}'
+            item['duration'] = '1秒'
+    return shot
 
 
 def ensure_detailed_timelines(shots, script_model, api_cfg=None):
-    if all(isinstance(shot, dict) and timeline_is_complete(shot) for shot in shots):
-        return shots
-    repair_prompt = (
-        '你是严格的逐秒分镜补全器。只输出合法 JSON 数组，不要 Markdown，不要解释。'
-        '保留每个对象原有剧情与字段，为每个对象补全 timeline。timeline 必须恰好等于 duration 条，'
-        '从00:00开始每1秒一条，连续、无缺口、无重叠、不得超时。每条必须是对象，字段完整：'
+    completed = []
+    for original_shot in shots:
+        if not isinstance(original_shot, dict):
+            raise ValueError('模型返回了无效的分镜对象')
+        shot = normalize_shot_timeline(dict(original_shot))
+        if timeline_is_complete(shot):
+            shot['timeline_text'] = format_shot_timeline(shot)
+            completed.append(shot)
+            continue
+        try:
+            duration = max(1, min(15, int(shot.get('duration') or 5)))
+        except (TypeError, ValueError):
+            duration = 5
+        shot['duration'] = duration
+        repair_prompt = (
+        f'你是严格的逐秒分镜补全器。只输出仅含1个对象的合法 JSON 数组，不要 Markdown，不要解释。'
+        f'该段时长固定为{duration}秒，timeline 必须恰好输出{duration}个对象，少一个或多一个都不合格。'
+        '保留原有剧情与字段，重写 video_prompt 并补全 timeline。timeline 从00:00开始每1秒一条，'
+        '连续、无缺口、无重叠、不得超时。每条必须完整包含：'
         'time（00:00-00:01格式）、duration（固定1秒）、shot（景别与构图）、camera（机位、镜头高度、焦段感和运镜）、'
         'action（这一秒开始到结束的具体动作变化）、expression（面部肌理、眼神、嘴部与微表情变化）、'
         'gaze（视线落点及变化）、emotion（外显与内在情绪）、product_state（产品位置、朝向、可见信息和手部接触；无产品写“无”）、'
         'focus（主体、前中后景、景深与光线重点）、continuity（与上一秒和下一秒如何连续）。'
         '禁止使用“保持”“继续”“同上”“自然动作”等省略描述；每秒都必须可独立执行且具体。'
         '同时重写 video_prompt：先写整体场景、人物、光线、镜头路线与动作目标，再写连续性和质量约束；不要把 timeline 压缩成一句话。'
-    )
-    repaired = call_script_text_model(
-        script_model, repair_prompt, json.dumps(shots, ensure_ascii=False),
-        temperature=0.35, max_tokens=max(5000, len(shots) * 1800), api_cfg=api_cfg
-    )
-    completed = parse_script_shots_json(repaired, script_model, api_cfg=api_cfg)
-    if not all(isinstance(shot, dict) and timeline_is_complete(shot) for shot in completed):
-        raise ValueError('模型未按要求生成完整逐秒时序，请重试或更换剧本模型')
-    for shot in completed:
+        )
+        for _ in range(2):
+            repaired = call_script_text_model(
+                script_model, repair_prompt, json.dumps([shot], ensure_ascii=False),
+                temperature=0.25, max_tokens=min(12000, max(5000, duration * 850)), api_cfg=api_cfg
+            )
+            repaired_shots = parse_script_shots_json(repaired, script_model, api_cfg=api_cfg)
+            if repaired_shots and isinstance(repaired_shots[0], dict):
+                candidate = dict(shot)
+                candidate.update(repaired_shots[0])
+                candidate['duration'] = duration
+                shot = normalize_shot_timeline(candidate)
+                if timeline_is_complete(shot):
+                    break
+        if not timeline_is_complete(shot):
+            raise ValueError(f'第{shot.get("segment_no") or len(completed) + 1}段未生成完整的{duration}秒逐秒时序，请重试或更换剧本模型')
         shot['timeline_text'] = format_shot_timeline(shot)
+        completed.append(shot)
     return completed
 
 
