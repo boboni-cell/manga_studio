@@ -4301,9 +4301,15 @@ async function _doGenerate() {
   const usableFirstFrame = caps.supports_first_frame === false ? null : firstFrame;
   const usableLastFrame = caps.supports_last_frame === false ? null : lastFrame;
   const usableStoryboard = caps.supports_reference_images === false ? null : storyboard;
+  const strictSeedanceFrames = videoModel === 'seedance' && !!usableFirstFrame;
+
+  if (videoModel === 'seedance' && usableLastFrame && !usableFirstFrame) {
+    alert('Seedance 严格尾帧模式必须同时选择首帧图');
+    return;
+  }
 
   document.getElementById('sendBtn').disabled = true;
-  document.getElementById('projectStatus').textContent = '生成中...';
+  document.getElementById('projectStatus').textContent = strictSeedanceFrames ? '首尾帧严格模式生成中...' : '生成中...';
   const currentRatio2 = selectedRatio;
   const currentDuration2 = selectedDuration;
   const currentResolution2 = selectedResolution;
@@ -4320,12 +4326,12 @@ async function _doGenerate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         script,
-        images: usableImages,
-        audio_url: usableAudio ? usableAudio.url : undefined,
-        video_url: usableVideo ? usableVideo.url : undefined,
+        images: strictSeedanceFrames ? [] : usableImages,
+        audio_url: !strictSeedanceFrames && usableAudio ? usableAudio.url : undefined,
+        video_url: !strictSeedanceFrames && usableVideo ? usableVideo.url : undefined,
         first_frame_url: usableFirstFrame ? usableFirstFrame.url : undefined,
         last_frame_url: usableLastFrame ? usableLastFrame.url : undefined,
-        storyboard_ref_url: usableStoryboard ? usableStoryboard.url : undefined,
+        storyboard_ref_url: !strictSeedanceFrames && usableStoryboard ? usableStoryboard.url : undefined,
         ratio: selectedRatio,
         duration: selectedDuration,
         optimize_prompt: optimizePrompt,

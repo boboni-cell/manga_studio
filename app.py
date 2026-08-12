@@ -2381,6 +2381,9 @@ def generate():
             audio_url = None
         if not video_caps.get('supports_reference_video', True):
             video_url = None
+    if selected_model == 'seedance' and last_frame_url and not first_frame_url:
+        return jsonify(error='Seedance 严格尾帧模式必须同时提供首帧图'), 400
+
     reference_images = list(images)
     if storyboard_ref_url:
         reference_images.append({'url': storyboard_ref_url, 'role_label': '分镜构图参考'})
@@ -2470,11 +2473,25 @@ def generate():
     # ── Ark Seedance path (default) ──
     def run():
         try:
+            # Ark documents strict first/last-frame generation as a dedicated
+            # image-to-video mode. Mixing reference_image/audio/video items into
+            # the same request changes it into all-modal reference generation,
+            # where the boundary frames are guidance instead of hard anchors.
+            strict_frame_mode = bool(first_frame_url)
+            ark_reference_images = [] if strict_frame_mode else reference_images
             # build role description
             lines = ['【严格参考说明，必须遵守】']
-            for i, img in enumerate(reference_images, 1):
+            if strict_frame_mode:
+                lines.append('- 首帧图必须作为视频 00:00 的实际起始画面，不得重绘、替换人物或改变构图。')
+                if last_frame_url:
+                    lines.append('- 尾帧图必须作为视频结束时的实际画面，所有动作和运镜必须自然收束到该画面。')
+                    lines.append('- 只生成首帧到尾帧之间的连续过渡，不得生成与首尾帧无关的新人物、新场景或新构图。')
+                else:
+                    lines.append('- 从首帧图自然延续动作和镜头，不得另起画面。')
+            for i, img in enumerate(ark_reference_images, 1):
                 lines.append(f'- 图{i+1}：{img["role_label"]}，仅参考此用途，不得混用')
-            lines.append('请严格区分各参考图用途，不得将穿搭图用于脸部，不得将场景图用于人物。')
+            if ark_reference_images:
+                lines.append('请严格区分各参考图用途，不得将穿搭图用于脸部，不得将场景图用于人物。')
             # Storyboard reference instructions
             if storyboard_ref_url:
                 lines.append('\n【分镜参考使用规则】')
@@ -2494,15 +2511,15 @@ def generate():
             prefix = '\n'.join(lines) + '\n' + QUALITY_PROMPT
 
             content = [{'type': 'text', 'text': prefix + '\n' + script}]
-            for img in reference_images:
+            for img in ark_reference_images:
                 url = img['url']
                 if url.startswith('/static/'):
                     url = host_url + url
                 content.append({'type':'image_url','image_url':{'url':url},'role':'reference_image'})
-            if audio_url:
+            if audio_url and not strict_frame_mode:
                 final_audio_url = host_url + audio_url if audio_url.startswith('/static/') else audio_url
                 content.append({'type':'audio_url','audio_url':{'url':final_audio_url},'role':'reference_audio'})
-            if video_url:
+            if video_url and not strict_frame_mode:
                 content.append({'type':'video_url','video_url':{'url':video_url},'role':'reference_video'})
             if first_frame_url:
                 url = first_frame_url
@@ -2528,7 +2545,11 @@ def generate():
             JOBS[job_id]['status'] = 'running'
             res = client.content_generation.tasks.create(
                 model=video_model, content=content,
-                generate_audio=True, ratio=ratio, duration=duration, watermark=False)
+                generate_audio=True,
+                ratio='adaptive' if strict_frame_mode else ratio,
+                duration=duration,
+                resolution=resolution,
+                watermark=False)
             task_id = res.id
 
             while True:
