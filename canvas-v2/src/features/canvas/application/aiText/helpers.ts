@@ -1,0 +1,1475 @@
+import {
+  CANVAS_NODE_TYPES,
+  isAiTextNode,
+  isExportImageNode,
+  isImageEditNode,
+  isTextAnnotationNode,
+  isUploadNode,
+  isVideoNode,
+  type CanvasEdge,
+  type CanvasNode,
+  type JsonCardNodeData,
+  type TextAnnotationNodeData,
+} from '@/features/canvas/domain/canvasNodes';
+import { resolveNodeDisplayName } from '@/features/canvas/domain/nodeDisplay';
+import {
+  collectInputReferences,
+  type GraphReferenceItem,
+} from '@/features/canvas/application/graphReferenceResolver';
+import { imageUrlToDataUrl } from '@/features/canvas/application/imageData';
+import type {
+  AiTextInputImagePart,
+  AiTextInputPart,
+  AiTextInputSourceType,
+  AiTextInputTextPart,
+  AiTextOpenAiChatPayload,
+  AiTextResolvedResult,
+  FlattenedJsonPathOption,
+  JsonCardDisplayField,
+  TextAgentConfig,
+  TextAgentInputConfig,
+} from './types';
+
+const JSON_FENCE_PATTERN = /```json\s*([\s\S]*?)```/i;
+const DEFAULT_TEXT_MODEL = 'gpt-4.1-mini';
+
+interface JsonCardLikeNode extends CanvasNode {
+  type: typeof CANVAS_NODE_TYPES.jsonCard;
+  data: JsonCardNodeData;
+}
+
+interface TextAnnotationLikeNode extends CanvasNode {
+  type: typeof CANVAS_NODE_TYPES.textAnnotation;
+  data: TextAnnotationNodeData;
+}
+
+function isJsonCardNode(node: CanvasNode | null | undefined): node is JsonCardLikeNode {
+  return node?.type === CANVAS_NODE_TYPES.jsonCard;
+}
+
+function isTextAgentResultNode(node: CanvasNode | null | undefined): node is TextAnnotationLikeNode {
+  return node?.type === CANVAS_NODE_TYPES.textAnnotation;
+}
+
+function safeStringify(value: unknown, spacing = 2): string {
+  try {
+    return JSON.stringify(value, null, spacing);
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeLineBreaks(value: string): string {
+  return value.replace(/\r\n/g, '\n');
+}
+
+function createDefaultLabel(type: AiTextInputSourceType, index: number): string {
+  switch (type) {
+    case 'json':
+      return `JSON 输入 ${index}`;
+    case 'image':
+      return `图片输入 ${index}`;
+    case 'video':
+      return `视频输入 ${index}`;
+    case 'markdown':
+    default:
+      return `文本输入 ${index}`;
+  }
+}
+
+function createSourceConfigId(): string {
+  return `agent-source-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function createJsonFieldId(): string {
+  return `agent-json-field-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function tokenizeJsonPath(path: string): string[] {
+  const trimmed = path.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const normalized = trimmed.startsWith('$.') ? trimmed.slice(2) : trimmed.startsWith('$') ? trimmed.slice(1) : trimmed;
+  if (!normalized) {
+    return [];
+  }
+  const tokens: string[] = [];
+  const pattern = /([^[.\]]+)|\[(\d+)\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(normalized)) !== null) {
+    if (match[1]) {
+      tokens.push(match[1]);
+    } else if (match[2]) {
+      tokens.push(match[2]);
+    }
+  }
+  return tokens;
+}
+
+export function getValueByJsonPath(source: unknown, path?: string): unknown {
+  if (!path?.trim()) {
+    return source;
+  }
+  const tokens = tokenizeJsonPath(path);
+  return getValueByJsonPathTokens(source, tokens, 0);
+}
+
+function getValueByJsonPathTokens(source: unknown, tokens: string[], tokenIndex: number): unknown {
+  if (tokenIndex >= tokens.length) {
+    return source;
+  }
+
+  const token = tokens[tokenIndex];
+  if (Array.isArray(source)) {
+    const index = Number(token);
+    if (Number.isInteger(index)) {
+      if (index < 0 || index >= source.length) {
+        return undefined;
+      }
+      return getValueByJsonPathTokens(source[index], tokens, tokenIndex + 1);
+    }
+
+    const values = source
+      .map((item) => getValueByJsonPathTokens(item, tokens, tokenIndex))
+      .filter((value) => value !== undefined);
+    return values.length > 0 ? values : undefined;
+  }
+
+  if (!source || typeof source !== 'object') {
+    return undefined;
+  }
+
+  return getValueByJsonPathTokens(
+    (source as Record<string, unknown>)[token],
+    tokens,
+    tokenIndex + 1
+  );
+}
+
+function formatJsonPathValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.every((item) => item === null || ['string', 'number', 'boolean'].includes(typeof item))) {
+      return value
+        .map((item) => item === null ? '' : String(item))
+        .filter((item) => item.length > 0)
+        .join('\n');
+    }
+  }
+  return safeStringify(value, 2);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function decodeJsonStringFragment(content: string): string {
+  try {
+    return JSON.parse(`"${escapeJsonStringControlChars(content)}"`) as string;
+  } catch {
+    return content
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_match, code: string) =>
+        String.fromCharCode(parseInt(code, 16))
+      )
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+      .replace(/\\\//g, '/');
+  }
+}
+
+function findStringValueEnd(raw: string, valueStart: number): number {
+  let escaped = false;
+  for (let index = valueStart + 1; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char !== '"') {
+      continue;
+    }
+
+    const rest = raw.slice(index + 1);
+    if (/^\s*(?:,|\}|$)/.test(rest)) {
+      return index;
+    }
+  }
+
+  const objectEnd = raw.lastIndexOf('}');
+  const lastQuote = raw.lastIndexOf('"', objectEnd >= 0 ? objectEnd : raw.length - 1);
+  return lastQuote > valueStart ? lastQuote : -1;
+}
+
+function extractTopLevelStringFieldFromRawJson(raw: string, path: string): string | undefined {
+  const tokens = tokenizeJsonPath(path);
+  if (tokens.length !== 1 || /^\d+$/.test(tokens[0])) {
+    return undefined;
+  }
+
+  const key = tokens[0];
+  const pattern = new RegExp(`"${escapeRegExp(key)}"\\s*:`, 'm');
+  const match = pattern.exec(raw);
+  if (!match) {
+    return undefined;
+  }
+
+  let valueStart = match.index + match[0].length;
+  while (valueStart < raw.length && /\s/.test(raw[valueStart])) {
+    valueStart += 1;
+  }
+  if (raw[valueStart] !== '"') {
+    return undefined;
+  }
+
+  const valueEnd = findStringValueEnd(raw, valueStart);
+  if (valueEnd <= valueStart) {
+    return undefined;
+  }
+
+  return decodeJsonStringFragment(raw.slice(valueStart + 1, valueEnd));
+}
+
+export function resolveJsonCardDisplayFieldsFromRaw(
+  agent: TextAgentConfig | null | undefined,
+  raw: string
+): JsonCardDisplayField[] {
+  if (!agent?.jsonFields?.length || !raw.trim()) {
+    return [];
+  }
+
+  return agent.jsonFields
+    .filter((field) => field.enabled)
+    .map((field) => {
+      const value = extractTopLevelStringFieldFromRawJson(raw, field.path);
+      if (value === undefined) {
+        return null;
+      }
+      return {
+        path: field.path,
+        label: field.label,
+        value,
+      };
+    })
+    .filter((field): field is JsonCardDisplayField => Boolean(field));
+}
+
+function tryParseJson(raw: string): { parsed: unknown; content: string } | null {
+  const originalContent = raw.trim();
+  if (!originalContent) {
+    return null;
+  }
+  try {
+    return {
+      parsed: JSON.parse(originalContent) as unknown,
+      content: originalContent,
+    };
+  } catch {
+    // Keep going into repair passes. Chinese punctuation such as “...” is
+    // valid inside JSON strings, so normalization must not run before this.
+  }
+
+  const repairedOriginalContent = escapeJsonStringControlChars(originalContent);
+  if (repairedOriginalContent !== originalContent) {
+    try {
+      return {
+        parsed: JSON.parse(repairedOriginalContent) as unknown,
+        content: repairedOriginalContent,
+      };
+    } catch {
+      // Try punctuation normalization below.
+    }
+  }
+
+  const content = normalizeJsonLikePunctuation(originalContent);
+  if (content !== originalContent) {
+    try {
+      return {
+        parsed: JSON.parse(content) as unknown,
+        content,
+      };
+    } catch {
+      // Try escaping control characters below.
+    }
+  }
+
+  const repairedContent = escapeJsonStringControlChars(content);
+  if (repairedContent === content) {
+    return null;
+  }
+  try {
+    return {
+      parsed: JSON.parse(repairedContent) as unknown,
+      content: repairedContent,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeJsonLikePunctuation(raw: string): string {
+  const punctuationMap: Record<string, string> = {
+    '\uff0c': ',',
+    '\uff1a': ':',
+    '\uff3b': '[',
+    '\uff3d': ']',
+    '\uff5b': '{',
+    '\uff5d': '}',
+  };
+  const punctuationNormalized = raw.replace(/[\uff0c\uff1a\uff3b\uff3d\uff5b\uff5d]/g, (char) =>
+    punctuationMap[char] ?? char
+  );
+
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  let changed = punctuationNormalized !== raw;
+
+  const previousNonWhitespace = (index: number): string => {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (!/\s/.test(punctuationNormalized[cursor])) {
+        return punctuationNormalized[cursor];
+      }
+    }
+    return '';
+  };
+  const nextNonWhitespace = (index: number): string => {
+    for (let cursor = index + 1; cursor < punctuationNormalized.length; cursor += 1) {
+      if (!/\s/.test(punctuationNormalized[cursor])) {
+        return punctuationNormalized[cursor];
+      }
+    }
+    return '';
+  };
+
+  for (let index = 0; index < punctuationNormalized.length; index += 1) {
+    const char = punctuationNormalized[index];
+    const isJsonLikeQuote = char === '\u201c' || char === '\u201d' || char === '\uff02';
+
+    if (!inString) {
+      if (isJsonLikeQuote && /[\{\[\:,]/.test(previousNonWhitespace(index))) {
+        result += '"';
+        inString = true;
+        changed = true;
+        continue;
+      }
+      result += char;
+      if (char === '"') {
+        inString = true;
+      }
+      continue;
+    }
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      result += char;
+      inString = false;
+      continue;
+    }
+
+    if (isJsonLikeQuote && /[\:\,\}\]]/.test(nextNonWhitespace(index))) {
+      result += '"';
+      inString = false;
+      changed = true;
+      continue;
+    }
+
+    result += char;
+  }
+
+  return changed ? result : raw;
+}
+
+function escapeJsonStringControlChars(raw: string): string {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  let changed = false;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+
+    if (!inString) {
+      result += char;
+      if (char === '"') {
+        inString = true;
+      }
+      continue;
+    }
+
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      result += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      result += char;
+      inString = false;
+      continue;
+    }
+
+    if (char === '\r' || char === '\n') {
+      result += '\\n';
+      changed = true;
+      if (char === '\r' && raw[index + 1] === '\n') {
+        index += 1;
+      }
+      continue;
+    }
+
+    if (char === '\t') {
+      result += '\\t';
+      changed = true;
+      continue;
+    }
+
+    result += char;
+  }
+
+  return changed ? result : raw;
+}
+
+function tryParseJsonFragment(raw: string): { parsed: unknown; content: string; parseError?: string | null } | null {
+  const originalJson = tryParseJsonFragmentCandidate(raw);
+  const normalized = normalizeJsonLikePunctuation(raw);
+  if (normalized === raw) {
+    return originalJson;
+  }
+
+  const normalizedJson = tryParseJsonFragmentCandidate(normalized);
+  if (
+    normalizedJson
+    && (!originalJson || (Array.isArray(normalizedJson.parsed) && !Array.isArray(originalJson.parsed)))
+  ) {
+    return normalizedJson;
+  }
+
+  return originalJson;
+}
+
+function tryParseJsonFragmentCandidate(raw: string): { parsed: unknown; content: string; parseError?: string | null } | null {
+  const trimmed = raw.trimStart();
+  const firstObjectIndex = raw.indexOf('{');
+  const firstArrayIndex = raw.indexOf('[');
+
+  if (trimmed.startsWith('{')) {
+    return tryParseJsonFragmentWithRoot(raw, '{');
+  }
+
+  if (trimmed.startsWith('[')) {
+    return tryParseJsonFragmentWithRoot(raw, '[')
+      ?? tryParsePartialJsonArray(raw);
+  }
+
+  if (
+    firstObjectIndex >= 0
+    && (firstArrayIndex < 0 || firstObjectIndex < firstArrayIndex)
+  ) {
+    const objectJson = tryParseJsonFragmentWithRoot(raw, '{');
+    if (objectJson || firstObjectIndex === 0) {
+      return objectJson;
+    }
+  }
+
+  const arrayJson = tryParseJsonFragmentWithRoot(raw, '[');
+  return arrayJson
+    ?? (firstArrayIndex >= 0 && (firstObjectIndex < 0 || firstArrayIndex < firstObjectIndex)
+      ? tryParsePartialJsonArray(raw)
+      : null)
+    ?? tryParseJsonFragmentWithRoot(raw, '{');
+}
+
+function tryParseJsonFragmentWithRoot(
+  raw: string,
+  rootChar: '[' | '{'
+): { parsed: unknown; content: string; parseError?: string | null } | null {
+  const escapedRoot = rootChar === '[' ? '\\[' : '{';
+  const starts = [...raw.matchAll(new RegExp(escapedRoot, 'g'))]
+    .map((match) => match.index ?? -1)
+    .filter((index) => index >= 0);
+
+  for (const start of starts) {
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < raw.length; index += 1) {
+      const char = raw[index];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === '{') {
+        stack.push('}');
+        continue;
+      }
+      if (char === '[') {
+        stack.push(']');
+        continue;
+      }
+      if (char !== '}' && char !== ']') {
+        continue;
+      }
+      if (stack.length === 0 || stack[stack.length - 1] !== char) {
+        break;
+      }
+      stack.pop();
+      if (stack.length === 0) {
+        const candidate = raw.slice(start, index + 1);
+        const parsed = tryParseJson(candidate);
+        if (parsed) {
+          return parsed;
+        }
+        break;
+      }
+    }
+  }
+
+  return null;
+}
+
+function tryParsePartialJsonArray(raw: string): { parsed: unknown[]; content: string; parseError: string } | null {
+  const arrayStart = raw.indexOf('[');
+  if (arrayStart < 0) {
+    return null;
+  }
+
+  const items: unknown[] = [];
+  let index = arrayStart + 1;
+
+  while (index < raw.length) {
+    while (index < raw.length && /[\s,]/.test(raw[index])) {
+      index += 1;
+    }
+    if (index >= raw.length || raw[index] === ']') {
+      break;
+    }
+
+    const rootChar = raw[index];
+    if (rootChar !== '{' && rootChar !== '[') {
+      break;
+    }
+
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+    let valueEnd = -1;
+
+    for (let cursor = index; cursor < raw.length; cursor += 1) {
+      const char = raw[cursor];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === '\\') {
+          escaped = true;
+          continue;
+        }
+        if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === '{') {
+        stack.push('}');
+        continue;
+      }
+      if (char === '[') {
+        stack.push(']');
+        continue;
+      }
+      if (char !== '}' && char !== ']') {
+        continue;
+      }
+      if (stack.length === 0 || stack[stack.length - 1] !== char) {
+        valueEnd = -1;
+        break;
+      }
+      stack.pop();
+      if (stack.length === 0) {
+        valueEnd = cursor + 1;
+        break;
+      }
+    }
+
+    if (valueEnd <= index) {
+      break;
+    }
+
+    const candidate = raw.slice(index, valueEnd);
+    const parsed = tryParseJson(candidate);
+    if (!parsed) {
+      break;
+    }
+    items.push(parsed.parsed);
+    index = valueEnd;
+  }
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return {
+    parsed: items,
+    content: raw.trim(),
+    parseError: `JSON 数组未完整闭合，已解析前 ${items.length} 条完整项。`,
+  };
+}
+
+function appendFlattenedPaths(
+  value: unknown,
+  currentPath: string,
+  results: FlattenedJsonPathOption[],
+  visited: Set<unknown>,
+  depth: number,
+  maxDepth: number,
+  limit: number
+) {
+  if (results.length >= limit || depth > maxDepth) {
+    return;
+  }
+
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    results.push({
+      path: currentPath || '$',
+      label: currentPath || '$',
+    });
+    return;
+  }
+
+  if (typeof value !== 'object') {
+    return;
+  }
+
+  if (visited.has(value)) {
+    return;
+  }
+  visited.add(value);
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      results.push({
+        path: currentPath || '$',
+        label: currentPath || '$',
+      });
+      return;
+    }
+    appendFlattenedPaths(
+      value[0],
+      currentPath || '$',
+      results,
+      visited,
+      depth + 1,
+      maxDepth,
+      limit
+    );
+    return;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) {
+    results.push({
+      path: currentPath || '$',
+      label: currentPath || '$',
+    });
+    return;
+  }
+
+  entries.forEach(([key, child]) => {
+    if (results.length >= limit) {
+      return;
+    }
+    const nextPath = currentPath ? `${currentPath}.${key}` : `$.${key}`;
+    appendFlattenedPaths(child, nextPath, results, visited, depth + 1, maxDepth, limit);
+  });
+}
+
+export function flattenJsonPaths(
+  value: unknown,
+  options: { maxDepth?: number; limit?: number } = {}
+): FlattenedJsonPathOption[] {
+  const results: FlattenedJsonPathOption[] = [];
+  appendFlattenedPaths(
+    value,
+    '$',
+    results,
+    new Set<unknown>(),
+    0,
+    options.maxDepth ?? 4,
+    options.limit ?? 48
+  );
+  const deduped = new Map<string, FlattenedJsonPathOption>();
+  results.forEach((item) => {
+    if (!deduped.has(item.path)) {
+      deduped.set(item.path, item);
+    }
+  });
+  return Array.from(deduped.values());
+}
+
+export function parseAgentJsonExample(raw: string): {
+  parsed: unknown | null;
+  options: FlattenedJsonPathOption[];
+  error: string | null;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { parsed: null, options: [], error: null };
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return {
+      parsed,
+      options: flattenJsonPaths(parsed),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      parsed: null,
+      options: [],
+      error: error instanceof Error ? error.message : 'JSON 解析失败',
+    };
+  }
+}
+
+export function createDefaultTextAgent(): TextAgentConfig {
+  const now = Date.now();
+  return {
+    id: `text-agent-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    name: '新建 Agent',
+    enabled: true,
+    prompt: '',
+    defaultModel: DEFAULT_TEXT_MODEL,
+    inputSources: [{
+      id: createSourceConfigId(),
+      type: 'markdown',
+      label: createDefaultLabel('markdown', 1),
+      enabled: true,
+    }],
+    jsonExample: '',
+    jsonFields: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function normalizeTextAgentInputSource(
+  input: unknown,
+  index: number
+): TextAgentInputConfig | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const record = input as Partial<TextAgentInputConfig>;
+  const type = record.type === 'json' || record.type === 'image' || record.type === 'markdown' || record.type === 'video'
+    ? record.type
+    : 'markdown';
+  return {
+    id: typeof record.id === 'string' && record.id.trim() ? record.id : createSourceConfigId(),
+    type,
+    label: typeof record.label === 'string' && record.label.trim()
+      ? record.label.trim()
+      : createDefaultLabel(type, index + 1),
+    sourceAgentId: typeof record.sourceAgentId === 'string' && record.sourceAgentId.trim()
+      ? record.sourceAgentId.trim()
+      : null,
+    jsonPath: typeof record.jsonPath === 'string' && record.jsonPath.trim()
+      ? record.jsonPath.trim()
+      : undefined,
+    enabled: record.enabled !== false,
+  };
+}
+
+export function normalizeTextAgent(input: unknown): TextAgentConfig | null {
+  if (!input || typeof input !== 'object') {
+    return null;
+  }
+  const record = input as Partial<TextAgentConfig>;
+  const id = typeof record.id === 'string' ? record.id.trim() : '';
+  const prompt = typeof record.prompt === 'string' ? record.prompt.trim() : '';
+  if (!id || !prompt) {
+    return null;
+  }
+
+  const jsonFields = Array.isArray(record.jsonFields)
+    ? record.jsonFields.flatMap((field) => {
+      if (!field || typeof field !== 'object') {
+        return [];
+      }
+      const fieldRecord = field as Partial<TextAgentConfig['jsonFields'][number]>;
+      const path = typeof fieldRecord.path === 'string' ? fieldRecord.path.trim() : '';
+      if (!path) {
+        return [];
+      }
+      return [{
+        id: typeof fieldRecord.id === 'string' && fieldRecord.id.trim()
+          ? fieldRecord.id
+          : createJsonFieldId(),
+        path,
+        label: typeof fieldRecord.label === 'string' && fieldRecord.label.trim()
+          ? fieldRecord.label.trim()
+          : path,
+        enabled: fieldRecord.enabled !== false,
+      }];
+    })
+    : [];
+
+  const inputSources = Array.isArray(record.inputSources)
+    ? record.inputSources
+      .map((item, index) => normalizeTextAgentInputSource(item, index))
+      .filter((item): item is TextAgentInputConfig => Boolean(item))
+    : [];
+
+  const createdAt = typeof record.createdAt === 'number' && Number.isFinite(record.createdAt)
+    ? record.createdAt
+    : Date.now();
+  const updatedAt = typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
+    ? record.updatedAt
+    : createdAt;
+
+  return {
+    id,
+    name: typeof record.name === 'string' && record.name.trim()
+      ? record.name.trim()
+      : '未命名 Agent',
+    enabled: record.enabled !== false,
+    prompt,
+    defaultModel: typeof record.defaultModel === 'string' && record.defaultModel.trim()
+      ? record.defaultModel.trim()
+      : DEFAULT_TEXT_MODEL,
+    inputSources: inputSources.length > 0
+      ? inputSources
+      : [{
+        id: createSourceConfigId(),
+        type: 'markdown',
+        label: createDefaultLabel('markdown', 1),
+        enabled: true,
+      }],
+    jsonExample: typeof record.jsonExample === 'string' ? record.jsonExample : '',
+    jsonFields,
+    createdAt,
+    updatedAt,
+  };
+}
+
+export function normalizeTextAgents(input: unknown): TextAgentConfig[] {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  return input
+    .map((item) => normalizeTextAgent(item))
+    .filter((item): item is TextAgentConfig => {
+      if (!item || seen.has(item.id)) {
+        return false;
+      }
+      seen.add(item.id);
+      return true;
+    })
+    .slice(0, 200);
+}
+
+function resolveJsonTextContent(node: JsonCardLikeNode, jsonPath?: string): string {
+  const { parsedJson, rawContent } = node.data;
+  if (!jsonPath?.trim()) {
+    return parsedJson !== null && parsedJson !== undefined ? safeStringify(parsedJson, 2) : rawContent;
+  }
+  const value = getValueByJsonPath(parsedJson, jsonPath);
+  return value === undefined ? '' : formatJsonPathValue(value);
+}
+
+function createMarkdownPart(node: CanvasNode, label: string): AiTextInputTextPart | null {
+  if (!isTextAnnotationNode(node)) {
+    return null;
+  }
+  const content = typeof node.data.content === 'string' ? node.data.content.trim() : '';
+  if (!content) {
+    return null;
+  }
+  return {
+    kind: 'text',
+    sourceType: 'markdown',
+    sourceNodeId: node.id,
+    label,
+    content,
+  };
+}
+
+function createTextPartFromReference(reference: GraphReferenceItem, label: string): AiTextInputTextPart | null {
+  if (reference.kind !== 'text') {
+    return null;
+  }
+  const content = reference.content?.trim() ?? '';
+  if (!content) {
+    return null;
+  }
+  return {
+    kind: 'text',
+    sourceType: 'markdown',
+    sourceNodeId: reference.sourceNodeId,
+    label,
+    content,
+  };
+}
+
+function createJsonPart(
+  node: CanvasNode,
+  label: string,
+  jsonPath?: string
+): AiTextInputTextPart | null {
+  if (!isJsonCardNode(node)) {
+    return null;
+  }
+  const content = resolveJsonTextContent(node, jsonPath).trim();
+  if (!content) {
+    return null;
+  }
+  return {
+    kind: 'text',
+    sourceType: 'json',
+    sourceNodeId: node.id,
+    label,
+    content,
+    jsonPath,
+  };
+}
+
+function createJsonPartUsageKey(nodeId: string, jsonPath?: string): string {
+  return `${nodeId}::${jsonPath?.trim() || '$'}`;
+}
+
+function createImagePart(node: CanvasNode, label: string): AiTextInputImagePart | null {
+  if (!isUploadNode(node) && !isImageEditNode(node) && !isExportImageNode(node)) {
+    return null;
+  }
+  const imageUrl =
+    (typeof node.data.imageUrl === 'string' && node.data.imageUrl.trim())
+      || (typeof node.data.previewImageUrl === 'string' && node.data.previewImageUrl.trim())
+      || '';
+  if (!imageUrl) {
+    return null;
+  }
+  return {
+    kind: 'image',
+    sourceType: 'image',
+    sourceNodeId: node.id,
+    label,
+    imageUrl,
+    previewImageUrl:
+      typeof node.data.previewImageUrl === 'string' ? node.data.previewImageUrl : null,
+  };
+}
+
+function isOpenAiCompatibleImageUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value)
+    || /^file:\/\//i.test(value)
+    || /^data:image\//i.test(value);
+}
+
+async function normalizeOpenAiChatImageUrl(source: string): Promise<string | null> {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^https?:\/\//i.test(trimmed) || /^data:image\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  try {
+    const dataUrl = await imageUrlToDataUrl(trimmed);
+    const normalized = dataUrl.trim();
+    return isOpenAiCompatibleImageUrl(normalized) ? normalized : null;
+  } catch (error) {
+    console.warn('[aiText] Failed to normalize image reference for chat payload', {
+      source: trimmed,
+      error,
+    });
+    return null;
+  }
+}
+
+function createVideoPart(node: CanvasNode, label: string, reference?: GraphReferenceItem): AiTextInputTextPart | null {
+  if (!isVideoNode(node)) {
+    return null;
+  }
+  const videoUrl = reference?.videoUrl ?? node.data.localVideoUrl ?? node.data.videoUrl ?? '';
+  if (!videoUrl) {
+    return null;
+  }
+  const title = reference?.title || resolveNodeDisplayName(node.type, node.data) || label;
+  return {
+    kind: 'text',
+    sourceType: 'video',
+    sourceNodeId: node.id,
+    label,
+    content: `视频参考「${title}」：${videoUrl}\n请将该连接视频作为动作、节奏、镜头连续性、主体状态或场景变化参考；当前文本模型请求不会上传视频二进制。`,
+  };
+}
+
+function sourceTypeForNode(node: CanvasNode): AiTextInputSourceType | null {
+  if (isTextAnnotationNode(node) || isAiTextNode(node)) {
+    return 'markdown';
+  }
+  if (isJsonCardNode(node)) {
+    return 'json';
+  }
+  if (isUploadNode(node) || isImageEditNode(node) || isExportImageNode(node)) {
+    return 'image';
+  }
+  if (isVideoNode(node)) {
+    return 'video';
+  }
+  return null;
+}
+
+function buildPartFromConfig(
+  node: CanvasNode,
+  config: TextAgentInputConfig,
+  reference?: GraphReferenceItem
+): AiTextInputPart | null {
+  switch (config.type) {
+    case 'json':
+      return createJsonPart(node, config.label, config.jsonPath);
+    case 'image':
+      return createImagePart(node, config.label);
+    case 'video':
+      return createVideoPart(node, config.label, reference);
+    case 'markdown':
+    default:
+      if (reference?.kind === 'text') {
+        return createTextPartFromReference(reference, config.label);
+      }
+      return createMarkdownPart(node, config.label);
+  }
+}
+
+function resolveInputPartLabel(
+  config: TextAgentInputConfig,
+  sourceAgents: TextAgentConfig[]
+): string {
+  const agentName = config.sourceAgentId
+    ? sourceAgents.find((item) => item.id === config.sourceAgentId)?.name?.trim()
+    : '';
+  if (!agentName) {
+    return config.label;
+  }
+  if (config.type === 'json') {
+    return `${agentName} JSON${config.jsonPath?.trim() ? ` ${config.jsonPath.trim()}` : ''}`;
+  }
+  if (config.type === 'markdown') {
+    return `${agentName} 文本`;
+  }
+  if (config.type === 'video') {
+    return `${agentName} 视频`;
+  }
+  return `${agentName} 图片`;
+}
+
+function findAgentTextOutputNode(
+  nodeId: string,
+  nodes: CanvasNode[],
+  sourceAgentId?: string | null
+): TextAnnotationLikeNode | null {
+  if (!sourceAgentId) {
+    return null;
+  }
+
+  return nodes.find((node): node is TextAnnotationLikeNode => (
+    isTextAgentResultNode(node)
+    && node.data.sourceAiNodeId === nodeId
+    && node.data.sourceAgentId === sourceAgentId
+  )) ?? null;
+}
+
+function findAgentJsonOutputNode(
+  nodeId: string,
+  nodes: CanvasNode[],
+  sourceAgentId?: string | null
+): JsonCardLikeNode | null {
+  if (!sourceAgentId) {
+    return null;
+  }
+
+  return nodes.find((node): node is JsonCardLikeNode => (
+    isJsonCardNode(node)
+    && node.data.sourceAiNodeId === nodeId
+    && node.data.sourceAgentId === sourceAgentId
+  )) ?? null;
+}
+
+export function collectDirectSourceNodes(
+  nodeId: string,
+  nodes: CanvasNode[],
+  edges: CanvasEdge[]
+): CanvasNode[] {
+  const nodeMap = new Map(nodes.map((node) => [node.id, node] as const));
+  const seen = new Set<string>();
+  return edges
+    .filter((edge) => edge.target === nodeId)
+    .map((edge) => edge.source)
+    .filter((sourceId) => {
+      if (seen.has(sourceId)) {
+        return false;
+      }
+      seen.add(sourceId);
+      return true;
+    })
+    .map((sourceId) => nodeMap.get(sourceId))
+    .filter((node): node is CanvasNode => Boolean(node));
+}
+
+export function collectAiTextInputs(
+  nodeId: string,
+  nodes: CanvasNode[],
+  edges: CanvasEdge[],
+  agent?: TextAgentConfig | null,
+  sourceAgents: TextAgentConfig[] = []
+): AiTextInputPart[] {
+  const references = collectInputReferences(nodeId, nodes, edges);
+  const nodeMap = new Map(nodes.map((node) => [node.id, node] as const));
+  const sourceNodes = references
+    .map((reference) => nodeMap.get(reference.sourceNodeId))
+    .filter((node): node is CanvasNode => Boolean(node));
+  const referenceByNodeId = new Map(
+    references.map((reference) => [reference.sourceNodeId, reference] as const)
+  );
+  const pool = {
+    markdown: [] as CanvasNode[],
+    json: [] as CanvasNode[],
+    image: [] as CanvasNode[],
+    video: [] as CanvasNode[],
+  };
+
+  sourceNodes.forEach((node) => {
+    const type = sourceTypeForNode(node);
+    if (type) {
+      pool[type].push(node);
+    }
+  });
+
+  const parts: AiTextInputPart[] = [];
+  const used = new Set<string>();
+  const usedJsonParts = new Set<string>();
+  const configs = agent?.inputSources.filter((item) => item.enabled) ?? [];
+  const hasExplicitSourceConfig = configs.some((item) => Boolean(item.sourceAgentId));
+
+  configs.forEach((config) => {
+    if (config.type === 'markdown' && config.sourceAgentId) {
+      const agentTextNode = findAgentTextOutputNode(nodeId, nodes, config.sourceAgentId);
+      if (!agentTextNode || used.has(agentTextNode.id)) {
+        return;
+      }
+      const part = createMarkdownPart(agentTextNode, resolveInputPartLabel(config, sourceAgents));
+      if (!part) {
+        return;
+      }
+      parts.push(part);
+      used.add(agentTextNode.id);
+      return;
+    }
+
+    if (config.type === 'json' && config.sourceAgentId) {
+      const agentJsonNode = findAgentJsonOutputNode(nodeId, nodes, config.sourceAgentId);
+      if (!agentJsonNode) {
+        return;
+      }
+      const usageKey = createJsonPartUsageKey(agentJsonNode.id, config.jsonPath);
+      if (usedJsonParts.has(usageKey)) {
+        return;
+      }
+      const part = createJsonPart(agentJsonNode, resolveInputPartLabel(config, sourceAgents), config.jsonPath);
+      if (!part) {
+        return;
+      }
+      parts.push(part);
+      usedJsonParts.add(usageKey);
+      return;
+    }
+
+    const candidate = pool[config.type].find((node) => !used.has(node.id));
+    if (!candidate) {
+      return;
+    }
+    const part = buildPartFromConfig(candidate, config, referenceByNodeId.get(candidate.id));
+    if (!part) {
+      return;
+    }
+    parts.push(part);
+    used.add(candidate.id);
+  });
+
+  if (!hasExplicitSourceConfig) {
+    (['markdown', 'json', 'image', 'video'] as const).forEach((type) => {
+      let index = 0;
+      pool[type].forEach((node) => {
+        if (used.has(node.id)) {
+          return;
+        }
+        index += 1;
+        const fallbackLabel =
+          referenceByNodeId.get(node.id)?.label
+          || resolveNodeDisplayName(node.type, node.data)
+          || createDefaultLabel(type, index);
+        const part = buildPartFromConfig(node, {
+          id: createSourceConfigId(),
+          type,
+          label: fallbackLabel,
+          enabled: true,
+        }, referenceByNodeId.get(node.id));
+        if (!part) {
+          return;
+        }
+        parts.push(part);
+        used.add(node.id);
+      });
+    });
+  }
+
+  return parts;
+}
+
+export function buildAiTextUserPrompt(parts: AiTextInputPart[], userPrompt: string): string {
+  const sections = parts.map((part) => {
+    if (part.kind === 'image') {
+      return `## 输入：${part.label}\n[图像输入]`;
+    }
+    return `## 输入：${part.label}\n${normalizeLineBreaks(part.content).trim()}`;
+  });
+
+  const taskSection = `## 任务\n${normalizeLineBreaks(userPrompt).trim()}`;
+  return [...sections, taskSection].filter((item) => item.trim().length > 0).join('\n\n');
+}
+
+export async function buildOpenAiChatPayload(args: {
+  model?: string | null;
+  agentPrompt: string;
+  userPrompt: string;
+  parts: AiTextInputPart[];
+}): Promise<AiTextOpenAiChatPayload> {
+  const normalizedModel = args.model?.trim() || DEFAULT_TEXT_MODEL;
+  const compiledPrompt = buildAiTextUserPrompt(args.parts, args.userPrompt);
+  const imagePartSources = args.parts
+    .filter((part): part is AiTextInputImagePart => part.kind === 'image')
+    .map((part) => part.imageUrl);
+  const normalizedImageUrls = (
+    await Promise.all(imagePartSources.map((source) => normalizeOpenAiChatImageUrl(source)))
+  ).filter((url): url is string => Boolean(url));
+  const imageParts = normalizedImageUrls.map((url) => ({
+    type: 'image_url' as const,
+    image_url: { url },
+  }));
+
+  return {
+    model: normalizedModel,
+    messages: [
+      {
+        role: 'system',
+        content: args.agentPrompt.trim(),
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: compiledPrompt,
+          },
+          ...imageParts,
+        ],
+      },
+    ],
+  };
+}
+
+export function computeAiTextInputHash(args: {
+  agentId?: string | null;
+  providerId?: string | null;
+  model?: string | null;
+  agentPrompt: string;
+  userPrompt: string;
+  parts: AiTextInputPart[];
+}): string {
+  const signature = safeStringify({
+    agentId: args.agentId ?? null,
+    providerId: args.providerId ?? null,
+    model: args.model?.trim() || DEFAULT_TEXT_MODEL,
+    agentPrompt: normalizeLineBreaks(args.agentPrompt.trim()),
+    userPrompt: normalizeLineBreaks(args.userPrompt.trim()),
+    parts: args.parts.map((part) =>
+      part.kind === 'image'
+        ? {
+          kind: part.kind,
+          label: part.label,
+          imageUrl: part.imageUrl,
+        }
+        : {
+          kind: part.kind,
+          label: part.label,
+          content: normalizeLineBreaks(part.content),
+          jsonPath: part.jsonPath ?? null,
+        }),
+  });
+
+  let hash = 0;
+  for (let index = 0; index < signature.length; index += 1) {
+    hash = ((hash << 5) - hash) + signature.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+export function resolveAiTextResult(raw: string): AiTextResolvedResult {
+  const normalized = normalizeLineBreaks(raw).trim();
+  if (!normalized) {
+    return {
+      kind: 'markdown',
+      rawContent: '',
+      markdownContent: '',
+    };
+  }
+
+  const directJson = tryParseJson(normalized);
+  if (directJson) {
+    return {
+      kind: 'json',
+      rawContent: normalized,
+      parsedJson: directJson.parsed,
+      parseError: null,
+    };
+  }
+
+  const fencedMatch = normalized.match(JSON_FENCE_PATTERN);
+  if (fencedMatch?.[1]) {
+    const fencedContent = fencedMatch[1].trim();
+    const fencedJson = tryParseJson(fencedContent);
+    if (fencedJson) {
+      return {
+        kind: 'json',
+        rawContent: normalized,
+        parsedJson: fencedJson.parsed,
+        parseError: null,
+      };
+    }
+    const fencedFragmentJson = tryParseJsonFragment(fencedContent);
+    if (fencedFragmentJson) {
+      return {
+        kind: 'json',
+        rawContent: normalized,
+        parsedJson: fencedFragmentJson.parsed,
+        parseError: fencedFragmentJson.parseError ?? null,
+      };
+    } else {
+      return {
+        kind: 'markdown',
+        rawContent: normalized,
+        markdownContent: normalized,
+        parseError: 'JSON 解析失败',
+      };
+    }
+  }
+
+  const fragmentJson = tryParseJsonFragment(normalized);
+  if (fragmentJson) {
+    return {
+      kind: 'json',
+      rawContent: normalized,
+      parsedJson: fragmentJson.parsed,
+      parseError: fragmentJson.parseError ?? null,
+    };
+  }
+
+  return {
+    kind: 'markdown',
+    rawContent: normalized,
+    markdownContent: normalized,
+  };
+}
+
+export function resolveJsonCardDisplayFields(
+  agent: TextAgentConfig | null | undefined,
+  parsedJson: unknown
+): JsonCardDisplayField[] {
+  if (!agent?.jsonFields?.length) {
+    return [];
+  }
+
+  return agent.jsonFields
+    .filter((field) => field.enabled)
+    .map((field) => {
+      const value = Array.isArray(parsedJson)
+        ? parsedJson
+          .map((item) => getValueByJsonPath(item, field.path))
+          .find((item) => item !== undefined)
+        : getValueByJsonPath(parsedJson, field.path);
+      if (value === undefined) {
+        return null;
+      }
+      return {
+        path: field.path,
+        label: field.label,
+        value: formatJsonPathValue(value),
+      };
+    })
+    .filter((field): field is JsonCardDisplayField => Boolean(field));
+}
+
+export const AI_TEXT_MODEL_OPTIONS = [
+  'gpt-4.1-mini',
+  'gpt-4.1',
+  'gpt-4o-mini',
+  'gpt-4o',
+];

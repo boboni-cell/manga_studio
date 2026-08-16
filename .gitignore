@@ -9,3 +9,5 @@ tmp_upscale/
 *.log
 data_backup*/
 data/*.local.backup.*.json
+node_modules/
+canvas/node_modules/

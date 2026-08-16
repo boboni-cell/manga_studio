@@ -1,0 +1,45 @@
+Open Storyboard Canvas Attribution Notice
+
+This notice records project attribution for the public open-source release. It
+is not legal advice; see LICENSE for the license text.
+
+1. Original project attribution
+
+This project is a continued development fork based on the original
+Storyboard-Copilot project.
+
+- Original project: Storyboard-Copilot
+- Original author: henjicc / 痕继痕迹
+- Original project link: https://github.com/henjicc/Storyboard-Copilot
+
+2. Authorization source
+
+On 2026-05-31, the original author confirmed by chat that continued development
+and open-source publication are allowed, provided that the original author name
+and original project link are retained. The authorization screenshot is stored
+at:
+
+docs/legal/upstream-author-authorization-2026-05-31.jpg
+
+Please keep the original author name and original project link when
+redistributing, forking, or publicly presenting this project.
+
+3. Open Storyboard Canvas additions
+
+Copyright (c) 2026 ganbo-gab and contributors. New original code, documents,
+branding assets, and resources in this repository are released under the MIT
+terms in LICENSE to the extent those contributors own the rights to license
+them.
+
+The Open Storyboard Canvas name and brand assets under docs/brand/ are part of
+the continued-development release unless a file states otherwise.
+
+4. Third-party dependencies and provider documentation
+
+Third-party npm/Rust dependencies remain governed by their own licenses. See
+package.json, package-lock.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock
+for dependency lists.
+
+Documents under docs/api_docs/ are integration reference notes for third-party
+provider APIs. They do not imply endorsement by those providers and may become
+out of date as providers change their APIs.

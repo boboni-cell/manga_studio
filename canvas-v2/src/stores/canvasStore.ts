@@ -1,0 +1,2258 @@
+import { create } from 'zustand';
+import {
+  Connection,
+  EdgeChange,
+  NodeChange,
+  type Viewport,
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
+} from '@xyflow/react';
+
+import {
+  CANVAS_NODE_TYPES,
+  DEFAULT_ASPECT_RATIO,
+  DEFAULT_NODE_WIDTH,
+  EXPORT_RESULT_NODE_DEFAULT_WIDTH,
+  EXPORT_RESULT_NODE_LAYOUT_HEIGHT,
+  EXPORT_RESULT_NODE_MIN_HEIGHT,
+  EXPORT_RESULT_NODE_MIN_WIDTH,
+  type ActiveToolDialog,
+  type BlueprintItem,
+  type BlueprintNodeData,
+  type BlueprintReferenceImageItem,
+  type CanvasEdge,
+  type CanvasNode,
+  type CanvasNodeData,
+  type CanvasNodeType,
+  type DirectorStudioProjectSnapshot,
+  type DirectorStudioProjectRecord,
+  type ExportImageNodeResultKind,
+  type NodeToolType,
+  type PanoramaNodeData,
+  type StoryboardExportOptions,
+  type StoryboardFrameItem,
+  isBlueprintNode,
+  isTagColor,
+  isTagGroupNode,
+  isTagGroupShape,
+  isStoryboardSplitNode,
+} from '@/features/canvas/domain/canvasNodes';
+import {
+  nodeHasSourceHandle,
+  nodeHasTargetHandle,
+} from '@/features/canvas/domain/nodeRegistry';
+import { EXPORT_RESULT_DISPLAY_NAME } from '@/features/canvas/domain/nodeDisplay';
+import { nodeCatalog } from '@/features/canvas/application/nodeCatalog';
+import { canvasNodeFactory } from '@/features/canvas/application/canvasServices';
+import { normalizeDirectorMotionProject } from '@/features/canvas/application/directorMotion';
+import { validateCanvasConnection } from '@/features/canvas/application/canvasConnectionRules';
+import {
+  migrateLegacyTagGraph,
+  reportTagMigrationDiagnostics,
+} from '@/features/canvas/application/tagPersistenceMigration';
+import { usePanelStateStore } from '@/stores/panelStateStore';
+import {
+  ensureAtLeastOneMinEdge,
+  resolveMinEdgeFittedSize,
+  resolveSizeInsideTargetBox,
+} from '@/features/canvas/application/imageNodeSizing';
+import { findRelatedCanvasNodePositions } from '@/features/canvas/application/canvasNodePlacement';
+
+export type {
+  ActiveToolDialog,
+  CanvasEdge,
+  CanvasNode,
+  CanvasNodeData,
+  CanvasNodeType,
+  NodeToolType,
+  StoryboardFrameItem,
+};
+
+export interface CanvasHistorySnapshot {
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+}
+
+export interface CanvasHistoryState {
+  past: CanvasHistorySnapshot[];
+  future: CanvasHistorySnapshot[];
+}
+
+export interface AddNodesBatchInput {
+  type: CanvasNodeType;
+  position: { x: number; y: number };
+  dimensions?: { width: number; height: number };
+  data?: Partial<CanvasNodeData>;
+}
+
+const MAX_HISTORY_STEPS = 50;
+const MAX_HEAVY_HISTORY_STEPS = 12;
+export const MAX_CANVAS_BATCH_ADD_NODES = 500;
+const IMAGE_NODE_VISUAL_MIN_EDGE = 96;
+const DIRECTOR_STUDIO_PROJECT_SIGNATURE_SEPARATOR = '\u001f';
+const DIRECTOR_STUDIO_PROJECT_LIBRARY_SEPARATOR = '\u001e';
+const BLUEPRINT_ITEM_FALLBACK_X = 260;
+const BLUEPRINT_ITEM_FALLBACK_Y = 130;
+const BLUEPRINT_ITEM_FALLBACK_COLOR = '#60a5fa';
+const DIRECTOR_STUDIO_ASPECT_FRAMES = new Set([
+  'panorama',
+  '1:1',
+  '4:3',
+  '3:4',
+  '16:9',
+  '9:16',
+  '3:2',
+  '2:3',
+  '21:9',
+]);
+const DIRECTOR_STUDIO_SCREENSHOT_RESOLUTIONS = new Set(['1080p', '1440p', '4k']);
+
+function normalizeCanvasRevision(revision: unknown): number {
+  return Number.isSafeInteger(revision) && Number(revision) >= 0 ? Number(revision) : 0;
+}
+
+function nextCanvasRevision(revision: unknown): number {
+  return normalizeCanvasRevision(revision) + 1;
+}
+
+function getDirectorStudioProjectLibrarySignature(projects: unknown): string {
+  if (!Array.isArray(projects) || projects.length === 0) {
+    return '';
+  }
+
+  return projects
+    .map((project) => {
+      if (!project || typeof project !== 'object') {
+        return null;
+      }
+      const record = project as Partial<DirectorStudioProjectRecord>;
+      if (typeof record.id !== 'string' || !record.id.trim()) {
+        return null;
+      }
+
+      return [
+        record.id,
+        typeof record.name === 'string' ? record.name : '',
+        typeof record.createdAt === 'number' && Number.isFinite(record.createdAt) ? record.createdAt : 0,
+        typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt) ? record.updatedAt : 0,
+        typeof record.coverUrl === 'string' ? record.coverUrl : '',
+      ].join(DIRECTOR_STUDIO_PROJECT_SIGNATURE_SEPARATOR);
+    })
+    .filter((signature): signature is string => Boolean(signature))
+    .sort()
+    .join(DIRECTOR_STUDIO_PROJECT_LIBRARY_SEPARATOR);
+}
+
+function areDirectorStudioProjectLibrariesEquivalent(previousProjects: unknown, nextProjects: unknown): boolean {
+  return getDirectorStudioProjectLibrarySignature(previousProjects) === getDirectorStudioProjectLibrarySignature(nextProjects);
+}
+
+export interface CanvasState {
+  nodes: CanvasNode[];
+  edges: CanvasEdge[];
+  revision: number;
+  selectedNodeId: string | null;
+  activeDirectorStudioNodeId: string | null;
+  activeToolDialog: ActiveToolDialog | null;
+  history: CanvasHistoryState;
+  dragHistorySnapshot: CanvasHistorySnapshot | null;
+  currentViewport: Viewport;
+  canvasViewportSize: { width: number; height: number };
+  imageViewer: {
+    isOpen: boolean;
+    currentImageUrl: string | null;
+    imageList: string[];
+    currentIndex: number;
+  };
+
+  onNodesChange: (changes: NodeChange<CanvasNode>[]) => void;
+  onEdgesChange: (changes: EdgeChange<CanvasEdge>[]) => void;
+  onConnect: (connection: Connection) => void;
+
+  setCanvasData: (nodes: CanvasNode[], edges: CanvasEdge[], history?: CanvasHistoryState) => void;
+  addNode: (
+    type: CanvasNodeType,
+    position: { x: number; y: number },
+    data?: Partial<CanvasNodeData>
+  ) => string;
+  addNodesBatch: (inputs: AddNodesBatchInput[]) => string[];
+  commitGraphTransaction: (input: {
+    expectedRevision: number;
+    nodes: CanvasNode[];
+    edges: CanvasEdge[];
+    selectedNodeId: string | null;
+  }) => number | null;
+  addEdge: (source: string, target: string) => string | null;
+  findNodePosition: (sourceNodeId: string, newNodeWidth: number, newNodeHeight: number) => { x: number; y: number };
+  findNodePositions: (
+    sourceNodeId: string,
+    count: number,
+    newNodeWidth: number,
+    newNodeHeight: number
+  ) => { x: number; y: number }[];
+  addDerivedUploadNode: (
+    sourceNodeId: string,
+    imageUrl: string,
+    aspectRatio: string,
+    previewImageUrl?: string
+  ) => string | null;
+  addDerivedExportNode: (
+    sourceNodeId: string,
+    imageUrl: string,
+    aspectRatio: string,
+    previewImageUrl?: string,
+    options?: {
+      defaultTitle?: string;
+      resultKind?: ExportImageNodeResultKind;
+      aspectRatioStrategy?: 'provided' | 'derivedFromSource';
+      sizeStrategy?: 'generated' | 'autoMinEdge' | 'matchSource';
+      matchSourceNodeSize?: boolean;
+    }
+  ) => string | null;
+  addStoryboardSplitNode: (
+    sourceNodeId: string,
+    rows: number,
+    cols: number,
+    frames: StoryboardFrameItem[],
+    frameAspectRatio?: string
+  ) => string | null;
+
+  updateNodeData: (nodeId: string, data: Partial<CanvasNodeData>) => void;
+  replaceNodeType: (
+    nodeId: string,
+    type: CanvasNodeType,
+    data?: Partial<CanvasNodeData>
+  ) => boolean;
+  updateDirectorStudioProjectLibrary: (
+    projects: DirectorStudioProjectRecord[],
+    sourceNodeId?: string,
+    sourcePatch?: Partial<BlueprintNodeData>
+  ) => void;
+  updateNodePosition: (nodeId: string, position: { x: number; y: number }) => void;
+  updateStoryboardFrame: (
+    nodeId: string,
+    frameId: string,
+    data: Partial<StoryboardFrameItem>
+  ) => void;
+  reorderStoryboardFrame: (
+    nodeId: string,
+    draggedFrameId: string,
+    targetFrameId: string
+  ) => void;
+
+  deleteNode: (nodeId: string) => void;
+  deleteNodes: (nodeIds: string[]) => void;
+  groupNodes: (nodeIds: string[]) => string | null;
+  ungroupNode: (groupNodeId: string) => boolean;
+  deleteEdge: (edgeId: string) => void;
+  setSelectedNode: (nodeId: string | null) => void;
+  setActiveDirectorStudioNode: (nodeId: string | null) => void;
+
+  openToolDialog: (dialog: ActiveToolDialog) => void;
+  closeToolDialog: () => void;
+  setViewportState: (viewport: Viewport) => void;
+  setCanvasViewportSize: (size: { width: number; height: number }) => void;
+  openImageViewer: (imageUrl: string, imageList?: string[]) => void;
+  closeImageViewer: () => void;
+  navigateImageViewer: (direction: 'prev' | 'next') => void;
+
+  undo: () => boolean;
+  redo: () => boolean;
+
+  clearCanvas: () => void;
+}
+
+function normalizeHandleId(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function normalizeEdgesWithNodes(rawEdges: CanvasEdge[], nodes: CanvasNode[]): CanvasEdge[] {
+  if (!Array.isArray(rawEdges)) {
+    return [];
+  }
+
+  const nodeMap = new Map(nodes.map((node) => [node.id, node] as const));
+
+  return rawEdges
+    .filter((edge) => {
+      if (!edge || typeof edge !== 'object') {
+        return false;
+      }
+      const sourceNode = nodeMap.get(edge.source);
+      const targetNode = nodeMap.get(edge.target);
+      if (!sourceNode || !targetNode) {
+        return false;
+      }
+      return nodeHasSourceHandle(sourceNode.type) && nodeHasTargetHandle(targetNode.type);
+    })
+    .map((edge) => ({
+      ...edge,
+      type: edge.type ?? 'disconnectableEdge',
+      sourceHandle:
+        normalizeHandleId((edge as CanvasEdge & { sourceHandle?: unknown }).sourceHandle) ?? 'source',
+      targetHandle:
+        normalizeHandleId((edge as CanvasEdge & { targetHandle?: unknown }).targetHandle) ?? 'target',
+    }));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function normalizeNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeString(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function normalizeNullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function isLightweightRetryResultUrl(value: unknown): boolean {
+  const url = typeof value === 'string' ? value.trim() : '';
+  if (!url) {
+    return false;
+  }
+  const normalizedPrefix = url.slice(0, 16).toLowerCase();
+  return (
+    !normalizedPrefix.startsWith('data:')
+    && !normalizedPrefix.startsWith('blob:')
+    && !url.startsWith('/')
+    && !/^file:\/\//i.test(url)
+    && !/^[a-zA-Z]:[\\/]/.test(url)
+    && !url.startsWith('\\\\')
+  );
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+}
+
+function normalizeRecordObject<T extends Record<string, unknown>>(value: unknown): T {
+  const record = asRecord(value);
+  return record ? { ...record } as T : {} as T;
+}
+
+function normalizeOptionalVector3(value: unknown, fallback: { x: number; y: number; z: number }): { x: number; y: number; z: number } | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return {
+    x: normalizeNumber(record.x, fallback.x),
+    y: normalizeNumber(record.y, fallback.y),
+    z: normalizeNumber(record.z, fallback.z),
+  };
+}
+
+function normalizeBlueprintItem(value: unknown, index: number): BlueprintItem | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const category = record.category === 'person' || record.category === 'object' || record.category === 'scene'
+    ? record.category
+    : undefined;
+  const label = normalizeString(record.label, `元素${index + 1}`).trim() || `元素${index + 1}`;
+  const item: BlueprintItem = {
+    ...(record as Partial<BlueprintItem>),
+    id: normalizeString(record.id, `restored-item-${index + 1}`).trim() || `restored-item-${index + 1}`,
+    label,
+    x: normalizeNumber(record.x, BLUEPRINT_ITEM_FALLBACK_X),
+    y: normalizeNumber(record.y, BLUEPRINT_ITEM_FALLBACK_Y),
+    color: normalizeString(record.color, BLUEPRINT_ITEM_FALLBACK_COLOR) || BLUEPRINT_ITEM_FALLBACK_COLOR,
+    showLabel: typeof record.showLabel === 'boolean' ? record.showLabel : undefined,
+    refImageUrl: normalizeNullableString(record.refImageUrl),
+    refImageName: normalizeNullableString(record.refImageName),
+    note: normalizeOptionalString(record.note),
+    pos3d: normalizeOptionalVector3(record.pos3d, { x: 0, y: 0, z: 0 }),
+    rotation3d: normalizeOptionalVector3(record.rotation3d, { x: 0, y: 0, z: 0 }),
+    scale3d: normalizeOptionalVector3(record.scale3d, { x: 1, y: 1, z: 1 }),
+    category,
+    presetId: normalizeOptionalString(record.presetId),
+    relation: normalizeOptionalString(record.relation),
+    action: normalizeOptionalString(record.action),
+    directorStudioRole: record.directorStudioRole === 'pedestrian' ? 'pedestrian' : undefined,
+    directorStudioNumber: normalizeOptionalNumber(record.directorStudioNumber),
+    bodyControls: asRecord(record.bodyControls)
+      ? record.bodyControls as BlueprintItem['bodyControls']
+      : undefined,
+  };
+
+  return item;
+}
+
+function normalizeBlueprintItems(value: unknown): BlueprintItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item, index) => normalizeBlueprintItem(item, index))
+    .filter((item): item is BlueprintItem => Boolean(item));
+}
+
+function normalizeBlueprintReferenceImage(value: unknown, index: number): BlueprintReferenceImageItem | null {
+  const record = asRecord(value);
+  const url = normalizeNullableString(record?.url);
+  if (!record || !url) {
+    return null;
+  }
+
+  const label = normalizeString(record.label, `图${index + 1}`).trim() || `图${index + 1}`;
+  return {
+    ...(record as Partial<BlueprintReferenceImageItem>),
+    id: normalizeString(record.id, `reference-${index + 1}`).trim() || `reference-${index + 1}`,
+    url,
+    label,
+    color: normalizeOptionalString(record.color),
+  };
+}
+
+function normalizeBlueprintReferenceImages(value: unknown): BlueprintReferenceImageItem[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((image, index) => normalizeBlueprintReferenceImage(image, index))
+    .filter((image): image is BlueprintReferenceImageItem => Boolean(image));
+}
+
+function normalizeCameraSettings(value: unknown, fallback: BlueprintNodeData['camera']): BlueprintNodeData['camera'] {
+  const record = asRecord(value);
+  const base = fallback ?? { fov: 39.6, lensDistance: 8, activePreset: 'standard' };
+  return {
+    fov: normalizeNumber(record?.fov, base.fov),
+    lensDistance: normalizeNumber(record?.lensDistance, base.lensDistance),
+    activePreset:
+      typeof record?.activePreset === 'string' || record?.activePreset === null
+        ? record.activePreset
+        : base.activePreset,
+  };
+}
+
+function normalizeLightingSettings(value: unknown, fallback: BlueprintNodeData['lighting']): BlueprintNodeData['lighting'] {
+  const record = asRecord(value);
+  const base = fallback ?? {
+    enabled: true,
+    mainIntensity: 0.65,
+    mainYaw: 35,
+    mainPitch: 50,
+    mainColor: '#ffffff',
+    ambientIntensity: 0.55,
+    ambientColor: '#ffffff',
+  };
+  return {
+    enabled: typeof record?.enabled === 'boolean' ? record.enabled : base.enabled,
+    mainIntensity: normalizeNumber(record?.mainIntensity, base.mainIntensity),
+    mainYaw: normalizeNumber(record?.mainYaw, base.mainYaw),
+    mainPitch: normalizeNumber(record?.mainPitch, base.mainPitch),
+    mainColor: normalizeString(record?.mainColor, base.mainColor),
+    ambientIntensity: normalizeNumber(record?.ambientIntensity, base.ambientIntensity),
+    ambientColor: normalizeString(record?.ambientColor, base.ambientColor),
+  };
+}
+
+function normalizeGridSettings(value: unknown, fallback: BlueprintNodeData['grid']): BlueprintNodeData['grid'] {
+  const record = asRecord(value);
+  const base = fallback ?? { visible: true, height: 0 };
+  return {
+    visible: typeof record?.visible === 'boolean' ? record.visible : base.visible,
+    height: normalizeNumber(record?.height, base.height),
+  };
+}
+
+function normalizeViewSettings(value: unknown, fallback: BlueprintNodeData['viewSettings']): BlueprintNodeData['viewSettings'] {
+  const record = asRecord(value);
+  const base = fallback ?? {
+    wheelZoomEnabled: true,
+    reverseWheelZoom: false,
+    showAdvancedPedestrianTags: false,
+  };
+  return {
+    wheelZoomEnabled: typeof record?.wheelZoomEnabled === 'boolean' ? record.wheelZoomEnabled : base.wheelZoomEnabled,
+    reverseWheelZoom: typeof record?.reverseWheelZoom === 'boolean' ? record.reverseWheelZoom : base.reverseWheelZoom,
+    showAdvancedPedestrianTags:
+      typeof record?.showAdvancedPedestrianTags === 'boolean'
+        ? record.showAdvancedPedestrianTags
+        : base.showAdvancedPedestrianTags,
+  };
+}
+
+function normalizeAspectFrame(value: unknown, fallback: BlueprintNodeData['aspectFrame']): BlueprintNodeData['aspectFrame'] {
+  return typeof value === 'string' && DIRECTOR_STUDIO_ASPECT_FRAMES.has(value)
+    ? value as BlueprintNodeData['aspectFrame']
+    : fallback ?? '16:9';
+}
+
+function normalizeScreenshotResolution(value: unknown, fallback: BlueprintNodeData['screenshotResolution']): BlueprintNodeData['screenshotResolution'] {
+  return typeof value === 'string' && DIRECTOR_STUDIO_SCREENSHOT_RESOLUTIONS.has(value)
+    ? value as BlueprintNodeData['screenshotResolution']
+    : fallback ?? '1080p';
+}
+
+function normalizeDirectorSnapshot(
+  value: unknown,
+  fallback: BlueprintNodeData
+): DirectorStudioProjectSnapshot {
+  const record = asRecord(value);
+  return {
+    mode: record?.mode === 'panorama' ? 'panorama' : 'flat',
+    backgroundImageUrl: normalizeNullableString(record?.backgroundImageUrl),
+    backgroundPanoramaUrl: normalizeNullableString(record?.backgroundPanoramaUrl),
+    items: normalizeBlueprintItems(record?.items),
+    referenceImages: normalizeBlueprintReferenceImages(record?.referenceImages),
+    customActionPresets: normalizeStringArray(record?.customActionPresets),
+    customActionPoses: normalizeRecordObject(record?.customActionPoses) as DirectorStudioProjectSnapshot['customActionPoses'],
+    basePrompt: normalizeString(record?.basePrompt, ''),
+    aspectRatio: normalizeString(record?.aspectRatio, fallback.aspectRatio || '16:9') || '16:9',
+    camera: normalizeCameraSettings(record?.camera, fallback.camera),
+    lighting: normalizeLightingSettings(record?.lighting, fallback.lighting),
+    grid: normalizeGridSettings(record?.grid, fallback.grid),
+    viewSettings: normalizeViewSettings(record?.viewSettings, fallback.viewSettings),
+    directorStudioShortcuts: normalizeRecordObject(record?.directorStudioShortcuts),
+    aspectFrame: normalizeAspectFrame(record?.aspectFrame, fallback.aspectFrame),
+    screenshotResolution: normalizeScreenshotResolution(record?.screenshotResolution, fallback.screenshotResolution),
+    themeColor: normalizeOptionalString(record?.themeColor),
+    snapshotUrl: normalizeNullableString(record?.snapshotUrl),
+    snapshotHistory: normalizeStringArray(record?.snapshotHistory),
+    motionProject: record?.motionProject === undefined
+      ? undefined
+      : normalizeDirectorMotionProject(record.motionProject),
+  };
+}
+
+function normalizeDirectorStudioProject(value: unknown, index: number, fallback: BlueprintNodeData): DirectorStudioProjectRecord | null {
+  const record = asRecord(value);
+  const rawId = normalizeString(record?.id, '').trim();
+  if (!record || !rawId) {
+    return null;
+  }
+  const updatedAt = normalizeNumber(record.updatedAt, normalizeNumber(record.createdAt, 0));
+  const createdAt = normalizeNumber(record.createdAt, updatedAt);
+  return {
+    ...(record as Partial<DirectorStudioProjectRecord>),
+    id: rawId,
+    name: normalizeString(record.name, `导演台 ${index + 1}`).trim() || `导演台 ${index + 1}`,
+    createdAt,
+    updatedAt,
+    coverUrl: normalizeNullableString(record.coverUrl),
+    snapshot: normalizeDirectorSnapshot(record.snapshot, fallback),
+  };
+}
+
+function normalizeDirectorStudioProjects(value: unknown, fallback: BlueprintNodeData): DirectorStudioProjectRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((project, index) => normalizeDirectorStudioProject(project, index, fallback))
+    .filter((project): project is DirectorStudioProjectRecord => Boolean(project));
+}
+
+function normalizePanoramaNodeData(data: CanvasNodeData, fallback: PanoramaNodeData): PanoramaNodeData {
+  const record = data as Record<string, unknown>;
+  return {
+    ...(data as PanoramaNodeData),
+    imageUrl: normalizeNullableString(record.imageUrl),
+    previewImageUrl: normalizeNullableString(record.previewImageUrl),
+    aspectRatio: normalizeString(record.aspectRatio, fallback.aspectRatio || '2:1') || '2:1',
+    sourceMode: record.sourceMode === 'image' ? 'image' : 'text',
+    sourcePrompt: normalizeString(record.sourcePrompt, ''),
+    sourceImageUrl: normalizeNullableString(record.sourceImageUrl),
+    projection: record.projection === 'cylindrical' ? 'cylindrical' : 'spherical',
+    initialYaw: normalizeNumber(record.initialYaw, fallback.initialYaw ?? 0),
+    initialPitch: normalizeNumber(record.initialPitch, fallback.initialPitch ?? 0),
+    initialFov: normalizeNumber(record.initialFov, fallback.initialFov ?? 50),
+  };
+}
+
+function normalizeBlueprintNodeData(data: CanvasNodeData, fallback: BlueprintNodeData): BlueprintNodeData {
+  const record = data as Record<string, unknown>;
+  const projects = normalizeDirectorStudioProjects(record.directorStudioProjects, fallback);
+  const activeDirectorStudioProjectId = normalizeNullableString(record.activeDirectorStudioProjectId);
+  return {
+    ...(data as BlueprintNodeData),
+    mode: record.mode === 'panorama' ? 'panorama' : 'flat',
+    backgroundImageUrl: normalizeNullableString(record.backgroundImageUrl),
+    backgroundPanoramaUrl: normalizeNullableString(record.backgroundPanoramaUrl),
+    items: normalizeBlueprintItems(record.items),
+    referenceImages: normalizeBlueprintReferenceImages(record.referenceImages),
+    customActionPresets: normalizeStringArray(record.customActionPresets),
+    customActionPoses: normalizeRecordObject(record.customActionPoses) as BlueprintNodeData['customActionPoses'],
+    basePrompt: normalizeString(record.basePrompt, ''),
+    aspectRatio: normalizeString(record.aspectRatio, fallback.aspectRatio || '16:9') || '16:9',
+    camera: normalizeCameraSettings(record.camera, fallback.camera),
+    lighting: normalizeLightingSettings(record.lighting, fallback.lighting),
+    grid: normalizeGridSettings(record.grid, fallback.grid),
+    viewSettings: normalizeViewSettings(record.viewSettings, fallback.viewSettings),
+    directorStudioShortcuts: normalizeRecordObject(record.directorStudioShortcuts),
+    aspectFrame: normalizeAspectFrame(record.aspectFrame, fallback.aspectFrame),
+    screenshotResolution: normalizeScreenshotResolution(record.screenshotResolution, fallback.screenshotResolution),
+    themeColor: normalizeOptionalString(record.themeColor),
+    snapshotUrl: normalizeNullableString(record.snapshotUrl),
+    snapshotHistory: normalizeStringArray(record.snapshotHistory),
+    motionProject: record.motionProject === undefined
+      ? undefined
+      : normalizeDirectorMotionProject(record.motionProject),
+    directorStudioProjects: projects,
+    activeDirectorStudioProjectId:
+      activeDirectorStudioProjectId && projects.some((project) => project.id === activeDirectorStudioProjectId)
+        ? activeDirectorStudioProjectId
+        : null,
+    openDirectorStudioOnCreate: record.openDirectorStudioOnCreate === true,
+  };
+}
+
+function normalizeNodes(rawNodes: CanvasNode[]): CanvasNode[] {
+  if (!Array.isArray(rawNodes)) {
+    return [];
+  }
+
+  return rawNodes
+    .map((rawNode) => {
+      if (!rawNode || typeof rawNode !== 'object') {
+        return null;
+      }
+      const node = rawNode as CanvasNode;
+      if (!Object.values(CANVAS_NODE_TYPES).includes(node.type as CanvasNodeType)) {
+        return null;
+      }
+
+      const definition = nodeCatalog.getDefinition(node.type as CanvasNodeType);
+      const defaultData = definition.createDefaultData() as CanvasNodeData;
+      const mergedData = {
+        ...defaultData,
+        ...(node.data && typeof node.data === 'object' ? node.data as Partial<CanvasNodeData> : {}),
+      } as CanvasNodeData;
+
+      if (node.type === CANVAS_NODE_TYPES.storyboardSplit) {
+        const frames = (mergedData as { frames?: StoryboardFrameItem[] }).frames ?? [];
+        const firstFrameAspectRatio = frames.find((frame) => typeof frame.aspectRatio === 'string')
+          ?.aspectRatio;
+        const normalizedFrameAspectRatio =
+          (typeof (mergedData as { frameAspectRatio?: unknown }).frameAspectRatio === 'string'
+            ? (mergedData as { frameAspectRatio?: string }).frameAspectRatio
+            : null) ??
+          firstFrameAspectRatio ??
+          DEFAULT_ASPECT_RATIO;
+
+        (mergedData as { frameAspectRatio: string }).frameAspectRatio = normalizedFrameAspectRatio;
+        (mergedData as { frames: StoryboardFrameItem[] }).frames = frames.map((frame, index) => ({
+          id: frame.id,
+          imageUrl: frame.imageUrl ?? null,
+          previewImageUrl: frame.previewImageUrl ?? null,
+          aspectRatio:
+            typeof frame.aspectRatio === 'string'
+              ? frame.aspectRatio
+              : normalizedFrameAspectRatio,
+          note: frame.note ?? '',
+          order: Number.isFinite(frame.order) ? frame.order : index,
+        }));
+
+        const rawExportOptions = (mergedData as { exportOptions?: Partial<StoryboardExportOptions> })
+          .exportOptions;
+        const rawFontSize = Number.isFinite(rawExportOptions?.fontSize)
+          ? Number(rawExportOptions?.fontSize)
+          : createDefaultStoryboardExportOptions().fontSize;
+        const normalizedFontSize = rawFontSize > 20
+          ? Math.round(rawFontSize / 6)
+          : rawFontSize;
+        (mergedData as { exportOptions: StoryboardExportOptions }).exportOptions = {
+          ...createDefaultStoryboardExportOptions(),
+          ...(rawExportOptions ?? {}),
+          fontSize: Math.max(1, Math.min(20, Math.round(normalizedFontSize))),
+        };
+      }
+
+      if (node.type === CANVAS_NODE_TYPES.panorama) {
+        Object.assign(mergedData, normalizePanoramaNodeData(mergedData, defaultData as PanoramaNodeData));
+      }
+
+      if (node.type === CANVAS_NODE_TYPES.blueprint) {
+        Object.assign(mergedData, normalizeBlueprintNodeData(mergedData, defaultData as BlueprintNodeData));
+      }
+
+      if (node.type === CANVAS_NODE_TYPES.tag) {
+        const tagData = mergedData as Record<string, unknown>;
+        const label = typeof tagData.label === 'string' && tagData.label.trim()
+          ? tagData.label.trim()
+          : typeof tagData.displayName === 'string' && tagData.displayName.trim()
+            ? tagData.displayName.trim()
+            : '标签';
+        tagData.label = label;
+        tagData.displayName = label;
+        tagData.enabled = tagData.enabled !== false;
+        tagData.color = isTagColor(tagData.color) ? tagData.color : 'neutral';
+        delete tagData.sourceId;
+      }
+
+      if (node.type === CANVAS_NODE_TYPES.tagGroup) {
+        const groupData = mergedData as Record<string, unknown>;
+        const label = typeof groupData.label === 'string' && groupData.label.trim()
+          ? groupData.label.trim()
+          : typeof groupData.displayName === 'string' && groupData.displayName.trim()
+            ? groupData.displayName.trim()
+            : '标签组';
+        groupData.label = label;
+        groupData.displayName = label;
+        groupData.enabled = groupData.enabled !== false;
+        groupData.schemaVersion = 2;
+        groupData.color = isTagColor(groupData.color) ? groupData.color : 'neutral';
+        groupData.shape = isTagGroupShape(groupData.shape) ? groupData.shape : 'rounded';
+        groupData.memberNodeIds = Array.isArray(groupData.memberNodeIds)
+          ? Array.from(new Set(groupData.memberNodeIds.filter((id): id is string => (
+              typeof id === 'string' && Boolean(id.trim())
+            )).map((id) => id.trim())))
+          : [];
+        groupData.unresolvedMemberIds = Array.isArray(groupData.unresolvedMemberIds)
+          ? Array.from(new Set(groupData.unresolvedMemberIds.filter((id): id is string => (
+              typeof id === 'string' && Boolean(id.trim())
+            )).map((id) => id.trim())))
+          : [];
+        groupData.legacyMemberTagIds = Array.isArray(groupData.legacyMemberTagIds)
+          ? Array.from(new Set(groupData.legacyMemberTagIds.filter((id): id is string => (
+              typeof id === 'string' && Boolean(id.trim())
+            )).map((id) => id.trim())))
+          : [];
+        delete groupData.memberTagIds;
+        delete groupData.tagIds;
+      }
+
+      if ('aspectRatio' in mergedData && !mergedData.aspectRatio) {
+        mergedData.aspectRatio = DEFAULT_ASPECT_RATIO;
+      }
+
+      if (
+        'generationRetryResultUrl' in mergedData
+        && !isLightweightRetryResultUrl((mergedData as { generationRetryResultUrl?: unknown }).generationRetryResultUrl)
+      ) {
+        (mergedData as { generationRetryResultUrl?: string | null }).generationRetryResultUrl = null;
+      }
+
+      // Keep generation state only when there is lightweight metadata that
+      // can resume polling or refetch an already-completed result.
+      if ('isGenerating' in mergedData && mergedData.isGenerating) {
+        const generationJobId =
+          typeof (mergedData as { generationJobId?: unknown }).generationJobId === 'string'
+            ? (mergedData as { generationJobId?: string }).generationJobId?.trim() ?? ''
+            : '';
+        const generationRetryResultUrl =
+          (node.type === CANVAS_NODE_TYPES.exportImage
+            || node.type === CANVAS_NODE_TYPES.panorama
+            || node.type === CANVAS_NODE_TYPES.video)
+          && isLightweightRetryResultUrl((mergedData as { generationRetryResultUrl?: unknown }).generationRetryResultUrl)
+            ? ((mergedData as { generationRetryResultUrl?: string }).generationRetryResultUrl ?? '').trim()
+            : '';
+        if (!generationJobId && !generationRetryResultUrl) {
+          mergedData.isGenerating = false;
+          if ('generationStartedAt' in mergedData) {
+            mergedData.generationStartedAt = null;
+          }
+        }
+      }
+
+      if ('isStreaming' in mergedData && mergedData.isStreaming) {
+        mergedData.isStreaming = false;
+      }
+
+      return {
+        ...node,
+        type: node.type as CanvasNodeType,
+        data: mergedData,
+      };
+    })
+    .filter((node): node is CanvasNode => Boolean(node));
+}
+
+function normalizeHistory(history?: CanvasHistoryState): CanvasHistoryState {
+  if (!history || typeof history !== 'object') {
+    return { past: [], future: [] };
+  }
+
+  const normalizeSnapshot = (snapshot: unknown): CanvasHistorySnapshot => {
+    const snapshotRecord =
+      snapshot && typeof snapshot === 'object'
+        ? (snapshot as Partial<CanvasHistorySnapshot>)
+        : {};
+    const rawNodes = Array.isArray(snapshotRecord.nodes) ? snapshotRecord.nodes : [];
+    const rawEdges = Array.isArray(snapshotRecord.edges) ? snapshotRecord.edges : [];
+    const migrated = migrateLegacyTagGraph(rawNodes, rawEdges);
+    reportTagMigrationDiagnostics('canvas-history', migrated.diagnostics);
+    const normalizedNodes = normalizeNodes(migrated.nodes);
+    return {
+      nodes: normalizedNodes,
+      edges: normalizeEdgesWithNodes(migrated.edges, normalizedNodes),
+    };
+  };
+
+  const rawPast = Array.isArray(history.past) ? history.past : [];
+  const rawFuture = Array.isArray(history.future) ? history.future : [];
+
+  return {
+    past: trimHistorySnapshots(rawPast.slice(-MAX_HISTORY_STEPS).map(normalizeSnapshot)),
+    future: trimHistorySnapshots(rawFuture.slice(-MAX_HISTORY_STEPS).map(normalizeSnapshot)),
+  };
+}
+
+function createSnapshot(nodes: CanvasNode[], edges: CanvasEdge[]): CanvasHistorySnapshot {
+  return { nodes, edges };
+}
+
+function collectNodeIdsWithDescendants(nodes: CanvasNode[], seedIds: string[]): Set<string> {
+  const deleteSet = new Set(seedIds);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const node of nodes) {
+      if (!node.parentId || deleteSet.has(node.id)) {
+        continue;
+      }
+      if (deleteSet.has(node.parentId)) {
+        deleteSet.add(node.id);
+        changed = true;
+      }
+    }
+  }
+
+  return deleteSet;
+}
+
+function getNodeSize(node: CanvasNode): { width: number; height: number } {
+  return {
+    width:
+      typeof node.measured?.width === 'number'
+        ? node.measured.width
+        : typeof node.width === 'number'
+          ? node.width
+          : DEFAULT_NODE_WIDTH,
+    height:
+      typeof node.measured?.height === 'number'
+        ? node.measured.height
+        : typeof node.height === 'number'
+          ? node.height
+          : 200,
+  };
+}
+
+function isImageAutoResizableType(type: CanvasNodeType): boolean {
+  return type === CANVAS_NODE_TYPES.upload
+    || type === CANVAS_NODE_TYPES.imageEdit
+    || type === CANVAS_NODE_TYPES.exportImage;
+}
+
+function withManualSizeLock(node: CanvasNode): CanvasNode {
+  const nodeData = node.data as CanvasNodeData & { isSizeManuallyAdjusted?: boolean };
+  if (nodeData.isSizeManuallyAdjusted) {
+    return node;
+  }
+
+  return {
+    ...node,
+    data: {
+      ...node.data,
+      isSizeManuallyAdjusted: true,
+    } as CanvasNodeData,
+  };
+}
+
+function resolveAutoImageNodeDimensions(
+  aspectRatio: string,
+  options?: {
+    minWidth?: number;
+    minHeight?: number;
+  }
+): { width: number; height: number } {
+  const minWidth = options?.minWidth ?? EXPORT_RESULT_NODE_MIN_WIDTH;
+  const minHeight = options?.minHeight ?? EXPORT_RESULT_NODE_MIN_HEIGHT;
+  return resolveMinEdgeFittedSize(aspectRatio, { minWidth, minHeight });
+}
+
+function resolveGeneratedImageNodeDimensions(
+  aspectRatio: string,
+  options?: {
+    minWidth?: number;
+    minHeight?: number;
+  }
+): { width: number; height: number } {
+  const size = resolveSizeInsideTargetBox(aspectRatio, {
+    width: EXPORT_RESULT_NODE_DEFAULT_WIDTH,
+    height: EXPORT_RESULT_NODE_LAYOUT_HEIGHT,
+  });
+  const minWidth = options?.minWidth ?? IMAGE_NODE_VISUAL_MIN_EDGE;
+  const minHeight = options?.minHeight ?? IMAGE_NODE_VISUAL_MIN_EDGE;
+
+  return ensureAtLeastOneMinEdge(size, { minWidth, minHeight });
+}
+
+function resolveDerivedAspectRatio(
+  sourceNode: CanvasNode | undefined,
+  fallbackAspectRatio: string
+): string {
+  if (!sourceNode) {
+    return fallbackAspectRatio;
+  }
+
+  if (sourceNode.type === CANVAS_NODE_TYPES.storyboardGen) {
+    const data = sourceNode.data as { requestAspectRatio?: string; aspectRatio?: string };
+    const preferred = data.requestAspectRatio && data.requestAspectRatio !== 'auto'
+      ? data.requestAspectRatio
+      : data.aspectRatio;
+    return preferred || fallbackAspectRatio;
+  }
+
+  if (sourceNode.type === CANVAS_NODE_TYPES.storyboardSplit) {
+    const data = sourceNode.data as { frameAspectRatio?: string; aspectRatio?: string };
+    return data.frameAspectRatio || data.aspectRatio || fallbackAspectRatio;
+  }
+
+  if (sourceNode.type === CANVAS_NODE_TYPES.imageEdit) {
+    const data = sourceNode.data as { requestAspectRatio?: string; aspectRatio?: string };
+    const preferred = data.requestAspectRatio && data.requestAspectRatio !== 'auto'
+      ? data.requestAspectRatio
+      : data.aspectRatio;
+    return preferred || fallbackAspectRatio;
+  }
+
+  const imageLikeAspect = (sourceNode.data as { aspectRatio?: string }).aspectRatio;
+  return imageLikeAspect || fallbackAspectRatio;
+}
+
+function maybeApplyImageAutoResize(node: CanvasNode, patch: Partial<CanvasNodeData>): CanvasNode {
+  if (!isImageAutoResizableType(node.type)) {
+    return node;
+  }
+
+  const nodeData = node.data as CanvasNodeData & {
+    imageUrl?: string | null;
+    aspectRatio?: string;
+    isSizeManuallyAdjusted?: boolean;
+  };
+  const patchData = patch as Partial<CanvasNodeData> & {
+    imageUrl?: string | null;
+    aspectRatio?: string;
+    isSizeManuallyAdjusted?: boolean;
+  };
+
+  const hasImageRelatedChange = 'imageUrl' in patchData || 'previewImageUrl' in patchData || 'aspectRatio' in patchData;
+  if (!hasImageRelatedChange) {
+    return node;
+  }
+
+  const isSizeManuallyAdjusted = patchData.isSizeManuallyAdjusted ?? nodeData.isSizeManuallyAdjusted ?? false;
+  if (isSizeManuallyAdjusted) {
+    return node;
+  }
+
+  const nextImageUrl = patchData.imageUrl ?? nodeData.imageUrl;
+  if (typeof nextImageUrl !== 'string' || nextImageUrl.trim().length === 0) {
+    return node;
+  }
+
+  const nextAspectRatio = patchData.aspectRatio ?? nodeData.aspectRatio ?? DEFAULT_ASPECT_RATIO;
+  const nextSize = node.type === CANVAS_NODE_TYPES.exportImage
+    ? resolveAutoImageNodeDimensions(nextAspectRatio, {
+      minWidth: EXPORT_RESULT_NODE_MIN_WIDTH,
+      minHeight: EXPORT_RESULT_NODE_MIN_HEIGHT,
+    })
+    : resolveAutoImageNodeDimensions(nextAspectRatio);
+
+  return {
+    ...node,
+    width: nextSize.width,
+    height: nextSize.height,
+    style: {
+      ...(node.style ?? {}),
+      width: nextSize.width,
+      height: nextSize.height,
+    },
+  };
+}
+
+function resolveAbsolutePosition(
+  node: CanvasNode,
+  nodeMap: Map<string, CanvasNode>
+): { x: number; y: number } {
+  let x = node.position.x;
+  let y = node.position.y;
+  let currentParentId = node.parentId;
+  const visited = new Set<string>();
+
+  while (currentParentId && !visited.has(currentParentId)) {
+    visited.add(currentParentId);
+    const parent = nodeMap.get(currentParentId);
+    if (!parent) {
+      break;
+    }
+    x += parent.position.x;
+    y += parent.position.y;
+    currentParentId = parent.parentId;
+  }
+
+  return { x, y };
+}
+
+function pushSnapshot(
+  snapshots: CanvasHistorySnapshot[],
+  snapshot: CanvasHistorySnapshot
+): CanvasHistorySnapshot[] {
+  const last = snapshots[snapshots.length - 1];
+  if (last && last.nodes === snapshot.nodes && last.edges === snapshot.edges) {
+    return snapshots;
+  }
+
+  return trimHistorySnapshots([...snapshots, snapshot]);
+}
+
+function isHeavyHistorySnapshot(snapshot: CanvasHistorySnapshot): boolean {
+  if (!Array.isArray(snapshot.nodes)) {
+    return false;
+  }
+
+  return snapshot.nodes.some((node) => {
+    if (
+      node.type === CANVAS_NODE_TYPES.blueprint ||
+      node.type === CANVAS_NODE_TYPES.panorama ||
+      node.type === CANVAS_NODE_TYPES.storyboardSplit ||
+      node.type === CANVAS_NODE_TYPES.storyboardGen
+    ) {
+      return true;
+    }
+
+    const data = node.data as Record<string, unknown>;
+    return [
+      data.imageUrl,
+      data.previewImageUrl,
+      data.sourceImageUrl,
+      data.snapshotUrl,
+      data.backgroundImageUrl,
+      data.backgroundPanoramaUrl,
+    ].some((value) => typeof value === 'string' && value.startsWith('data:image/') && value.length > 250_000);
+  });
+}
+
+function trimHistorySnapshots(snapshots: CanvasHistorySnapshot[]): CanvasHistorySnapshot[] {
+  const limit = snapshots.some(isHeavyHistorySnapshot) ? MAX_HEAVY_HISTORY_STEPS : MAX_HISTORY_STEPS;
+  return snapshots.length > limit ? snapshots.slice(-limit) : snapshots;
+}
+
+function resolveSelectedNodeId(selectedNodeId: string | null, nodes: CanvasNode[]): string | null {
+  if (!selectedNodeId) {
+    return null;
+  }
+  return nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : null;
+}
+
+function resolveActiveToolDialog(
+  activeToolDialog: ActiveToolDialog | null,
+  nodes: CanvasNode[]
+): ActiveToolDialog | null {
+  if (!activeToolDialog) {
+    return null;
+  }
+  return nodes.some((node) => node.id === activeToolDialog.nodeId) ? activeToolDialog : null;
+}
+
+function createDefaultStoryboardExportOptions(): StoryboardExportOptions {
+  return {
+    showFrameIndex: false,
+    showFrameNote: false,
+    notePlacement: 'overlay',
+    imageFit: 'cover',
+    frameIndexPrefix: 'S',
+    cellGap: 8,
+    outerPadding: 0,
+    fontSize: 4,
+    backgroundColor: '#0f1115',
+    textColor: '#f8fafc',
+  };
+}
+
+export const useCanvasStore = create<CanvasState>((set, get) => ({
+  nodes: [],
+  edges: [],
+  revision: 0,
+  selectedNodeId: null,
+  activeDirectorStudioNodeId: null,
+  activeToolDialog: null,
+  history: { past: [], future: [] },
+  dragHistorySnapshot: null,
+  currentViewport: { x: 0, y: 0, zoom: 1 },
+  canvasViewportSize: { width: 0, height: 0 },
+  imageViewer: {
+    isOpen: false,
+    currentImageUrl: null,
+    imageList: [],
+    currentIndex: 0,
+  },
+
+  onNodesChange: (changes) => {
+    set((state) => {
+      const resizedNodeIds = new Set(
+        changes
+          .filter(
+            (change): change is NodeChange<CanvasNode> & { id: string } =>
+              change.type === 'dimensions'
+              && 'resizing' in change
+              && change.resizing === false
+              && typeof change.id === 'string'
+          )
+          .map((change) => change.id)
+      );
+
+      let nextNodes = applyNodeChanges<CanvasNode>(changes, state.nodes);
+      if (resizedNodeIds.size > 0) {
+        nextNodes = nextNodes.map((node) => {
+          if (!resizedNodeIds.has(node.id) || !isImageAutoResizableType(node.type)) {
+            return node;
+          }
+          return withManualSizeLock(node);
+        });
+      }
+      const hasMeaningfulChange = changes.some((change) => change.type !== 'select');
+      const hasDragMove = changes.some(
+        (change) =>
+          change.type === 'position' &&
+          'dragging' in change &&
+          Boolean(change.dragging)
+      );
+      const hasDragEnd = changes.some(
+        (change) =>
+          change.type === 'position' &&
+          'dragging' in change &&
+          change.dragging === false
+      );
+      const hasResizeMove = changes.some(
+        (change) =>
+          change.type === 'dimensions' &&
+          'resizing' in change &&
+          Boolean(change.resizing)
+      );
+      const hasResizeEnd = changes.some(
+        (change) =>
+          change.type === 'dimensions' &&
+          'resizing' in change &&
+          change.resizing === false
+      );
+      const hasInteractionMove = hasDragMove || hasResizeMove;
+      const hasInteractionEnd = hasDragEnd || hasResizeEnd;
+
+      let nextHistory = state.history;
+      let nextDragHistorySnapshot = state.dragHistorySnapshot;
+
+      if (hasInteractionMove && !nextDragHistorySnapshot) {
+        nextDragHistorySnapshot = createSnapshot(state.nodes, state.edges);
+      }
+
+      if (hasInteractionEnd) {
+        const snapshot = nextDragHistorySnapshot ?? createSnapshot(state.nodes, state.edges);
+        nextHistory = {
+          past: pushSnapshot(state.history.past, snapshot),
+          future: [],
+        };
+        nextDragHistorySnapshot = null;
+      } else if (hasMeaningfulChange && !hasInteractionMove) {
+        nextHistory = {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        };
+        nextDragHistorySnapshot = null;
+      }
+
+      return {
+        nodes: nextNodes,
+        revision: hasMeaningfulChange ? nextCanvasRevision(state.revision) : state.revision,
+        selectedNodeId: resolveSelectedNodeId(state.selectedNodeId, nextNodes),
+        activeToolDialog: resolveActiveToolDialog(state.activeToolDialog, nextNodes),
+        history: nextHistory,
+        dragHistorySnapshot: nextDragHistorySnapshot,
+      };
+    });
+  },
+
+  onEdgesChange: (changes) => {
+    set((state) => {
+      const nextEdges = applyEdgeChanges<CanvasEdge>(changes, state.edges);
+      const hasMeaningfulChange = changes.some((change) => change.type !== 'select');
+
+      if (!hasMeaningfulChange) {
+        return { edges: nextEdges };
+      }
+
+      return {
+        edges: nextEdges,
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  onConnect: (connection) => {
+    const sourceHandle = normalizeHandleId(connection.sourceHandle) ?? 'source';
+    const targetHandle = normalizeHandleId(connection.targetHandle) ?? 'target';
+    set((state) => {
+      if (!connection.source || !connection.target) return state;
+      const validation = validateCanvasConnection(
+        connection.source,
+        connection.target,
+        state.nodes,
+        state.edges,
+      );
+      if (!validation.valid || validation.existingEdgeId) return state;
+      return {
+        edges: addEdge<CanvasEdge>(
+          { ...connection, sourceHandle, targetHandle, type: 'disconnectableEdge' },
+          state.edges
+        ),
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  setCanvasData: (nodes, edges, history) => {
+    const migrated = migrateLegacyTagGraph(nodes, edges);
+    reportTagMigrationDiagnostics('canvas-current', migrated.diagnostics);
+    const normalizedNodes = normalizeNodes(migrated.nodes);
+    const normalizedEdges = normalizeEdgesWithNodes(migrated.edges, normalizedNodes);
+
+    set((state) => ({
+      nodes: normalizedNodes,
+      edges: normalizedEdges,
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: null,
+      activeDirectorStudioNodeId: null,
+      activeToolDialog: null,
+      history: normalizeHistory(history),
+      dragHistorySnapshot: null,
+    }));
+  },
+
+  setViewportState: (viewport) => {
+    set({ currentViewport: viewport });
+  },
+
+  setCanvasViewportSize: (size) => {
+    set({ canvasViewportSize: size });
+  },
+
+  openImageViewer: (imageUrl, imageList = []) => {
+    const list = imageList.length > 0 ? imageList : [imageUrl];
+    const index = list.indexOf(imageUrl);
+    set({
+      imageViewer: {
+        isOpen: true,
+        currentImageUrl: imageUrl,
+        imageList: list,
+        currentIndex: index >= 0 ? index : 0,
+      },
+    });
+  },
+
+  closeImageViewer: () => {
+    set({
+      imageViewer: {
+        isOpen: false,
+        currentImageUrl: null,
+        imageList: [],
+        currentIndex: 0,
+      },
+    });
+  },
+
+  navigateImageViewer: (direction) => {
+    const state = get();
+    const { currentIndex, imageList } = state.imageViewer;
+    if (direction === 'prev' && currentIndex > 0) {
+      const newIndex = currentIndex - 1;
+      set({
+        imageViewer: {
+          ...state.imageViewer,
+          currentIndex: newIndex,
+          currentImageUrl: imageList[newIndex],
+        },
+      });
+    } else if (direction === 'next' && currentIndex < imageList.length - 1) {
+      const newIndex = currentIndex + 1;
+      set({
+        imageViewer: {
+          ...state.imageViewer,
+          currentIndex: newIndex,
+          currentImageUrl: imageList[newIndex],
+        },
+      });
+    }
+  },
+
+  addNode: (type, position, data = {}) => {
+    const state = get();
+    const newNode = canvasNodeFactory.createNode(type, position, data);
+    set({
+      nodes: [...state.nodes, newNode],
+      revision: nextCanvasRevision(state.revision),
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
+    return newNode.id;
+  },
+
+  addNodesBatch: (inputs) => {
+    if (inputs.length === 0) {
+      return [];
+    }
+    if (inputs.length > MAX_CANVAS_BATCH_ADD_NODES) {
+      throw new RangeError(`A canvas batch can add at most ${MAX_CANVAS_BATCH_ADD_NODES} nodes.`);
+    }
+
+    const state = get();
+    const newNodes = inputs.map((input) => {
+      const node = canvasNodeFactory.createNode(
+        input.type,
+        input.position,
+        input.data ?? {},
+      );
+      if (!input.dimensions) {
+        return node;
+      }
+      const { width, height } = input.dimensions;
+      if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+        throw new RangeError('Canvas batch node dimensions must be finite positive numbers.');
+      }
+      return {
+        ...node,
+        measured: { width, height },
+      };
+    });
+    set({
+      nodes: [...state.nodes, ...newNodes],
+      revision: nextCanvasRevision(state.revision),
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
+    return newNodes.map((node) => node.id);
+  },
+
+  commitGraphTransaction: ({ expectedRevision, nodes, edges, selectedNodeId }) => {
+    let committedRevision: number | null = null;
+    set((state) => {
+      const currentRevision = normalizeCanvasRevision(state.revision);
+      if (currentRevision !== expectedRevision) {
+        return state;
+      }
+      committedRevision = nextCanvasRevision(currentRevision);
+      return {
+        nodes,
+        edges,
+        selectedNodeId: resolveSelectedNodeId(selectedNodeId, nodes),
+        activeToolDialog: resolveActiveToolDialog(state.activeToolDialog, nodes),
+        activeDirectorStudioNodeId:
+          state.activeDirectorStudioNodeId
+          && nodes.some((node) => node.id === state.activeDirectorStudioNodeId)
+            ? state.activeDirectorStudioNodeId
+            : null,
+        revision: committedRevision,
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+    return committedRevision;
+  },
+
+  addEdge: (source, target) => {
+    const state = get();
+    // Check if both nodes exist
+    const sourceNode = state.nodes.find((n) => n.id === source);
+    const targetNode = state.nodes.find((n) => n.id === target);
+    if (!sourceNode || !targetNode) {
+      return null;
+    }
+    const validation = validateCanvasConnection(source, target, state.nodes, state.edges);
+    if (!validation.valid) {
+      return null;
+    }
+
+    const edgeId = `e-${source}-${target}`;
+    // Check if edge already exists
+    if (validation.existingEdgeId) return validation.existingEdgeId;
+
+    const newEdge: CanvasEdge = {
+      id: edgeId,
+      source,
+      target,
+      sourceHandle: 'source',
+      targetHandle: 'target',
+      type: 'disconnectableEdge',
+    };
+
+    set({
+      edges: [...state.edges, newEdge],
+      revision: nextCanvasRevision(state.revision),
+    });
+
+    return edgeId;
+  },
+
+  findNodePosition: (sourceNodeId, newNodeWidth, newNodeHeight) => {
+    const state = get();
+    const sourceNode = state.nodes.find((n) => n.id === sourceNodeId);
+    if (!sourceNode) {
+      return { x: 100, y: 100 };
+    }
+    return findRelatedCanvasNodePositions({
+      nodes: state.nodes,
+      relatedNodeId: sourceNodeId,
+      desired: { x: sourceNode.position.x, y: sourceNode.position.y },
+      size: { width: newNodeWidth, height: newNodeHeight },
+      viewport: {
+        x: state.currentViewport.x,
+        y: state.currentViewport.y,
+        zoom: state.currentViewport.zoom,
+        width: state.canvasViewportSize.width,
+        height: state.canvasViewportSize.height,
+      },
+    })[0] ?? { x: 100, y: 100 };
+  },
+
+  findNodePositions: (sourceNodeId, count, newNodeWidth, newNodeHeight) => {
+    const state = get();
+    const sourceNode = state.nodes.find((n) => n.id === sourceNodeId);
+    const total = Math.max(0, Math.floor(count));
+    if (!sourceNode || total === 0) {
+      return [];
+    }
+    return findRelatedCanvasNodePositions({
+      nodes: state.nodes,
+      relatedNodeId: sourceNodeId,
+      desired: { x: sourceNode.position.x, y: sourceNode.position.y },
+      size: { width: newNodeWidth, height: newNodeHeight },
+      count: total,
+      viewport: {
+        x: state.currentViewport.x,
+        y: state.currentViewport.y,
+        zoom: state.currentViewport.zoom,
+        width: state.canvasViewportSize.width,
+        height: state.canvasViewportSize.height,
+      },
+    });
+  },
+
+  addDerivedUploadNode: (sourceNodeId, imageUrl, aspectRatio, previewImageUrl) => {
+    const state = get();
+    const sourceNode = state.nodes.find((node) => node.id === sourceNodeId);
+    const resolvedAspectRatio = resolveDerivedAspectRatio(sourceNode, aspectRatio);
+    const derivedSize = resolveGeneratedImageNodeDimensions(resolvedAspectRatio);
+    const position = state.findNodePosition(sourceNodeId, derivedSize.width, derivedSize.height);
+    const node = canvasNodeFactory.createNode(CANVAS_NODE_TYPES.upload, position, {
+      imageUrl,
+      previewImageUrl: previewImageUrl ?? null,
+      aspectRatio: resolvedAspectRatio,
+    });
+    node.width = derivedSize.width;
+    node.height = derivedSize.height;
+    node.style = {
+      ...(node.style ?? {}),
+      width: derivedSize.width,
+      height: derivedSize.height,
+    };
+
+    set({
+      nodes: [...state.nodes, node],
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: node.id,
+      activeToolDialog: null,
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
+
+    return node.id;
+  },
+
+  addDerivedExportNode: (sourceNodeId, imageUrl, aspectRatio, previewImageUrl, options) => {
+    const state = get();
+    const sourceNode = state.nodes.find((node) => node.id === sourceNodeId);
+    const aspectRatioStrategy = options?.aspectRatioStrategy ?? 'provided';
+    const resolvedAspectRatio = aspectRatioStrategy === 'derivedFromSource'
+      ? resolveDerivedAspectRatio(sourceNode, aspectRatio)
+      : (aspectRatio || resolveDerivedAspectRatio(sourceNode, DEFAULT_ASPECT_RATIO));
+    const autoSize = resolveAutoImageNodeDimensions(resolvedAspectRatio, {
+      minWidth: EXPORT_RESULT_NODE_MIN_WIDTH,
+      minHeight: EXPORT_RESULT_NODE_MIN_HEIGHT,
+    });
+    const generatedSize = resolveGeneratedImageNodeDimensions(resolvedAspectRatio, {
+      minWidth: EXPORT_RESULT_NODE_MIN_WIDTH,
+      minHeight: EXPORT_RESULT_NODE_MIN_HEIGHT,
+    });
+    const sourceSize = sourceNode ? getNodeSize(sourceNode) : null;
+    const sizeStrategy = options?.sizeStrategy
+      ?? (options?.matchSourceNodeSize ? 'matchSource' : 'generated');
+    let derivedSize = generatedSize;
+    if (sizeStrategy === 'autoMinEdge') {
+      derivedSize = autoSize;
+    } else if (sizeStrategy === 'matchSource' && sourceSize) {
+      derivedSize = {
+        width: Math.max(1, Math.round(sourceSize.width)),
+        height: Math.max(1, Math.round(sourceSize.height)),
+      };
+    }
+    const position = state.findNodePosition(
+      sourceNodeId,
+      derivedSize.width,
+      derivedSize.height
+    );
+    const exportNodeData: Partial<CanvasNodeData> = {
+      imageUrl,
+      previewImageUrl: previewImageUrl ?? null,
+      aspectRatio: resolvedAspectRatio,
+    };
+    if (options?.defaultTitle) {
+      (exportNodeData as { displayName?: string }).displayName = options.defaultTitle;
+    }
+    if (options?.resultKind) {
+      (exportNodeData as { resultKind?: ExportImageNodeResultKind }).resultKind = options.resultKind;
+      if (!options.defaultTitle) {
+        (exportNodeData as { displayName?: string }).displayName =
+          EXPORT_RESULT_DISPLAY_NAME[options.resultKind];
+      }
+    }
+    const node = canvasNodeFactory.createNode(CANVAS_NODE_TYPES.exportImage, position, {
+      ...exportNodeData,
+    });
+    node.width = derivedSize.width;
+    node.height = derivedSize.height;
+    node.style = {
+      ...(node.style ?? {}),
+      width: derivedSize.width,
+      height: derivedSize.height,
+    };
+
+    set({
+      nodes: [...state.nodes, node],
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: node.id,
+      activeToolDialog: null,
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
+
+    return node.id;
+  },
+
+  addStoryboardSplitNode: (sourceNodeId, rows, cols, frames, frameAspectRatio) => {
+    const state = get();
+    const position = state.findNodePosition(sourceNodeId, DEFAULT_NODE_WIDTH, 220);
+    const resolvedFrameAspectRatio =
+      frameAspectRatio ??
+      frames.find((frame) => typeof frame.aspectRatio === 'string')?.aspectRatio ??
+      DEFAULT_ASPECT_RATIO;
+
+    const node = canvasNodeFactory.createNode(CANVAS_NODE_TYPES.storyboardSplit, position, {
+      gridRows: rows,
+      gridCols: cols,
+      frames,
+      aspectRatio: resolvedFrameAspectRatio,
+      frameAspectRatio: resolvedFrameAspectRatio,
+      exportOptions: createDefaultStoryboardExportOptions(),
+    });
+
+    set({
+      nodes: [...state.nodes, node],
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: node.id,
+      activeToolDialog: null,
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
+
+    return node.id;
+  },
+
+  updateNodeData: (nodeId, data) => {
+    set((state) => {
+      let changed = false;
+      const nextNodes = state.nodes.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+
+        const hasDataChange = Object.entries(data).some(([key, nextValue]) => {
+          const previousValue = (node.data as Record<string, unknown>)[key];
+          return !Object.is(previousValue, nextValue);
+        });
+        if (!hasDataChange) {
+          return node;
+        }
+
+        const mergedData = {
+          ...node.data,
+          ...data,
+        } as CanvasNodeData;
+        const resizedNode = maybeApplyImageAutoResize(
+          {
+            ...node,
+            data: mergedData,
+          },
+          data
+        );
+
+        changed = true;
+        return resizedNode;
+      });
+
+      if (!changed) {
+        return {};
+      }
+
+      return {
+        nodes: nextNodes,
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  updateDirectorStudioProjectLibrary: (projects, sourceNodeId, sourcePatch = {}) => {
+    set((state) => {
+      let changed = false;
+      const projectIds = new Set(projects.map((project) => project.id));
+      const nextNodes = state.nodes.map((node) => {
+        if (!isBlueprintNode(node)) {
+          return node;
+        }
+
+        const patch: Partial<BlueprintNodeData> = node.id === sourceNodeId
+          ? { ...sourcePatch, directorStudioProjects: projects }
+          : { directorStudioProjects: projects };
+        const nextActiveProjectId = patch.activeDirectorStudioProjectId ?? node.data.activeDirectorStudioProjectId;
+        if (nextActiveProjectId && !projectIds.has(nextActiveProjectId)) {
+          patch.activeDirectorStudioProjectId = null;
+        }
+
+        const hasDataChange = Object.entries(patch).some(([key, nextValue]) => {
+          const previousValue = (node.data as Record<string, unknown>)[key];
+          if (key === 'directorStudioProjects') {
+            return !areDirectorStudioProjectLibrariesEquivalent(previousValue, nextValue);
+          }
+          return !Object.is(previousValue, nextValue);
+        });
+        if (!hasDataChange) {
+          return node;
+        }
+
+        const mergedData = {
+          ...node.data,
+          ...patch,
+        } as CanvasNodeData;
+        const resizedNode = maybeApplyImageAutoResize(
+          {
+            ...node,
+            data: mergedData,
+          },
+          patch as Partial<CanvasNodeData>
+        );
+
+        changed = true;
+        return resizedNode;
+      });
+
+      if (!changed) {
+        return {};
+      }
+
+      return {
+        nodes: nextNodes,
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  updateNodePosition: (nodeId, position) => {
+    set((state) => {
+      let changed = false;
+      const nextNodes = state.nodes.map((node) => {
+        if (node.id !== nodeId) {
+          return node;
+        }
+
+        if (node.position.x === position.x && node.position.y === position.y) {
+          return node;
+        }
+
+        changed = true;
+        return {
+          ...node,
+          position,
+        };
+      });
+
+      if (!changed) {
+        return {};
+      }
+
+      return { nodes: nextNodes, revision: nextCanvasRevision(state.revision) };
+    });
+  },
+
+  updateStoryboardFrame: (nodeId, frameId, data) => {
+    set((state) => {
+      let changed = false;
+      const nextNodes = state.nodes.map((node) => {
+        if (node.id !== nodeId || !isStoryboardSplitNode(node)) {
+          return node;
+        }
+
+        const nextFrames = node.data.frames.map((frame) => {
+          if (frame.id !== frameId) {
+            return frame;
+          }
+
+          const patchEntries = Object.entries(data) as Array<
+            [keyof StoryboardFrameItem, StoryboardFrameItem[keyof StoryboardFrameItem]]
+          >;
+          const hasFrameChange = patchEntries.some(([key, nextValue]) =>
+            !Object.is(frame[key], nextValue)
+          );
+          if (!hasFrameChange) {
+            return frame;
+          }
+
+          changed = true;
+          return {
+            ...frame,
+            ...data,
+          };
+        });
+
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            frames: nextFrames,
+          },
+        };
+      });
+
+      if (!changed) {
+        return {};
+      }
+
+      return {
+        nodes: nextNodes,
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  reorderStoryboardFrame: (nodeId, draggedFrameId, targetFrameId) => {
+    set((state) => {
+      let changed = false;
+      const nextNodes = state.nodes.map((node) => {
+        if (node.id !== nodeId || !isStoryboardSplitNode(node)) {
+          return node;
+        }
+
+        const frames = [...node.data.frames].sort((a, b) => a.order - b.order);
+        const fromIndex = frames.findIndex((frame) => frame.id === draggedFrameId);
+        const toIndex = frames.findIndex((frame) => frame.id === targetFrameId);
+
+        if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+          return node;
+        }
+
+        changed = true;
+        const [movedFrame] = frames.splice(fromIndex, 1);
+        frames.splice(toIndex, 0, movedFrame);
+
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            frames: frames.map((frame, index) => ({
+              ...frame,
+              order: index,
+            })),
+          },
+        };
+      });
+
+      if (!changed) {
+        return {};
+      }
+
+      return {
+        nodes: nextNodes,
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  replaceNodeType: (nodeId, type, data = {}) => {
+    let replaced = false;
+
+    set((state) => {
+      const existingNode = state.nodes.find((node) => node.id === nodeId);
+      if (!existingNode || existingNode.type === type) {
+        return {};
+      }
+
+      const replacement = canvasNodeFactory.createNode(type, existingNode.position, data);
+      const nextNode: CanvasNode = {
+        ...replacement,
+        id: existingNode.id,
+        position: existingNode.position,
+        selected: existingNode.selected,
+        parentId: existingNode.parentId,
+        extent: existingNode.extent,
+        expandParent: existingNode.expandParent,
+        zIndex: existingNode.zIndex,
+      };
+      const nextNodes = state.nodes.map((node) => (
+        node.id === nodeId ? nextNode : node
+      ));
+
+      replaced = true;
+      return {
+        nodes: nextNodes,
+        edges: normalizeEdgesWithNodes(state.edges, nextNodes),
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+
+    return replaced;
+  },
+
+  deleteNode: (nodeId) => {
+    get().deleteNodes([nodeId]);
+  },
+
+  deleteNodes: (nodeIds) => {
+    const uniqueIds = Array.from(new Set(nodeIds.filter((nodeId) => nodeId.trim().length > 0)));
+    if (uniqueIds.length === 0) {
+      return;
+    }
+
+    set((state) => {
+      const existingIds = uniqueIds.filter((nodeId) => state.nodes.some((node) => node.id === nodeId));
+      if (existingIds.length === 0) {
+        return {};
+      }
+
+      const deleteSet = collectNodeIdsWithDescendants(state.nodes, existingIds);
+      const nextNodes = state.nodes
+        .filter((node) => !deleteSet.has(node.id))
+        .map((node) => {
+          if (!isTagGroupNode(node)) return node;
+          const memberNodeIds = node.data.memberNodeIds.filter((memberId) => !deleteSet.has(memberId));
+          return memberNodeIds.length === node.data.memberNodeIds.length
+            ? node
+            : { ...node, data: { ...node.data, memberNodeIds } };
+        });
+      const nextEdges = state.edges.filter(
+        (edge) => !deleteSet.has(edge.source) && !deleteSet.has(edge.target)
+      );
+
+      return {
+        nodes: nextNodes,
+        edges: nextEdges,
+        revision: nextCanvasRevision(state.revision),
+        selectedNodeId:
+          state.selectedNodeId && deleteSet.has(state.selectedNodeId) ? null : state.selectedNodeId,
+        activeToolDialog:
+          state.activeToolDialog && deleteSet.has(state.activeToolDialog.nodeId)
+            ? null
+            : state.activeToolDialog,
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  groupNodes: (nodeIds) => {
+    const uniqueIds = Array.from(new Set(nodeIds.filter((nodeId) => nodeId.trim().length > 0)));
+    if (uniqueIds.length < 2) {
+      return null;
+    }
+
+    const state = get();
+    const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
+    const existingIds = uniqueIds.filter((nodeId) => nodeMap.has(nodeId));
+    if (existingIds.length < 2) {
+      return null;
+    }
+
+    const selectedSet = new Set(existingIds);
+    const memberIds = existingIds.filter((nodeId) => {
+      let currentParentId = nodeMap.get(nodeId)?.parentId;
+      const visited = new Set<string>();
+      while (currentParentId && !visited.has(currentParentId)) {
+        if (selectedSet.has(currentParentId)) {
+          return false;
+        }
+        visited.add(currentParentId);
+        currentParentId = nodeMap.get(currentParentId)?.parentId;
+      }
+      return true;
+    });
+    if (memberIds.length < 2) {
+      return null;
+    }
+
+    const memberSet = new Set(memberIds);
+    const members = memberIds
+      .map((id) => nodeMap.get(id))
+      .filter((node): node is CanvasNode => Boolean(node));
+
+    const absoluteBounds = members.reduce(
+      (acc, node) => {
+        const absolute = resolveAbsolutePosition(node, nodeMap);
+        const size = getNodeSize(node);
+        return {
+          minX: Math.min(acc.minX, absolute.x),
+          minY: Math.min(acc.minY, absolute.y),
+          maxX: Math.max(acc.maxX, absolute.x + size.width),
+          maxY: Math.max(acc.maxY, absolute.y + size.height),
+        };
+      },
+      {
+        minX: Number.POSITIVE_INFINITY,
+        minY: Number.POSITIVE_INFINITY,
+        maxX: Number.NEGATIVE_INFINITY,
+        maxY: Number.NEGATIVE_INFINITY,
+      }
+    );
+
+    if (!Number.isFinite(absoluteBounds.minX) || !Number.isFinite(absoluteBounds.minY)) {
+      return null;
+    }
+
+    const SIDE_PADDING = 20;
+    const TOP_PADDING = 34;
+    const BOTTOM_PADDING = 20;
+    const groupX = Math.round(absoluteBounds.minX - SIDE_PADDING);
+    const groupY = Math.round(absoluteBounds.minY - TOP_PADDING);
+    const groupWidth = Math.round(
+      Math.max(220, absoluteBounds.maxX - absoluteBounds.minX + SIDE_PADDING * 2)
+    );
+    const groupHeight = Math.round(
+      Math.max(140, absoluteBounds.maxY - absoluteBounds.minY + TOP_PADDING + BOTTOM_PADDING)
+    );
+
+    const existingGroupCount = state.nodes.filter((node) => node.type === CANVAS_NODE_TYPES.group).length;
+    const groupDisplayName = `组 ${existingGroupCount + 1}`;
+    const groupNode = canvasNodeFactory.createNode(
+      CANVAS_NODE_TYPES.group,
+      { x: groupX, y: groupY },
+      {
+        label: groupDisplayName,
+        displayName: groupDisplayName,
+      }
+    );
+    groupNode.style = { width: groupWidth, height: groupHeight };
+    groupNode.selected = true;
+
+    const updatedMemberMap = new Map<string, CanvasNode>();
+    for (const node of members) {
+      const absolute = resolveAbsolutePosition(node, nodeMap);
+      updatedMemberMap.set(node.id, {
+        ...node,
+        parentId: groupNode.id,
+        extent: 'parent',
+        position: {
+          x: Math.round(absolute.x - groupX),
+          y: Math.round(absolute.y - groupY),
+        },
+        selected: false,
+      });
+    }
+
+    const firstMemberIndex = state.nodes.reduce((acc, node, index) => {
+      if (!memberSet.has(node.id)) {
+        return acc;
+      }
+      return acc === -1 ? index : Math.min(acc, index);
+    }, -1);
+
+    const nextNodes: CanvasNode[] = [];
+    let insertedGroup = false;
+    for (let index = 0; index < state.nodes.length; index += 1) {
+      const node = state.nodes[index];
+      if (!insertedGroup && index === firstMemberIndex) {
+        nextNodes.push(groupNode);
+        insertedGroup = true;
+      }
+
+      const updatedMember = updatedMemberMap.get(node.id);
+      if (updatedMember) {
+        nextNodes.push(updatedMember);
+      } else {
+        nextNodes.push({
+          ...node,
+          selected: false,
+        });
+      }
+    }
+
+    if (!insertedGroup) {
+      nextNodes.push(groupNode);
+    }
+
+    set({
+      nodes: nextNodes,
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: groupNode.id,
+      activeToolDialog:
+        state.activeToolDialog && memberSet.has(state.activeToolDialog.nodeId)
+          ? null
+          : state.activeToolDialog,
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
+
+    return groupNode.id;
+  },
+
+  ungroupNode: (groupNodeId) => {
+    const state = get();
+    const groupNode = state.nodes.find(
+      (node) => node.id === groupNodeId && node.type === CANVAS_NODE_TYPES.group
+    );
+    if (!groupNode) {
+      return false;
+    }
+
+    const nodeMap = new Map(state.nodes.map((node) => [node.id, node] as const));
+    const children = state.nodes.filter((node) => node.parentId === groupNodeId);
+    if (children.length === 0) {
+      return false;
+    }
+
+    const nextNodes = state.nodes
+      .filter((node) => node.id !== groupNodeId)
+      .map((node) => {
+        if (node.parentId !== groupNodeId) {
+          return node;
+        }
+
+        const absolute = resolveAbsolutePosition(node, nodeMap);
+        return {
+          ...node,
+          parentId: undefined,
+          extent: undefined,
+          position: {
+            x: Math.round(absolute.x),
+            y: Math.round(absolute.y),
+          },
+          selected: false,
+        };
+      });
+
+    const nextEdges = state.edges.filter(
+      (edge) => edge.source !== groupNodeId && edge.target !== groupNodeId
+    );
+
+    set({
+      nodes: nextNodes,
+      edges: nextEdges,
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: state.selectedNodeId === groupNodeId ? null : state.selectedNodeId,
+      activeToolDialog:
+        state.activeToolDialog?.nodeId === groupNodeId ? null : state.activeToolDialog,
+      history: {
+        past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+        future: [],
+      },
+      dragHistorySnapshot: null,
+    });
+
+    return true;
+  },
+
+  deleteEdge: (edgeId) => {
+    set((state) => {
+      const hasEdge = state.edges.some((edge) => edge.id === edgeId);
+      if (!hasEdge) {
+        return {};
+      }
+
+      return {
+        edges: state.edges.filter((edge) => edge.id !== edgeId),
+        revision: nextCanvasRevision(state.revision),
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+
+  setSelectedNode: (nodeId) => {
+    // Close any open panel when switching nodes
+    usePanelStateStore.getState().closeAllPanels();
+    set({ selectedNodeId: nodeId });
+  },
+
+  setActiveDirectorStudioNode: (nodeId) => {
+    set({ activeDirectorStudioNodeId: nodeId });
+  },
+
+  openToolDialog: (dialog) => {
+    set({ activeToolDialog: dialog });
+  },
+
+  closeToolDialog: () => {
+    set({ activeToolDialog: null });
+  },
+
+  undo: () => {
+    const state = get();
+    const target = state.history.past[state.history.past.length - 1];
+    if (!target) {
+      return false;
+    }
+
+    const currentSnapshot = createSnapshot(state.nodes, state.edges);
+    const nextPast = state.history.past.slice(0, -1);
+
+    set({
+      nodes: target.nodes,
+      edges: target.edges,
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: resolveSelectedNodeId(state.selectedNodeId, target.nodes),
+      activeToolDialog: resolveActiveToolDialog(state.activeToolDialog, target.nodes),
+      history: {
+        past: nextPast,
+        future: pushSnapshot(state.history.future, currentSnapshot),
+      },
+      dragHistorySnapshot: null,
+    });
+    return true;
+  },
+
+  redo: () => {
+    const state = get();
+    const target = state.history.future[state.history.future.length - 1];
+    if (!target) {
+      return false;
+    }
+
+    const currentSnapshot = createSnapshot(state.nodes, state.edges);
+    const nextFuture = state.history.future.slice(0, -1);
+
+    set({
+      nodes: target.nodes,
+      edges: target.edges,
+      revision: nextCanvasRevision(state.revision),
+      selectedNodeId: resolveSelectedNodeId(state.selectedNodeId, target.nodes),
+      activeToolDialog: resolveActiveToolDialog(state.activeToolDialog, target.nodes),
+      history: {
+        past: pushSnapshot(state.history.past, currentSnapshot),
+        future: nextFuture,
+      },
+      dragHistorySnapshot: null,
+    });
+    return true;
+  },
+
+  clearCanvas: () => {
+    set((state) => {
+      if (state.nodes.length === 0 && state.edges.length === 0) {
+        return {};
+      }
+
+      return {
+        nodes: [],
+        edges: [],
+        revision: nextCanvasRevision(state.revision),
+        selectedNodeId: null,
+        activeDirectorStudioNodeId: null,
+        activeToolDialog: null,
+        history: {
+          past: pushSnapshot(state.history.past, createSnapshot(state.nodes, state.edges)),
+          future: [],
+        },
+        dragHistorySnapshot: null,
+      };
+    });
+  },
+}));

@@ -1,4 +1,5 @@
 import os, json, uuid, time, threading, requests, functools, sys, re, secrets, tempfile
+import math
 import tos
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -38,8 +39,8 @@ app.secret_key = os.environ.get('APP_SECRET_KEY', os.urandom(24).hex())
 MAX_UPLOAD_MB = int(os.environ.get('MAX_UPLOAD_MB', '512'))
 app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_MB * 1024 * 1024
 
-UPLOAD   = os.path.join(BASE, 'static', 'uploads')
-DATA     = os.path.join(BASE, 'data')
+UPLOAD   = os.environ.get('MANGA_UPLOAD_DIR', os.path.join(BASE, 'static', 'uploads'))
+DATA     = os.environ.get('MANGA_DATA_DIR', os.path.join(BASE, 'data'))
 os.makedirs(UPLOAD, exist_ok=True)
 os.makedirs(DATA,   exist_ok=True)
 
@@ -903,6 +904,19 @@ def start_metered_job(target, args, job_id, user_id, point_cost):
             refund_model_points(user_id, point_cost)
     threading.Thread(target=runner, daemon=True).start()
 
+def _mock_generation_job(job_id, kind='image', delay=0.8):
+    """Test-only hook (MANGA_MOCK_GENERATION=1): completes jobs without any
+    provider call so acceptance runs never touch real paid models."""
+    def runner():
+        time.sleep(delay)
+        if kind == 'image':
+            JOBS[job_id] = {'status': 'succeeded', 'url': '/static/site-icon.png', 'name': 'mock.png',
+                            'model': 'mock', 'ratio': '1:1', 'mode': 'storyboard'}
+        else:
+            JOBS[job_id] = {'status': 'succeeded', 'video_url': '/static/site-icon.png', 'error': None,
+                            'model': 'mock', 'ratio': '9:16', 'duration': 5, 'resolution': '720p'}
+    threading.Thread(target=runner, daemon=True).start()
+
 def admin_required(f):
     @functools.wraps(f)
     def wrap(*a, **kw):
@@ -938,7 +952,28 @@ def login_required(f):
 def index():
     if not current_user_id():
         return send_from_directory('static', 'login.html')
+    return send_from_directory('static', 'projects.html')
+
+@app.route('/classic')
+def classic_page():
+    if not current_user_id():
+        return redirect('/')
     return send_from_directory('static', 'index.html')
+
+@app.route('/assets')
+def assets_page():
+    if not current_user_id():
+        return redirect('/')
+    return send_from_directory('static', 'assets.html')
+
+@app.route('/workspace/<project_id>')
+def workspace_page(project_id):
+    if not current_user_id():
+        return redirect('/')
+    project = _projects_load(current_user_id()).get('projects', {}).get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    return send_from_directory('static', 'workspace.html')
 
 @app.route('/admin')
 def admin_page():
@@ -950,6 +985,1248 @@ def admin_page():
 @login_required
 def api_settings_page():
     return send_from_directory('static', 'api-settings.html')
+
+# ── Canvas workspace (additive) ──────────────────────────────
+CANVAS_LOCK = threading.Lock()
+MAX_CANVASES_PER_USER = 100
+MAX_CANVAS_NODES = 300
+MAX_CANVAS_EDGES = 600
+MAX_CANVAS_TITLE_LEN = 100
+MAX_CANVAS_ID_LEN = 128
+MAX_CANVAS_STR_LEN = 200000
+MAX_CANVAS_BODY_BYTES = 512 * 1024
+CANVAS_NODE_TYPES = ('script', 'shot', 'asset', 'image', 'video', 'result', 'note')
+SENSITIVE_KEYS = ('api_key', 'cookie', 'authorization', 'password', 'token', 'secret')
+
+class CanvasValidationError(Exception):
+    pass
+
+def canvases_path(user_id=None):
+    return user_data_path('canvases', user_id)
+
+def _canvas_is_finite_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+def _canvas_valid_id(value):
+    return isinstance(value, str) and 1 <= len(value) <= MAX_CANVAS_ID_LEN
+
+def _canvas_valid_str(value, max_len=MAX_CANVAS_STR_LEN):
+    return isinstance(value, str) and len(value) <= max_len
+
+def _canvas_valid_opt_str(value, max_len=MAX_CANVAS_STR_LEN):
+    return value is None or _canvas_valid_str(value, max_len)
+
+def _canvas_valid_media_url(value):
+    if value is None:
+        return True
+    if not isinstance(value, str) or len(value) > 2000:
+        return False
+    lowered = value.lower()
+    if lowered.startswith('data:') or ';base64' in lowered:
+        return False
+    return value.startswith('http://') or value.startswith('https://') or value.startswith('/static/')
+
+def _canvas_reject_sensitive_keys(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in SENSITIVE_KEYS:
+                raise CanvasValidationError('包含敏感字段: ' + str(key))
+            _canvas_reject_sensitive_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            _canvas_reject_sensitive_keys(item)
+
+def _canvas_valid_position(value):
+    return (isinstance(value, dict) and set(value.keys()) == {'x', 'y'}
+            and _canvas_is_finite_number(value.get('x'))
+            and _canvas_is_finite_number(value.get('y')))
+
+def _canvas_valid_viewport(value):
+    return (isinstance(value, dict) and set(value.keys()) == {'x', 'y', 'zoom'}
+            and _canvas_is_finite_number(value.get('x'))
+            and _canvas_is_finite_number(value.get('y'))
+            and _canvas_is_finite_number(value.get('zoom'))
+            and value.get('zoom') > 0)
+
+def _canvas_valid_enum(value, options):
+    return isinstance(value, str) and value in options
+
+def _canvas_valid_bool(value):
+    return isinstance(value, bool)
+
+def _canvas_valid_int_range(value, low, high):
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+def _canvas_valid_string_list(value, max_items):
+    return (isinstance(value, list) and len(value) <= max_items
+            and all(_canvas_valid_id(item) for item in value))
+
+def _canvas_valid_asset_ref(ref):
+    if not isinstance(ref, dict):
+        return False
+    allowed = {'source', 'ref_id', 'name', 'url', 'role_label'}
+    if set(ref.keys()) - allowed:
+        return False
+    if not _canvas_valid_enum(ref.get('source'), ('character', 'outfit', 'scene', 'audio', 'upload', 'style', 'video')):
+        return False
+    ref_id = ref.get('ref_id')
+    if ref_id is not None and not (isinstance(ref_id, (str, int)) and not isinstance(ref_id, bool) and len(str(ref_id)) <= MAX_CANVAS_ID_LEN):
+        return False
+    if not _canvas_valid_opt_str(ref.get('name'), 200):
+        return False
+    if not _canvas_valid_media_url(ref.get('url')):
+        return False
+    if not _canvas_valid_opt_str(ref.get('role_label'), 200):
+        return False
+    return True
+
+def _canvas_valid_split(split):
+    if not isinstance(split, dict):
+        return False
+    allowed = {'job_id', 'status', 'shots', 'error'}
+    if set(split.keys()) - allowed:
+        return False
+    if not _canvas_valid_opt_str(split.get('job_id'), MAX_CANVAS_ID_LEN):
+        return False
+    if not _canvas_valid_enum(split.get('status'), ('idle', 'running', 'succeeded', 'failed')):
+        return False
+    shots = split.get('shots')
+    if not isinstance(shots, list) or len(shots) > 200:
+        return False
+    if not all(isinstance(item, dict) for item in shots):
+        return False
+    if not _canvas_valid_opt_str(split.get('error'), 2000):
+        return False
+    return True
+
+def _canvas_valid_segment(segment):
+    return segment is None or isinstance(segment, dict)
+
+CANVAS_NODE_DATA_SPECS = {
+    'script': {
+        'label': lambda v: _canvas_valid_opt_str(v, 100),
+        'script': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_STR_LEN),
+        'script_model': lambda v: _canvas_valid_enum(v, ('doubao', 'glm46', 'claude46', 'personal-api')),
+        'split_mode': lambda v: _canvas_valid_enum(v, ('smart', 'short', 'long')),
+        'style_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'use_personal_api': _canvas_valid_bool,
+        'api_profile_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'split': _canvas_valid_split,
+    },
+    'shot': {
+        'label': lambda v: _canvas_valid_opt_str(v, 100),
+        'script_node_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'shot_index': lambda v: _canvas_valid_int_range(v, 0, 10000),
+        'segment': _canvas_valid_segment,
+    },
+    'asset': {
+        'label': lambda v: _canvas_valid_opt_str(v, 100),
+        'asset_type': lambda v: _canvas_valid_enum(v, ('character', 'outfit', 'scene', 'audio', 'upload', 'style', 'video')),
+        'refs': lambda v: isinstance(v, list) and len(v) <= 200 and all(_canvas_valid_asset_ref(item) for item in v),
+    },
+    'image': {
+        'label': lambda v: _canvas_valid_opt_str(v, 100),
+        'role': lambda v: _canvas_valid_enum(v, ('storyboard', 'first_frame', 'last_frame')),
+        'prompt': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_STR_LEN),
+        'image_model': lambda v: _canvas_valid_opt_str(v, 128),
+        'ratio': lambda v: _canvas_valid_opt_str(v, 32),
+        'style_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'use_personal_api': _canvas_valid_bool,
+        'api_profile_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'input_asset_node_ids': lambda v: _canvas_valid_string_list(v, 200),
+        'job_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'status': lambda v: _canvas_valid_enum(v, ('idle', 'running', 'succeeded', 'failed')),
+        'image_url': _canvas_valid_media_url,
+        'error': lambda v: _canvas_valid_opt_str(v, 2000),
+    },
+    'video': {
+        'label': lambda v: _canvas_valid_opt_str(v, 100),
+        'video_model': lambda v: _canvas_valid_opt_str(v, 128),
+        'ratio': lambda v: _canvas_valid_opt_str(v, 32),
+        'duration': lambda v: _canvas_valid_int_range(v, 1, 120),
+        'resolution': lambda v: _canvas_valid_opt_str(v, 32),
+        'optimize_prompt': _canvas_valid_bool,
+        'style_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'use_personal_api': _canvas_valid_bool,
+        'api_profile_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'shot_node_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'asset_node_ids': lambda v: _canvas_valid_string_list(v, 200),
+        'storyboard_image_node_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'first_frame_node_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'last_frame_node_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'job_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'status': lambda v: _canvas_valid_enum(v, ('idle', 'running', 'succeeded', 'failed')),
+        'error': lambda v: _canvas_valid_opt_str(v, 2000),
+    },
+    'result': {
+        'label': lambda v: _canvas_valid_opt_str(v, 100),
+        'kind': lambda v: _canvas_valid_enum(v, ('image', 'video')),
+        'media_url': _canvas_valid_media_url,
+        'history_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+        'source_job_id': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_ID_LEN),
+    },
+    'note': {
+        'label': lambda v: _canvas_valid_opt_str(v, 100),
+        'text': lambda v: _canvas_valid_opt_str(v, MAX_CANVAS_STR_LEN),
+        'color': lambda v: _canvas_valid_opt_str(v, 32),
+    },
+}
+
+def _canvas_check_fields(data, allowed, context):
+    if not isinstance(data, dict):
+        raise CanvasValidationError(context + ' 必须是对象')
+    unknown = set(data.keys()) - set(allowed.keys())
+    if unknown:
+        raise CanvasValidationError(context + ' 包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    for key, check in allowed.items():
+        if key in data and not check(data[key]):
+            raise CanvasValidationError(context + '.' + key + ' 类型或取值不合法')
+
+def _canvas_validate_node(node):
+    if not isinstance(node, dict):
+        raise CanvasValidationError('node 必须是对象')
+    unknown = set(node.keys()) - {'id', 'type', 'position', 'data'}
+    if unknown:
+        raise CanvasValidationError('node 包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    if not _canvas_valid_id(node.get('id')):
+        raise CanvasValidationError('node.id 非法')
+    node_type = node.get('type')
+    if node_type not in CANVAS_NODE_TYPES:
+        raise CanvasValidationError('未知节点类型: ' + str(node_type))
+    if not _canvas_valid_position(node.get('position')):
+        raise CanvasValidationError('node.position 非法或包含 NaN/Infinity')
+    data = node.get('data')
+    if not isinstance(data, dict):
+        raise CanvasValidationError('node.data 必须是对象')
+    _canvas_check_fields(data, CANVAS_NODE_DATA_SPECS[node_type], node_type + '.data')
+    return node
+
+def _canvas_validate_edge(edge):
+    if not isinstance(edge, dict):
+        raise CanvasValidationError('edge 必须是对象')
+    unknown = set(edge.keys()) - {'id', 'source', 'target', 'label'}
+    if unknown:
+        raise CanvasValidationError('edge 包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    for field in ('id', 'source', 'target'):
+        if not _canvas_valid_id(edge.get(field)):
+            raise CanvasValidationError('edge.' + field + ' 非法')
+    if 'label' in edge and not _canvas_valid_opt_str(edge.get('label'), 100):
+        raise CanvasValidationError('edge.label 非法')
+    return edge
+
+def _canvas_validate_edges_references(edges, node_ids):
+    for edge in edges:
+        if edge['source'] not in node_ids:
+            raise CanvasValidationError('edge.source 引用了不存在的节点: ' + edge['source'])
+        if edge['target'] not in node_ids:
+            raise CanvasValidationError('edge.target 引用了不存在的节点: ' + edge['target'])
+
+def _canvas_validate_payload(body, allow_id=False):
+    if not isinstance(body, dict):
+        raise CanvasValidationError('请求体必须是对象')
+    _canvas_reject_sensitive_keys(body)
+    top_allowed = {'id', 'title', 'created_at', 'updated_at', 'viewport', 'nodes', 'edges'} if allow_id else {'title', 'nodes', 'edges', 'viewport'}
+    unknown = set(body.keys()) - top_allowed
+    if unknown:
+        raise CanvasValidationError('请求体包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    result = {}
+    if 'title' in body:
+        title = body['title']
+        if not isinstance(title, str) or len(title) > MAX_CANVAS_TITLE_LEN:
+            raise CanvasValidationError('title 必须是不超过 100 字符的字符串')
+        result['title'] = title.strip() or '未命名画布'
+    if 'nodes' in body:
+        nodes = body['nodes']
+        if not isinstance(nodes, list) or len(nodes) > MAX_CANVAS_NODES:
+            raise CanvasValidationError('nodes 必须是列表且不超过 ' + str(MAX_CANVAS_NODES) + ' 个')
+        seen_ids = set()
+        for node in nodes:
+            _canvas_validate_node(node)
+            node_id = node['id']
+            if node_id in seen_ids:
+                raise CanvasValidationError('node.id 重复: ' + node_id)
+            seen_ids.add(node_id)
+        result['nodes'] = nodes
+    if 'edges' in body:
+        edges = body['edges']
+        if not isinstance(edges, list) or len(edges) > MAX_CANVAS_EDGES:
+            raise CanvasValidationError('edges 必须是列表且不超过 ' + str(MAX_CANVAS_EDGES) + ' 个')
+        seen_ids = set()
+        for edge in edges:
+            _canvas_validate_edge(edge)
+            edge_id = edge['id']
+            if edge_id in seen_ids:
+                raise CanvasValidationError('edge.id 重复: ' + edge_id)
+            seen_ids.add(edge_id)
+        result['edges'] = edges
+    if 'viewport' in body:
+        viewport = body['viewport']
+        if not _canvas_valid_viewport(viewport):
+            raise CanvasValidationError('viewport 非法或包含 NaN/Infinity')
+        result['viewport'] = viewport
+    return result
+
+def _canvas_load(user_id):
+    data = load_json(canvases_path(user_id), {'version': 1, 'canvases': {}})
+    if not isinstance(data, dict):
+        data = {'version': 1, 'canvases': {}}
+    data.setdefault('version', 1)
+    if not isinstance(data.get('canvases'), dict):
+        data['canvases'] = {}
+    return data
+
+def _canvas_save(user_id, data):
+    save_json(canvases_path(user_id), data)
+
+def _canvas_request_body():
+    raw = request.get_data(cache=True)
+    if len(raw) > MAX_CANVAS_BODY_BYTES:
+        return None, (jsonify(error='请求体过大'), 413)
+    if not raw:
+        return None, (jsonify(error='请求体必须是 JSON'), 400)
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return None, (jsonify(error='请求体必须是 JSON'), 400)
+    if not isinstance(body, dict):
+        return None, (jsonify(error='请求体必须是对象'), 400)
+    return body, None
+
+def _canvas_list():
+    with CANVAS_LOCK:
+        data = _canvas_load(current_user_id())
+    items = [{
+        'id': canvas.get('id'),
+        'title': canvas.get('title'),
+        'created_at': canvas.get('created_at'),
+        'updated_at': canvas.get('updated_at'),
+    } for canvas in data['canvases'].values() if isinstance(canvas, dict)]
+    items.sort(key=lambda item: item.get('created_at') or '', reverse=True)
+    return jsonify(canvases=items)
+
+def _canvas_create():
+    body, err = _canvas_request_body()
+    if err:
+        return err
+    try:
+        parsed = _canvas_validate_payload(body, allow_id=False)
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    user_id = current_user_id()
+    canvas_id = uuid.uuid4().hex
+    with CANVAS_LOCK:
+        data = _canvas_load(user_id)
+        if len(data['canvases']) >= MAX_CANVASES_PER_USER:
+            return jsonify(error='画布数量已达上限 ' + str(MAX_CANVASES_PER_USER)), 400
+        nodes = parsed.get('nodes') or []
+        edges = parsed.get('edges') or []
+        node_ids = {node['id'] for node in nodes}
+        try:
+            _canvas_validate_edges_references(edges, node_ids)
+        except CanvasValidationError as exc:
+            return jsonify(error=str(exc)), 400
+        now = datetime.now(timezone.utc).isoformat()
+        canvas = {
+            'id': canvas_id,
+            'title': parsed.get('title', '未命名画布'),
+            'created_at': now,
+            'updated_at': now,
+            'viewport': parsed.get('viewport', {'x': 0, 'y': 0, 'zoom': 1}),
+            'nodes': nodes,
+            'edges': edges,
+        }
+        data['canvases'][canvas_id] = canvas
+        _canvas_save(user_id, data)
+    return jsonify(canvas=canvas), 201
+
+def _canvas_get(canvas_id):
+    with CANVAS_LOCK:
+        data = _canvas_load(current_user_id())
+    canvas = data['canvases'].get(canvas_id)
+    if not isinstance(canvas, dict):
+        return jsonify(error='画布不存在'), 404
+    return jsonify(canvas=canvas)
+
+def _canvas_update(canvas_id):
+    body, err = _canvas_request_body()
+    if err:
+        return err
+    if 'id' in body and body['id'] != canvas_id:
+        return jsonify(error='画布 ID 不匹配'), 400
+    try:
+        parsed = _canvas_validate_payload(body, allow_id=True)
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    user_id = current_user_id()
+    with CANVAS_LOCK:
+        data = _canvas_load(user_id)
+        canvas = data['canvases'].get(canvas_id)
+        if not isinstance(canvas, dict):
+            return jsonify(error='画布不存在'), 404
+        nodes = parsed.get('nodes', canvas.get('nodes') or [])
+        edges = parsed.get('edges', canvas.get('edges') or [])
+        node_ids = {node['id'] for node in nodes}
+        try:
+            _canvas_validate_edges_references(edges, node_ids)
+        except CanvasValidationError as exc:
+            return jsonify(error=str(exc)), 400
+        if 'title' in parsed:
+            canvas['title'] = parsed['title']
+        if 'viewport' in parsed:
+            canvas['viewport'] = parsed['viewport']
+        if 'nodes' in parsed:
+            canvas['nodes'] = nodes
+        if 'edges' in parsed:
+            canvas['edges'] = edges
+        canvas['updated_at'] = datetime.now(timezone.utc).isoformat()
+        _canvas_save(user_id, data)
+    return jsonify(canvas=canvas)
+
+def _canvas_delete(canvas_id):
+    user_id = current_user_id()
+    with CANVAS_LOCK:
+        data = _canvas_load(user_id)
+        if canvas_id not in data['canvases']:
+            return jsonify(error='画布不存在'), 404
+        del data['canvases'][canvas_id]
+        _canvas_save(user_id, data)
+    return jsonify(ok=True)
+
+@app.route('/canvas')
+def canvas_page():
+    if not current_user_id():
+        return send_from_directory('static', 'login.html')
+    return send_from_directory('static', 'canvas/dist/index.html')
+
+# ── Canvas V2 (replaces the legacy canvas workbench tab) ─────
+@app.route('/canvas-v2')
+def canvas_v2_page():
+    if not current_user_id():
+        return send_from_directory('static', 'login.html')
+    return send_from_directory('static', 'canvas-v2/dist/index.html')
+
+# ── Canvas V2 preview alias → real workbench (single entry) ──
+@app.route('/canvas-v2-preview')
+def canvas_v2_preview_page():
+    if not current_user_id():
+        return send_from_directory('static', 'login.html')
+    return redirect('/canvas-v2')
+
+@app.route('/api/canvas-v2/rollback')
+@login_required
+def canvas_v2_rollback():
+    return jsonify(enabled=os.environ.get('CANVAS_V2_ROLLBACK', '') == '1')
+
+@app.route('/api/canvas', methods=['GET', 'POST'])
+@login_required
+def canvas_collection():
+    if request.method == 'POST':
+        return _canvas_create()
+    return _canvas_list()
+
+@app.route('/api/canvas/<canvas_id>', methods=['GET', 'PUT', 'DELETE'])
+@login_required
+def canvas_item(canvas_id):
+    if not _canvas_valid_id(canvas_id):
+        return jsonify(error='无效的画布 ID'), 400
+    if request.method == 'GET':
+        return _canvas_get(canvas_id)
+    if request.method == 'PUT':
+        return _canvas_update(canvas_id)
+    return _canvas_delete(canvas_id)
+
+# ── Projects (additive) ─────────────────────────────────────
+PROJECTS_LOCK = threading.Lock()
+MAX_PROJECTS_PER_USER = 200
+MAX_PROJECT_TITLE_LEN = 100
+MAX_PROJECT_BODY_BYTES = 512 * 1024
+MAX_PROJECT_CLASSIC_STATE_JSON_BYTES = 200 * 1024
+
+def projects_path(user_id=None):
+    return user_data_path('projects', user_id)
+
+def _projects_load(user_id):
+    with PROJECTS_LOCK:
+        data = load_json(projects_path(user_id), {'version': 1, 'projects': {}})
+        if not isinstance(data, dict):
+            data = {'version': 1, 'projects': {}}
+        data.setdefault('version', 1)
+        if not isinstance(data.get('projects'), dict):
+            data['projects'] = {}
+        return data
+
+def _projects_save(user_id, data):
+    with PROJECTS_LOCK:
+        save_json(projects_path(user_id), data)
+
+def _ensure_projects_migrated(user_id):
+    data = _projects_load(user_id)
+    if data['projects']:
+        return data
+    canvases_data = _canvas_load(user_id)
+    canvases = canvases_data.get('canvases') if isinstance(canvases_data, dict) else {}
+    existing_canvas_ids = {p.get('canvas_id') for p in data['projects'].values() if isinstance(p, dict)}
+    changed = False
+    for cid, canvas in canvases.items():
+        if not isinstance(canvas, dict):
+            continue
+        if cid in existing_canvas_ids:
+            continue
+        now = datetime.now(timezone.utc).isoformat()
+        pid = uuid.uuid4().hex
+        data['projects'][pid] = {
+            'id': pid,
+            'title': canvas.get('title') or '未命名项目',
+            'canvas_id': cid,
+            'cover_url': None,
+            'created_at': canvas.get('created_at') or now,
+            'updated_at': canvas.get('updated_at') or now,
+            'last_opened_at': now,
+            'classic_state': {},
+        }
+        existing_canvas_ids.add(cid)
+        changed = True
+    if changed:
+        _projects_save(user_id, data)
+    return data
+
+def _projects_request_body():
+    raw = request.get_data(cache=True)
+    if len(raw) > MAX_PROJECT_BODY_BYTES:
+        return None, (jsonify(error='请求体过大'), 413)
+    if not raw:
+        return {}, None
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return None, (jsonify(error='请求体必须是 JSON'), 400)
+    if not isinstance(body, dict):
+        return None, (jsonify(error='请求体必须是对象'), 400)
+    return body, None
+
+def _validate_project_payload(body):
+    _canvas_reject_sensitive_keys(body)
+    allowed = {'title', 'cover_url', 'classic_state', 'last_mode', 'canvas_v2_id', 'canvas_v2_migrated_at'}
+    unknown = set(body.keys()) - allowed
+    if unknown:
+        raise CanvasValidationError('请求体包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    result = {}
+    if 'title' in body:
+        title = body['title']
+        if not isinstance(title, str) or len(title) > MAX_PROJECT_TITLE_LEN:
+            raise CanvasValidationError('title 不合法')
+        result['title'] = title.strip() or '未命名项目'
+    if 'cover_url' in body:
+        if not _canvas_valid_media_url(body['cover_url']):
+            raise CanvasValidationError('cover_url 不合法')
+        result['cover_url'] = body['cover_url']
+    if 'classic_state' in body:
+        cs = body['classic_state']
+        if not isinstance(cs, dict):
+            raise CanvasValidationError('classic_state 必须是对象')
+        if len(json.dumps(cs, ensure_ascii=False)) > MAX_PROJECT_CLASSIC_STATE_JSON_BYTES:
+            raise CanvasValidationError('classic_state 过大')
+        result['classic_state'] = cs
+    if 'last_mode' in body:
+        if body['last_mode'] not in ('classic', 'canvas'):
+            raise CanvasValidationError('last_mode 不合法')
+        result['last_mode'] = body['last_mode']
+    if 'canvas_v2_id' in body:
+        if body['canvas_v2_id'] is not None and not _canvas_valid_id(body['canvas_v2_id']):
+            raise CanvasValidationError('canvas_v2_id 不合法')
+        result['canvas_v2_id'] = body['canvas_v2_id']
+    if 'canvas_v2_migrated_at' in body:
+        if not _canvas_valid_opt_str(body['canvas_v2_migrated_at'], 64):
+            raise CanvasValidationError('canvas_v2_migrated_at 不合法')
+        result['canvas_v2_migrated_at'] = body['canvas_v2_migrated_at']
+    return result
+
+def _projects_list():
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    trash_only = request.args.get('trash') == '1'
+    items = []
+    for project in data['projects'].values():
+        if not isinstance(project, dict):
+            continue
+        deleted = project.get('deleted_at') not in (None, '')
+        if trash_only != deleted:
+            continue
+        items.append({
+            'id': project.get('id'),
+            'title': project.get('title'),
+            'canvas_id': project.get('canvas_id'),
+            'canvas_v2_id': project.get('canvas_v2_id'),
+            'cover_url': project.get('cover_url'),
+            'created_at': project.get('created_at'),
+            'updated_at': project.get('updated_at'),
+            'last_opened_at': project.get('last_opened_at'),
+            'last_mode': project.get('last_mode', 'classic'),
+            'deleted_at': project.get('deleted_at'),
+        })
+    items.sort(key=lambda item: item.get('last_opened_at') or item.get('updated_at') or '', reverse=True)
+    return jsonify(projects=items)
+
+def _projects_create():
+    body, err = _projects_request_body()
+    if err:
+        return err
+    title = body.get('title')
+    if title is None:
+        title = '未命名项目'
+    elif not isinstance(title, str) or len(title) > MAX_PROJECT_TITLE_LEN:
+        return jsonify(error='项目标题不合法'), 400
+    else:
+        title = title.strip() or '未命名项目'
+    initial_mode = body.get('initial_mode')
+    if initial_mode not in ('classic', 'canvas'):
+        initial_mode = 'classic'
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    if len(data['projects']) >= MAX_PROJECTS_PER_USER:
+        return jsonify(error='项目数量已达上限 ' + str(MAX_PROJECTS_PER_USER)), 400
+    now = datetime.now(timezone.utc).isoformat()
+    canvas_id = uuid.uuid4().hex
+    canvas = {'id': canvas_id, 'title': title, 'created_at': now, 'updated_at': now, 'viewport': {'x': 0, 'y': 0, 'zoom': 0.85}, 'nodes': [], 'edges': []}
+    with CANVAS_LOCK:
+        cdata = _canvas_load(user_id)
+        cdata['canvases'][canvas_id] = canvas
+        _canvas_save(user_id, cdata)
+    pid = uuid.uuid4().hex
+    project = {'id': pid, 'title': title, 'canvas_id': canvas_id, 'cover_url': None, 'created_at': now, 'updated_at': now, 'last_opened_at': now, 'classic_state': {}, 'last_mode': initial_mode, 'deleted_at': None}
+    data['projects'][pid] = project
+    _projects_save(user_id, data)
+    return jsonify(project=project), 201
+
+def _projects_get(project_id):
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    return jsonify(project=project)
+
+def _projects_update(project_id):
+    body, err = _projects_request_body()
+    if err:
+        return err
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    try:
+        parsed = _validate_project_payload(body)
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    if 'title' in parsed:
+        project['title'] = parsed['title']
+    if 'cover_url' in parsed:
+        project['cover_url'] = parsed['cover_url']
+    if 'classic_state' in parsed:
+        project['classic_state'] = parsed['classic_state']
+    if 'last_mode' in parsed:
+        project['last_mode'] = parsed['last_mode']
+    project['updated_at'] = datetime.now(timezone.utc).isoformat()
+    _projects_save(user_id, data)
+    return jsonify(project=project)
+
+@app.route('/api/projects', methods=['GET', 'POST'])
+@login_required
+def projects_collection():
+    if request.method == 'POST':
+        return _projects_create()
+    return _projects_list()
+
+@app.route('/api/projects/<project_id>', methods=['GET', 'PUT'])
+@login_required
+def project_item(project_id):
+    if not _canvas_valid_id(project_id):
+        return jsonify(error='无效的项目 ID'), 400
+    if request.method == 'GET':
+        return _projects_get(project_id)
+    return _projects_update(project_id)
+
+@app.route('/api/projects/<project_id>/open', methods=['POST'])
+@login_required
+def project_open(project_id):
+    if not _canvas_valid_id(project_id):
+        return jsonify(error='无效的项目 ID'), 400
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    project['last_opened_at'] = datetime.now(timezone.utc).isoformat()
+    _projects_save(user_id, data)
+    return jsonify(ok=True, last_opened_at=project['last_opened_at'])
+
+@app.route('/api/projects/<project_id>', methods=['DELETE'])
+@login_required
+def project_delete(project_id):
+    if not _canvas_valid_id(project_id):
+        return jsonify(error='无效的项目 ID'), 400
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    project['deleted_at'] = datetime.now(timezone.utc).isoformat()
+    project['updated_at'] = project['deleted_at']
+    _projects_save(user_id, data)
+    return jsonify(ok=True)
+
+@app.route('/api/projects/<project_id>/restore', methods=['POST'])
+@login_required
+def project_restore(project_id):
+    if not _canvas_valid_id(project_id):
+        return jsonify(error='无效的项目 ID'), 400
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    project['deleted_at'] = None
+    project['updated_at'] = datetime.now(timezone.utc).isoformat()
+    _projects_save(user_id, data)
+    return jsonify(ok=True)
+
+@app.route('/api/projects/<project_id>/permanent', methods=['POST'])
+@login_required
+def project_permanent_delete(project_id):
+    if not _canvas_valid_id(project_id):
+        return jsonify(error='无效的项目 ID'), 400
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    canvas_id = project.get('canvas_id')
+    if canvas_id:
+        with CANVAS_LOCK:
+            cdata = _canvas_load(user_id)
+            if canvas_id in cdata.get('canvases', {}):
+                del cdata['canvases'][canvas_id]
+                _canvas_save(user_id, cdata)
+    del data['projects'][project_id]
+    _projects_save(user_id, data)
+    return jsonify(ok=True)
+
+# ── Canvas V2 (additive) ────────────────────────────────────
+# New @xyflow/react canvas documents. Kept in a separate per-user store so
+# the legacy canvases.json stays untouched and rollback stays possible.
+CANVAS_V2_LOCK = threading.Lock()
+MAX_CANVAS_V2_PER_USER = 100
+MAX_CANVAS_V2_NODES = 600
+MAX_CANVAS_V2_EDGES = 1200
+MAX_CANVAS_V2_TITLE_LEN = 100
+MAX_CANVAS_V2_NODE_DATA_BYTES = 256 * 1024
+MAX_CANVAS_V2_BODY_BYTES = 2 * 1024 * 1024
+CANVAS_V2_NODE_KEYS = ('id', 'type', 'position', 'data')
+CANVAS_V2_EDGE_KEYS = ('id', 'source', 'target', 'label', 'type', 'sourceHandle', 'targetHandle')
+
+def canvas_v2_path(user_id=None):
+    return user_data_path('canvas_v2', user_id)
+
+def _canvas_v2_load(user_id):
+    with CANVAS_V2_LOCK:
+        data = load_json(canvas_v2_path(user_id), {'version': 1, 'canvases': {}})
+    if not isinstance(data, dict):
+        data = {'version': 1, 'canvases': {}}
+    data.setdefault('version', 1)
+    if not isinstance(data.get('canvases'), dict):
+        data['canvases'] = {}
+    return data
+
+def _canvas_v2_save(user_id, data):
+    with CANVAS_V2_LOCK:
+        save_json(canvas_v2_path(user_id), data)
+
+def _canvas_v2_request_body():
+    raw = request.get_data(cache=True)
+    if len(raw) > MAX_CANVAS_V2_BODY_BYTES:
+        return None, (jsonify(error='请求体过大'), 413)
+    if not raw:
+        return None, (jsonify(error='请求体必须是 JSON'), 400)
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return None, (jsonify(error='请求体必须是 JSON'), 400)
+    if not isinstance(body, dict):
+        return None, (jsonify(error='请求体必须是对象'), 400)
+    return body, None
+
+def _canvas_v2_reject_data_urls(value):
+    """Reject data:/base64 payloads anywhere inside a v2 node's data so the
+    persisted store only ever holds server-hosted URLs."""
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered.startswith('data:') or ';base64' in lowered[:200]:
+            raise CanvasValidationError('数据中包含 data: URL，不允许持久化')
+        return
+    if isinstance(value, dict):
+        for v in value.values():
+            _canvas_v2_reject_data_urls(v)
+    elif isinstance(value, list):
+        for v in value:
+            _canvas_v2_reject_data_urls(v)
+
+def _canvas_v2_validate_node(node):
+    if not isinstance(node, dict):
+        raise CanvasValidationError('node 必须是对象')
+    unknown = set(node.keys()) - set(CANVAS_V2_NODE_KEYS)
+    if unknown:
+        raise CanvasValidationError('node 包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    if not _canvas_valid_id(node.get('id')):
+        raise CanvasValidationError('node.id 非法')
+    node_type = node.get('type')
+    if not isinstance(node_type, str) or not node_type.strip() or len(node_type) > 64:
+        raise CanvasValidationError('node.type 非法')
+    if not _canvas_valid_position(node.get('position')):
+        raise CanvasValidationError('node.position 非法或包含 NaN/Infinity')
+    data = node.get('data')
+    if not isinstance(data, dict):
+        raise CanvasValidationError('node.data 必须是对象')
+    if len(json.dumps(data, ensure_ascii=False)) > MAX_CANVAS_V2_NODE_DATA_BYTES:
+        raise CanvasValidationError('node.data 过大')
+    _canvas_reject_sensitive_keys(data)
+    _canvas_v2_reject_data_urls(data)
+    return node
+
+def _canvas_v2_validate_edge(edge):
+    if not isinstance(edge, dict):
+        raise CanvasValidationError('edge 必须是对象')
+    unknown = set(edge.keys()) - set(CANVAS_V2_EDGE_KEYS)
+    if unknown:
+        raise CanvasValidationError('edge 包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    for field in ('id', 'source', 'target'):
+        if not _canvas_valid_id(edge.get(field)):
+            raise CanvasValidationError('edge.' + field + ' 非法')
+    if 'label' in edge and not _canvas_valid_opt_str(edge.get('label'), 200):
+        raise CanvasValidationError('edge.label 非法')
+    for field in ('type', 'sourceHandle', 'targetHandle'):
+        if field in edge and not _canvas_valid_opt_str(edge.get(field), 64):
+            raise CanvasValidationError('edge.' + field + ' 非法')
+    return edge
+
+def _canvas_v2_validate_payload(body, allow_id=False):
+    if not isinstance(body, dict):
+        raise CanvasValidationError('请求体必须是对象')
+    _canvas_reject_sensitive_keys(body)
+    top_allowed = {'id', 'title', 'viewport', 'nodes', 'edges'} if allow_id else {'title', 'viewport', 'nodes', 'edges'}
+    unknown = set(body.keys()) - top_allowed
+    if unknown:
+        raise CanvasValidationError('请求体包含未知字段: ' + ', '.join(sorted(str(k) for k in unknown)))
+    result = {}
+    if 'title' in body:
+        title = body['title']
+        if not isinstance(title, str) or len(title) > MAX_CANVAS_V2_TITLE_LEN:
+            raise CanvasValidationError('title 必须是不超过 100 字符的字符串')
+        result['title'] = title.strip() or '未命名画布'
+    if 'nodes' in body:
+        nodes = body['nodes']
+        if not isinstance(nodes, list) or len(nodes) > MAX_CANVAS_V2_NODES:
+            raise CanvasValidationError('nodes 必须是列表且不超过 ' + str(MAX_CANVAS_V2_NODES) + ' 个')
+        seen_ids = set()
+        for node in nodes:
+            _canvas_v2_validate_node(node)
+            node_id = node['id']
+            if node_id in seen_ids:
+                raise CanvasValidationError('node.id 重复: ' + node_id)
+            seen_ids.add(node_id)
+        result['nodes'] = nodes
+    if 'edges' in body:
+        edges = body['edges']
+        if not isinstance(edges, list) or len(edges) > MAX_CANVAS_V2_EDGES:
+            raise CanvasValidationError('edges 必须是列表且不超过 ' + str(MAX_CANVAS_V2_EDGES) + ' 个')
+        seen_ids = set()
+        for edge in edges:
+            _canvas_v2_validate_edge(edge)
+            edge_id = edge['id']
+            if edge_id in seen_ids:
+                raise CanvasValidationError('edge.id 重复: ' + edge_id)
+            seen_ids.add(edge_id)
+        result['edges'] = edges
+    if 'viewport' in body:
+        viewport = body['viewport']
+        if not _canvas_valid_viewport(viewport):
+            raise CanvasValidationError('viewport 非法或包含 NaN/Infinity')
+        result['viewport'] = viewport
+    return result
+
+def _canvas_v2_list():
+    data = _canvas_v2_load(current_user_id())
+    items = [{
+        'id': canvas.get('id'),
+        'title': canvas.get('title'),
+        'created_at': canvas.get('created_at'),
+        'updated_at': canvas.get('updated_at'),
+    } for canvas in data['canvases'].values() if isinstance(canvas, dict)]
+    items.sort(key=lambda item: item.get('created_at') or '', reverse=True)
+    return jsonify(canvases=items)
+
+def _canvas_v2_create():
+    body, err = _canvas_v2_request_body()
+    if err:
+        return err
+    try:
+        parsed = _canvas_v2_validate_payload(body, allow_id=False)
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    user_id = current_user_id()
+    canvas_id = uuid.uuid4().hex
+    data = _canvas_v2_load(user_id)
+    if len(data['canvases']) >= MAX_CANVAS_V2_PER_USER:
+        return jsonify(error='画布数量已达上限 ' + str(MAX_CANVAS_V2_PER_USER)), 400
+    nodes = parsed.get('nodes') or []
+    edges = parsed.get('edges') or []
+    node_ids = {node['id'] for node in nodes}
+    try:
+        for edge in edges:
+            if edge['source'] not in node_ids:
+                raise CanvasValidationError('edge.source 引用了不存在的节点: ' + edge['source'])
+            if edge['target'] not in node_ids:
+                raise CanvasValidationError('edge.target 引用了不存在的节点: ' + edge['target'])
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    now = datetime.now(timezone.utc).isoformat()
+    canvas = {
+        'id': canvas_id,
+        'title': parsed.get('title', '未命名画布'),
+        'created_at': now,
+        'updated_at': now,
+        'viewport': parsed.get('viewport', {'x': 0, 'y': 0, 'zoom': 1}),
+        'nodes': nodes,
+        'edges': edges,
+    }
+    data['canvases'][canvas_id] = canvas
+    _canvas_v2_save(user_id, data)
+    return jsonify(canvas=canvas), 201
+
+def _canvas_v2_get(canvas_id):
+    data = _canvas_v2_load(current_user_id())
+    canvas = data['canvases'].get(canvas_id)
+    if not isinstance(canvas, dict):
+        return jsonify(error='画布不存在'), 404
+    return jsonify(canvas=canvas)
+
+def _canvas_v2_update(canvas_id):
+    body, err = _canvas_v2_request_body()
+    if err:
+        return err
+    if 'id' in body and body['id'] != canvas_id:
+        return jsonify(error='画布 ID 不匹配'), 400
+    try:
+        parsed = _canvas_v2_validate_payload(body, allow_id=True)
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    user_id = current_user_id()
+    data = _canvas_v2_load(user_id)
+    canvas = data['canvases'].get(canvas_id)
+    if not isinstance(canvas, dict):
+        return jsonify(error='画布不存在'), 404
+    nodes = parsed.get('nodes', canvas.get('nodes') or [])
+    edges = parsed.get('edges', canvas.get('edges') or [])
+    node_ids = {node['id'] for node in nodes}
+    try:
+        for edge in edges:
+            if edge['source'] not in node_ids:
+                raise CanvasValidationError('edge.source 引用了不存在的节点: ' + edge['source'])
+            if edge['target'] not in node_ids:
+                raise CanvasValidationError('edge.target 引用了不存在的节点: ' + edge['target'])
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    if 'title' in parsed:
+        canvas['title'] = parsed['title']
+    if 'viewport' in parsed:
+        canvas['viewport'] = parsed['viewport']
+    if 'nodes' in parsed:
+        canvas['nodes'] = nodes
+    if 'edges' in parsed:
+        canvas['edges'] = edges
+    canvas['updated_at'] = datetime.now(timezone.utc).isoformat()
+    _canvas_v2_save(user_id, data)
+    return jsonify(canvas=canvas)
+
+def _canvas_v2_delete(canvas_id):
+    user_id = current_user_id()
+    data = _canvas_v2_load(user_id)
+    if canvas_id not in data['canvases']:
+        return jsonify(error='画布不存在'), 404
+    del data['canvases'][canvas_id]
+    _canvas_v2_save(user_id, data)
+    return jsonify(ok=True)
+
+@app.route('/api/canvas-v2', methods=['GET', 'POST'])
+@login_required
+def canvas_v2_collection():
+    if request.method == 'POST':
+        return _canvas_v2_create()
+    return _canvas_v2_list()
+
+@app.route('/api/canvas-v2/<canvas_id>', methods=['GET', 'PUT', 'DELETE'])
+@login_required
+def canvas_v2_item(canvas_id):
+    if not _canvas_valid_id(canvas_id):
+        return jsonify(error='无效的画布 ID'), 400
+    if request.method == 'GET':
+        return _canvas_v2_get(canvas_id)
+    if request.method == 'PUT':
+        return _canvas_v2_update(canvas_id)
+    return _canvas_v2_delete(canvas_id)
+
+def _project_v2_get_or_create(project_id):
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return None, jsonify(error='项目不存在'), 404
+    canvas_v2_id = project.get('canvas_v2_id')
+    if canvas_v2_id:
+        canvas = _canvas_v2_load(user_id)['canvases'].get(canvas_v2_id)
+        if isinstance(canvas, dict):
+            return project, jsonify(canvas=canvas), 200
+    # Create the v2 document on first open (legacy canvases.json untouched).
+    canvas_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc).isoformat()
+    canvas = {'id': canvas_id, 'title': project.get('title') or '未命名画布', 'created_at': now, 'updated_at': now,
+              'viewport': {'x': 0, 'y': 0, 'zoom': 0.85}, 'nodes': [], 'edges': []}
+    cdata = _canvas_v2_load(user_id)
+    cdata['canvases'][canvas_id] = canvas
+    _canvas_v2_save(user_id, cdata)
+    project['canvas_v2_id'] = canvas_id
+    _projects_save(user_id, data)
+    return project, jsonify(canvas=canvas), 201
+
+@app.route('/api/projects/<project_id>/canvas-v2', methods=['GET', 'PUT'])
+@login_required
+def project_canvas_v2(project_id):
+    if not _canvas_valid_id(project_id):
+        return jsonify(error='无效的项目 ID'), 400
+    if request.method == 'GET':
+        project, resp, status = _project_v2_get_or_create(project_id)
+        if resp.status_code >= 400:
+            return resp, status
+        # One-time compatible read of the legacy canvas for client-side migration.
+        legacy = None
+        legacy_id = project.get('canvas_id')
+        if legacy_id:
+            legacy_data = _canvas_load(current_user_id())
+            legacy = legacy_data['canvases'].get(legacy_id)
+        result = resp.get_json()
+        result['legacy_canvas'] = legacy
+        result['canvas_v2_migrated_at'] = project.get('canvas_v2_migrated_at')
+        return jsonify(**result), status
+    body, err = _canvas_v2_request_body()
+    if err:
+        return err
+    canvas_v2_id = (body.get('canvas_v2_id') or '').strip()
+    if not _canvas_valid_id(canvas_v2_id):
+        return jsonify(error='canvas_v2_id 非法'), 400
+    user_id = current_user_id()
+    data = _ensure_projects_migrated(user_id)
+    project = data['projects'].get(project_id)
+    if not isinstance(project, dict):
+        return jsonify(error='项目不存在'), 404
+    canvas = _canvas_v2_load(user_id)['canvases'].get(canvas_v2_id)
+    if not isinstance(canvas, dict):
+        return jsonify(error='画布不存在'), 404
+    project['canvas_v2_id'] = canvas_v2_id
+    _projects_save(user_id, data)
+    return jsonify(project=project)
+
+# ── Skills (additive, Phase 1) ──────────────────────────────
+SKILLS_DIR = os.path.join(BASE, 'prompts', 'skills')
+SKILLS_REGISTRY_FILE = os.path.join(SKILLS_DIR, 'registry.json')
+SKILL_REGISTRY_CACHE = None
+
+def _load_skill_registry():
+    global SKILL_REGISTRY_CACHE
+    if SKILL_REGISTRY_CACHE is not None:
+        return SKILL_REGISTRY_CACHE
+    try:
+        with open(SKILLS_REGISTRY_FILE, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+    except Exception:
+        data = {'version': 1, 'skills': []}
+    skills = data.get('skills') if isinstance(data, dict) else []
+    if not isinstance(skills, list):
+        skills = []
+    SKILL_REGISTRY_CACHE = skills
+    return skills
+
+def _public_skill_meta(skill):
+    if not isinstance(skill, dict):
+        return {}
+    allowed = ('id', 'source', 'version', 'title', 'description', 'input_schema', 'output_type', 'target_node_type', 'consumes_text_points')
+    return {k: skill.get(k) for k in allowed}
+
+@app.route('/api/skills', methods=['GET'])
+@login_required
+def skills_list():
+    return jsonify(skills=[_public_skill_meta(s) for s in _load_skill_registry() if isinstance(s, dict)])
+
+@app.route('/api/skills/<skill_id>', methods=['GET'])
+@login_required
+def skills_get(skill_id):
+    skill = next((s for s in _load_skill_registry() if isinstance(s, dict) and s.get('id') == skill_id), None)
+    if not skill:
+        return jsonify(error='技能不存在'), 404
+    return jsonify(skill=_public_skill_meta(skill))
+
+@app.route('/api/skills/<skill_id>/run', methods=['POST'])
+@login_required
+@model_access_required('text')
+def skills_run(skill_id):
+    """Run a Seedance / Drama skill with the text model only. The result is
+    returned as an editable draft; it never triggers image or video calls."""
+    body = request.json or {}
+    skill = next((s for s in _load_skill_registry() if isinstance(s, dict) and s.get('id') == skill_id), None)
+    if not skill:
+        return jsonify(error='技能不存在'), 404
+    prompt_file = skill.get('prompt_file')
+    if not prompt_file:
+        return jsonify(error='技能未配置提示词'), 400
+    prompt_path = os.path.join(SKILLS_DIR, prompt_file)
+    if not os.path.isfile(prompt_path):
+        return jsonify(error='技能提示词缺失'), 500
+    try:
+        with open(prompt_path, 'r', encoding='utf-8') as fh:
+            system_prompt = fh.read()
+    except Exception as e:
+        return jsonify(error=f'技能提示词读取失败: {e}'), 500
+    input_data = body.get('input')
+    if not isinstance(input_data, dict):
+        return jsonify(error='input 必须是对象'), 400
+    user_input = json.dumps(input_data, ensure_ascii=False, sort_keys=True)
+    script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
+    force_personal = bool(body.get('use_personal_api')) or script_model == 'personal-api'
+    if not force_personal and script_model not in SCRIPT_MODELS:
+        return jsonify(error='无效的文本模型'), 400
+    point_cost = 0
+    try:
+        api_cfg = resolve_api(
+            'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
+            current_user_id(), force_personal=force_personal, profile_id=body.get('api_profile_id'),
+            strict_builtin='use_personal_api' in body and not force_personal
+        )
+        point_cost = reserve_model_points('text', script_model, current_user_id(), personal=force_personal)
+        text = call_script_text_model(script_model, system_prompt, user_input, temperature=0.7, max_tokens=2000, api_cfg=api_cfg)
+        return jsonify(text=text, points=point_cost)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
+    except Exception as e:
+        refund_model_points(current_user_id(), point_cost)
+        return jsonify(error=f'生成失败: {str(e)}'), 500
+
+
+
+# ── Canvas import/export (additive, Phase 2) ────────────────
+MAX_IMPORT_BYTES = 512 * 1024
+
+def _validate_canvas_import_body(body):
+    _canvas_reject_sensitive_keys(body)
+    if not isinstance(body, dict):
+        raise CanvasValidationError('导入内容必须是对象')
+    if body.get('format') != 'manga-studio-canvas':
+        raise CanvasValidationError('不支持的导入格式')
+    if body.get('schema_version') != 1:
+        raise CanvasValidationError('不支持的 schema_version')
+    inner = {}
+    if 'title' in body:
+        inner['title'] = body['title']
+    for key in ('nodes', 'edges', 'viewport'):
+        if key in body:
+            inner[key] = body[key]
+    return _canvas_validate_payload(inner, allow_id=False)
+
+def _create_project_with_canvas(user_id, title, canvas_payload, initial_mode='canvas'):
+    now = datetime.now(timezone.utc).isoformat()
+    canvas_id = uuid.uuid4().hex
+    canvas = {
+        'id': canvas_id,
+        'title': title,
+        'created_at': now,
+        'updated_at': now,
+        'viewport': canvas_payload.get('viewport', {'x': 0, 'y': 0, 'zoom': 0.85}),
+        'nodes': canvas_payload.get('nodes', []),
+        'edges': canvas_payload.get('edges', []),
+    }
+    with CANVAS_LOCK:
+        cdata = _canvas_load(user_id)
+        cdata['canvases'][canvas_id] = canvas
+        _canvas_save(user_id, cdata)
+    project_id = uuid.uuid4().hex
+    project = {
+        'id': project_id,
+        'title': title,
+        'canvas_id': canvas_id,
+        'cover_url': None,
+        'created_at': now,
+        'updated_at': now,
+        'last_opened_at': now,
+        'classic_state': {},
+        'last_mode': initial_mode,
+        'deleted_at': None,
+    }
+    try:
+        data = _projects_load(user_id)
+        data['projects'][project_id] = project
+        _projects_save(user_id, data)
+    except Exception:
+        with CANVAS_LOCK:
+            cdata = _canvas_load(user_id)
+            cdata['canvases'].pop(canvas_id, None)
+            _canvas_save(user_id, cdata)
+        raise
+    return project
+
+@app.route('/api/canvas/<canvas_id>/export', methods=['GET'])
+@login_required
+def canvas_export(canvas_id):
+    if not _canvas_valid_id(canvas_id):
+        return jsonify(error='无效的画布 ID'), 400
+    user_id = current_user_id()
+    with CANVAS_LOCK:
+        data = _canvas_load(user_id)
+    canvas = data['canvases'].get(canvas_id)
+    if not isinstance(canvas, dict):
+        return jsonify(error='画布不存在'), 404
+    payload = {
+        'format': 'manga-studio-canvas',
+        'schema_version': 1,
+        'exported_at': datetime.now(timezone.utc).isoformat(),
+        'title': canvas.get('title') or '未命名画布',
+        'viewport': canvas.get('viewport') or {'x': 0, 'y': 0, 'zoom': 0.85},
+        'nodes': canvas.get('nodes') or [],
+        'edges': canvas.get('edges') or [],
+    }
+    return jsonify(payload)
+
+@app.route('/api/projects/import', methods=['POST'])
+@login_required
+def project_import():
+    raw = request.get_data(cache=True)
+    if len(raw) > MAX_IMPORT_BYTES:
+        return jsonify(error='文件过大'), 413
+    if not raw:
+        return jsonify(error='导入内容为空'), 400
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return jsonify(error='导入内容不是合法 JSON'), 400
+    try:
+        parsed = _validate_canvas_import_body(body)
+    except CanvasValidationError as exc:
+        return jsonify(error=str(exc)), 400
+    user_id = current_user_id()
+    title = parsed.get('title', '导入项目')
+    try:
+        project = _create_project_with_canvas(user_id, title, parsed, initial_mode='canvas')
+    except Exception as exc:
+        return jsonify(error='导入失败: ' + str(exc)), 500
+    return jsonify(project=project), 201
+
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -1378,6 +2655,152 @@ def save_assets_api(cat):
     save_json(assets_path(cat), data)
     return jsonify(ok=True)
 
+
+# ── asset item CRUD (additive) ───────────────────────────────
+ASSET_CATS = ('outfits', 'scenes', 'audios', 'uploads', 'styles')
+
+def _assets_request_body():
+    raw = request.get_data(cache=True)
+    if len(raw) > 512 * 1024:
+        return None, (jsonify(error='请求体过大'), 413)
+    if not raw:
+        return None, (jsonify(error='请求体必须是 JSON'), 400)
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        return None, (jsonify(error='请求体必须是 JSON'), 400)
+    if not isinstance(body, dict):
+        return None, (jsonify(error='请求体必须是对象'), 400)
+    return body, None
+
+def _valid_asset_name(v):
+    return isinstance(v, str) and 1 <= len(v.strip()) <= 200
+
+def _valid_asset_url(v):
+    if not isinstance(v, str) or len(v) > 2000:
+        return False
+    lowered = v.lower()
+    if lowered.startswith('data:') or ';base64' in lowered:
+        return False
+    return v.startswith('http://') or v.startswith('https://') or v.startswith('/static/')
+
+@app.route('/api/assets/<cat>/item', methods=['POST'])
+@login_required
+def create_asset_item(cat):
+    body, err = _assets_request_body()
+    if err:
+        return err
+    user_id = current_user_id()
+    if cat == 'characters':
+        name = body.get('name')
+        images = body.get('images') or []
+        if not _valid_asset_name(name):
+            return jsonify(error='名称不合法'), 400
+        if not isinstance(images, list) or not all(_valid_asset_url(u) for u in images):
+            return jsonify(error='图片 URL 不合法'), 400
+        chars = load_json(characters_path(user_id), {})
+        if not isinstance(chars, dict):
+            chars = {}
+        item_id = uuid.uuid4().hex
+        chars[item_id] = {'name': name.strip(), 'images': [{'url': u} for u in images]}
+        save_json(characters_path(user_id), chars)
+        return jsonify(ok=True, id=item_id), 201
+    if cat not in ASSET_CATS:
+        return jsonify(error='不支持的分类'), 400
+    name = body.get('name')
+    url = body.get('url') or body.get('thumbnail_url') or ''
+    if not _valid_asset_name(name):
+        return jsonify(error='名称不合法'), 400
+    if not _valid_asset_url(url):
+        return jsonify(error='URL 不合法'), 400
+    items = load_json(assets_path(cat, user_id), [])
+    if not isinstance(items, list):
+        items = []
+    item = {'id': uuid.uuid4().hex, 'name': name.strip(), 'url': url}
+    if cat == 'styles':
+        item = {'id': uuid.uuid4().hex, 'name': name.strip(), 'thumbnail_url': url, 'prompt': str(body.get('prompt') or '')[:5000], 'negative_prompt': str(body.get('negative_prompt') or '')[:5000], 'use_for_image': bool(body.get('use_for_image', True)), 'use_for_video': bool(body.get('use_for_video', True))}
+    items.append(item)
+    save_json(assets_path(cat, user_id), items)
+    return jsonify(ok=True, id=item['id']), 201
+
+@app.route('/api/assets/<cat>/item/<item_id>', methods=['PUT', 'DELETE'])
+@login_required
+def update_asset_item(cat, item_id):
+    user_id = current_user_id()
+    if cat == 'characters':
+        chars = load_json(characters_path(user_id), {})
+        if not isinstance(chars, dict) or item_id not in chars:
+            return jsonify(error='资产不存在'), 404
+        if request.method == 'DELETE':
+            chars[item_id]['deleted_at'] = datetime.now(timezone.utc).isoformat()
+            save_json(characters_path(user_id), chars)
+            return jsonify(ok=True)
+        body, err = _assets_request_body()
+        if err:
+            return err
+        name = body.get('name')
+        if not _valid_asset_name(name):
+            return jsonify(error='名称不合法'), 400
+        chars[item_id]['name'] = name.strip()
+        save_json(characters_path(user_id), chars)
+        return jsonify(ok=True)
+    if cat not in ASSET_CATS:
+        return jsonify(error='不支持的分类'), 400
+    items = load_json(assets_path(cat, user_id), [])
+    if not isinstance(items, list):
+        items = []
+    item = next((x for x in items if isinstance(x, dict) and x.get('id') == item_id), None)
+    if not item:
+        return jsonify(error='资产不存在'), 404
+    if request.method == 'DELETE':
+        item['deleted_at'] = datetime.now(timezone.utc).isoformat()
+        save_json(assets_path(cat, user_id), items)
+        return jsonify(ok=True)
+    body, err = _assets_request_body()
+    if err:
+        return err
+    name = body.get('name')
+    if name is not None:
+        if not _valid_asset_name(name):
+            return jsonify(error='名称不合法'), 400
+        item['name'] = name.strip()
+    url = body.get('url') or body.get('thumbnail_url')
+    if url is not None:
+        if not _valid_asset_url(url):
+            return jsonify(error='URL 不合法'), 400
+        if cat == 'styles':
+            item['thumbnail_url'] = url
+        else:
+            item['url'] = url
+    if cat == 'styles' and body.get('prompt') is not None:
+        item['prompt'] = str(body.get('prompt'))[:5000]
+    save_json(assets_path(cat, user_id), items)
+    return jsonify(ok=True)
+
+
+@app.route('/api/assets/<cat>/item/<item_id>/restore', methods=['POST'])
+@login_required
+def restore_asset_item(cat, item_id):
+    user_id = current_user_id()
+    if cat == 'characters':
+        chars = load_json(characters_path(user_id), {})
+        if not isinstance(chars, dict) or item_id not in chars:
+            return jsonify(error='资产不存在'), 404
+        chars[item_id].pop('deleted_at', None)
+        save_json(characters_path(user_id), chars)
+        return jsonify(ok=True)
+    if cat not in ASSET_CATS:
+        return jsonify(error='不支持的分类'), 400
+    items = load_json(assets_path(cat, user_id), [])
+    if not isinstance(items, list):
+        items = []
+    item = next((x for x in items if isinstance(x, dict) and x.get('id') == item_id), None)
+    if not item:
+        return jsonify(error='资产不存在'), 404
+    item.pop('deleted_at', None)
+    save_json(assets_path(cat, user_id), items)
+    return jsonify(ok=True)
+
 # ── history ───────────────────────────────────────────────────
 @app.route('/api/history', methods=['GET'])
 @login_required
@@ -1446,6 +2869,14 @@ def get_image_models():
         'agnes_available': bool(AGNES_API_KEY),
         'default_model': 'gpt-image-2',
         'default_ratio': DEFAULT_RATIO
+    })
+
+@app.route('/api/text-models', methods=['GET'])
+@login_required
+def get_text_models():
+    return jsonify({
+        'models': list(SCRIPT_MODELS),
+        'default': SCRIPT_MODEL_DEFAULT
     })
 
 # ── prompt refinement ──────────────────────────────────────────
@@ -2603,6 +4034,10 @@ def generate_image():
     JOBS[job_id] = {'status': 'pending', 'url': None, 'name': None, 'error': None,
                      'model': image_model, 'ratio': ratio, 'mode': mode}
 
+    if os.environ.get('MANGA_MOCK_GENERATION') == '1':
+        _mock_generation_job(job_id, 'image')
+        return jsonify(job_id=job_id)
+
     def run():
         try:
             if image_cfg.get('provider') == 'atlas':
@@ -2764,10 +4199,15 @@ def generate():
     JOB_OWNERS[job_id] = user_id
     JOBS[job_id] = {'status': 'pending', 'video_url': None, 'error': None}
 
+    if os.environ.get('MANGA_MOCK_GENERATION') == '1':
+        _mock_generation_job(job_id, 'video')
+        return jsonify(job_id=job_id)
+
     # ── Atlas Cloud path ──
     if video_cfg.get('provider') == 'atlas':
         start_metered_job(atlas_video_generate, (
-            job_id, script, reference_images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, resolution,
+            job_id, script, reference_images, audio_url, video_url, first_frame_url, last_frame_url,
+            ratio, duration, resolution,
             host_url, video_model, video_cfg['api_key'], video_cfg['base_url'],
             original_script, optimize, user_id
         ), job_id, user_id, point_cost)

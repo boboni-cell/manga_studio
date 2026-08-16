@@ -1,0 +1,423 @@
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+} from 'react';
+import { Handle, Position, useUpdateNodeInternals, type NodeProps } from '@xyflow/react';
+import { AlertTriangle, CircleHelp, Film, Loader2, PauseCircle, RefreshCw, Upload } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import {
+  CANVAS_NODE_TYPES,
+  type CanvasGenerationJobState,
+  type CanvasNodeType,
+  type VideoNodeData,
+} from '@/features/canvas/domain/canvasNodes';
+import {
+  DEFAULT_GENERATED_VIDEO_DISPLAY_NAME,
+  extractFileNameFromPath,
+  resolveCustomGeneratedVideoName,
+} from '@/features/canvas/application/generatedMediaNaming';
+import { resolveImageDisplayUrl } from '@/features/canvas/application/imageData';
+import {
+  isNodeUsingDefaultDisplayName,
+  resolveNodeDisplayName,
+} from '@/features/canvas/domain/nodeDisplay';
+import { isVideoFile, resolveDroppedVideoFile } from '@/features/canvas/application/imageDragDrop';
+import { prepareVideoNodeDataFromFile } from '@/features/canvas/application/videoUpload';
+import { renameLocalMediaFiles } from '@/commands/image';
+import { NodeHeader, NODE_HEADER_FLOATING_POSITION_CLASS } from '@/features/canvas/ui/NodeHeader';
+import { NodeResizeHandle } from '@/features/canvas/ui/NodeResizeHandle';
+import { formatGenerationElapsedMs } from '@/features/canvas/ui/generationElapsed';
+import { GenerationJobStatus } from '@/features/canvas/ui/GenerationJobStatus';
+import { useCanvasStore } from '@/stores/canvasStore';
+import { useSettingsStore } from '@/stores/settingsStore';
+
+type VideoNodeProps = NodeProps & {
+  id: string;
+  data: VideoNodeData;
+  selected?: boolean;
+};
+
+const VIDEO_NODE_DEFAULT_WIDTH = 384;
+const VIDEO_NODE_DEFAULT_HEIGHT = 288;
+const VIDEO_NODE_MIN_WIDTH = 256;
+const VIDEO_NODE_MIN_HEIGHT = 180;
+const VIDEO_NODE_MAX_WIDTH = 1600;
+const VIDEO_NODE_MAX_HEIGHT = 1200;
+const DEFAULT_VIDEO_GENERATION_DURATION_MS = 15 * 60 * 1000;
+
+function resolveNodeDimension(value: number | undefined, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 1) {
+    return Math.round(value);
+  }
+  return fallback;
+}
+
+export const VideoNode = memo(({ id, data, selected, type, width, height }: VideoNodeProps) => {
+  const { t } = useTranslation();
+  const updateNodeInternals = useUpdateNodeInternals();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const updateNodeData = useCanvasStore((state) => state.updateNodeData);
+  const setSelectedNode = useCanvasStore((state) => state.setSelectedNode);
+  const useUploadFilenameAsNodeTitle = useSettingsStore((state) => state.useUploadFilenameAsNodeTitle);
+  const [now, setNow] = useState(() => Date.now());
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+
+  const isGenerating = data.isGenerating === true;
+  const videoSource = useMemo(() => {
+    const source = data.localVideoUrl || data.videoUrl;
+    return source ? resolveImageDisplayUrl(source) : null;
+  }, [data.localVideoUrl, data.videoUrl]);
+  const generationError = typeof data.generationError === 'string' ? data.generationError.trim() : '';
+  const errorText = uploadError.trim() || generationError;
+  const generationJobState = typeof data.generationJobState === 'string'
+    ? data.generationJobState as CanvasGenerationJobState
+    : null;
+  const hasUnknownSubmission =
+    !isGenerating && !isUploading && !videoSource && generationJobState === 'unknown';
+  const hasRecoverableWait =
+    !isGenerating && !isUploading && !videoSource && generationJobState === 'recoverable_wait';
+  const hasGenerationAttention = hasUnknownSubmission || hasRecoverableWait;
+  const hasVideoError =
+    !isGenerating && !isUploading && !videoSource && errorText.length > 0 && !hasGenerationAttention;
+  const errorTitleKey = uploadError.trim()
+    ? 'node.videoNode.uploadFailed'
+    : 'node.videoNode.generationFailed';
+  const generationStartedAt = typeof data.generationStartedAt === 'number' ? data.generationStartedAt : null;
+  const generationDurationMs = typeof data.generationDurationMs === 'number' ? data.generationDurationMs : DEFAULT_VIDEO_GENERATION_DURATION_MS;
+  const resolvedWidth = resolveNodeDimension(width, VIDEO_NODE_DEFAULT_WIDTH);
+  const resolvedHeight = resolveNodeDimension(height, VIDEO_NODE_DEFAULT_HEIGHT);
+  const resolvedTitle = useMemo(() => {
+    const sourceFileName = typeof data.sourceFileName === 'string' ? data.sourceFileName.trim() : '';
+    if (
+      useUploadFilenameAsNodeTitle
+      && sourceFileName
+      && isNodeUsingDefaultDisplayName(CANVAS_NODE_TYPES.video, data)
+    ) {
+      return sourceFileName;
+    }
+
+    return resolveNodeDisplayName(type as CanvasNodeType, data);
+  }, [data, type, useUploadFilenameAsNodeTitle]);
+  const liveGenerationElapsedMs = isGenerating && generationStartedAt !== null
+    ? Math.max(0, now - generationStartedAt)
+    : data.generationElapsedMs;
+  const generationElapsedText = formatGenerationElapsedMs(liveGenerationElapsedMs);
+
+  useEffect(() => {
+    updateNodeInternals(id);
+  }, [id, resolvedHeight, resolvedWidth, updateNodeInternals]);
+
+  useEffect(() => {
+    if (!isGenerating) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [isGenerating]);
+
+  const progress = useMemo(() => {
+    if (!isGenerating) return 0;
+    const startedAt = generationStartedAt ?? Date.now();
+    const duration = Math.max(1000, generationDurationMs);
+    return Math.min(Math.max(0, now - startedAt) / duration, 0.96);
+  }, [generationDurationMs, generationStartedAt, isGenerating, now]);
+
+  const waitedMinutes = useMemo(() => {
+    if (!isGenerating || generationStartedAt === null) return 0;
+    return Math.floor(Math.max(0, now - generationStartedAt) / 60000);
+  }, [generationStartedAt, isGenerating, now]);
+
+  const handleTitleChange = async (nextTitle: string) => {
+    if (!data.localVideoUrl) {
+      updateNodeData(id, {
+        displayName: nextTitle,
+        generatedNamingMode: 'custom',
+      });
+      return;
+    }
+
+    const normalizedTitle = nextTitle.trim() || DEFAULT_GENERATED_VIDEO_DISPLAY_NAME;
+    const desiredFileName = resolveCustomGeneratedVideoName(normalizedTitle) ?? undefined;
+    const fallbackPatch = {
+      displayName: normalizedTitle,
+      generatedFileName: desiredFileName
+        ? data.generatedFileName ?? extractFileNameFromPath(data.localVideoUrl)
+        : null,
+      generatedNamingMode: desiredFileName ? 'custom' as const : 'default' as const,
+    };
+
+    try {
+      const renamed = await renameLocalMediaFiles({
+        primaryPath: data.localVideoUrl,
+        desiredFileName,
+        mediaKind: 'video',
+      });
+      const shouldPreserveVideoUrl = Boolean(data.videoUrl && data.videoUrl !== data.localVideoUrl);
+
+      updateNodeData(id, {
+        displayName: normalizedTitle,
+        videoUrl: shouldPreserveVideoUrl ? data.videoUrl : renamed.primaryPath,
+        localVideoUrl: renamed.primaryPath,
+        generatedFileName: renamed.fileName ?? extractFileNameFromPath(renamed.primaryPath),
+        generatedNamingMode: desiredFileName ? 'custom' : 'default',
+      });
+    } catch (error) {
+      console.warn('[VideoNode] failed to rename generated video file', { id, error });
+      updateNodeData(id, fallbackPatch);
+    }
+  };
+
+  useEffect(() => {
+    if (videoSource && uploadError) {
+      setUploadError('');
+    }
+  }, [uploadError, videoSource]);
+
+  const processFile = useCallback(
+    async (file: File) => {
+      if (!isVideoFile(file)) {
+        return;
+      }
+
+      setIsUploading(true);
+      setUploadError('');
+      try {
+        const prepared = await prepareVideoNodeDataFromFile(file);
+        const nextData: Partial<VideoNodeData> = {
+          ...prepared,
+        };
+        if (useUploadFilenameAsNodeTitle) {
+          nextData.displayName = file.name;
+        }
+        updateNodeData(id, nextData);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setUploadError(message || t('node.videoNode.uploadFailed'));
+        console.error('[VideoNode] failed to import local video', { id, fileName: file.name, error });
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [id, t, updateNodeData, useUploadFilenameAsNodeTitle]
+  );
+
+  const handleFileChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0] ?? null;
+      if (isVideoFile(file)) {
+        await processFile(file);
+      }
+      event.target.value = '';
+    },
+    [processFile]
+  );
+
+  const handleDrop = useCallback(
+    async (event: DragEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const file = resolveDroppedVideoFile(event.dataTransfer);
+      if (file) {
+        await processFile(file);
+      }
+    },
+    [processFile]
+  );
+
+  const handleDragOver = useCallback((event: DragEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+  }, []);
+
+  const handleNodeClick = useCallback(() => {
+    setSelectedNode(id);
+    if (!videoSource && !isGenerating && !isUploading && !errorText && !data.generationJobId) {
+      inputRef.current?.click();
+    }
+  }, [data.generationJobId, errorText, id, isGenerating, isUploading, setSelectedNode, videoSource]);
+
+  return (
+    <div
+      className={`
+        group relative overflow-visible rounded-[var(--node-radius)] border bg-[var(--canvas-node-bg)] p-0 shadow-[var(--canvas-node-shadow)] transition-colors duration-150
+        ${hasGenerationAttention
+          ? (selected
+            ? 'border-amber-300 shadow-[0_0_0_1px_rgba(252,211,77,0.34)]'
+            : 'border-amber-400/65 bg-amber-950/10 hover:border-amber-300/80')
+          : hasVideoError
+          ? (selected
+            ? 'border-red-400 shadow-[0_0_0_1px_rgba(248,113,113,0.42)]'
+            : 'border-red-500/70 bg-[rgba(127,29,29,0.12)] hover:border-red-400/80')
+          : selected
+          ? 'border-accent shadow-[0_0_0_1px_rgba(59,130,246,0.32)]'
+          : 'border-[var(--canvas-node-border)] hover:border-[var(--canvas-node-border-hover)]'}
+      `}
+      style={{ width: resolvedWidth, height: resolvedHeight }}
+      onClick={handleNodeClick}
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+    >
+      <NodeHeader
+        className={NODE_HEADER_FLOATING_POSITION_CLASS}
+        icon={<Film className="h-4 w-4" />}
+        titleText={resolvedTitle}
+        titleClassName="inline-block max-w-[220px] truncate whitespace-nowrap align-bottom"
+        editable
+        onTitleChange={(nextTitle) => {
+          void handleTitleChange(nextTitle);
+        }}
+        rightSlot={(
+          <span className="flex items-center gap-1">
+            {generationElapsedText ? (
+              <span
+                className="rounded-full bg-[rgba(15,23,42,0.72)] px-2 py-[1px] text-[10px] font-medium leading-tight text-white"
+                title={t('node.videoNode.generationElapsed')}
+              >
+                {generationElapsedText}
+              </span>
+            ) : null}
+            {data.durationSeconds ? (
+              <span className="rounded-full bg-accent/80 px-2 py-[1px] text-[10px] font-medium leading-tight text-white">
+                {data.durationSeconds}s
+              </span>
+            ) : null}
+          </span>
+        )}
+      />
+
+      <div
+        className={`relative h-full w-full overflow-hidden rounded-[var(--node-radius)] ${
+          hasGenerationAttention
+            ? 'bg-amber-950/25'
+            : hasVideoError ? 'bg-[rgba(127,29,29,0.2)]' : 'bg-[var(--canvas-node-media-bg)]'
+        }`}
+      >
+        {videoSource ? (
+          <>
+            <video
+              src={videoSource}
+              poster={data.thumbnailUrl ? resolveImageDisplayUrl(data.thumbnailUrl) : undefined}
+              className="h-full w-full bg-black object-contain"
+              controls
+              playsInline
+              preload="metadata"
+            />
+            <button
+              type="button"
+              className="nodrag nowheel absolute left-2 top-2 flex h-7 items-center gap-1 rounded-full border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] px-2 text-xs text-text-dark shadow-sm backdrop-blur-sm transition-colors hover:bg-[var(--canvas-node-menu-hover)]"
+              title={t('node.videoNode.replace') as string}
+              onClick={(event) => {
+                event.stopPropagation();
+                inputRef.current?.click();
+              }}
+            >
+              <RefreshCw className="h-3 w-3" />
+              {t('node.videoNode.replace')}
+            </button>
+          </>
+        ) : hasGenerationAttention ? (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-amber-100">
+            {hasUnknownSubmission ? (
+              <CircleHelp className="h-7 w-7 text-amber-300" aria-hidden="true" />
+            ) : (
+              <PauseCircle className="h-7 w-7 text-amber-300" aria-hidden="true" />
+            )}
+            <span className="text-center text-[12px] font-semibold leading-5">
+              {t(hasUnknownSubmission
+                ? 'generationJob.unknownTitle'
+                : 'generationJob.recoverableTitle')}
+            </span>
+            <span className="max-h-[64px] overflow-y-auto break-words text-center text-[12px] leading-5 text-amber-100/85">
+              {errorText || t('generationJob.recoverableDescription')}
+            </span>
+            <span className="text-center text-[11px] leading-4 text-amber-200/70">
+              {hasUnknownSubmission
+                ? t(data.generationSafeRecoveryAvailable
+                  ? 'generationJob.unknownSafeHint'
+                  : 'generationJob.unknownBlockedHint')
+                : t('generationJob.recoverableHint')}
+            </span>
+          </div>
+        ) : hasVideoError ? (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-red-700 dark:text-red-300">
+            <AlertTriangle className="h-7 w-7 opacity-90" />
+            <span className="text-center text-[12px] font-semibold leading-5 text-red-800 dark:text-red-200">
+              {t(errorTitleKey)}
+            </span>
+            <span className="max-h-[96px] overflow-y-auto break-words text-center text-[11px] leading-5 text-red-800/90 dark:text-red-200/90">
+              {errorText}
+            </span>
+          </div>
+        ) : (
+          <div className="flex h-full w-full cursor-pointer flex-col items-center justify-center gap-2 text-text-muted/85">
+            {isGenerating || isUploading ? (
+              <Loader2 className="h-7 w-7 animate-spin opacity-70" />
+            ) : (
+              <Upload className="h-7 w-7 opacity-60" />
+            )}
+            <span className="px-4 text-center text-[12px] leading-6">
+              {isUploading
+                ? t('node.videoNode.uploading')
+                : isGenerating
+                ? waitedMinutes >= 2
+                  ? t('node.videoNode.waitingResultDelayed', { minutes: waitedMinutes })
+                  : t('node.videoNode.waitingResult')
+                : t('node.videoNode.empty')}
+            </span>
+          </div>
+        )}
+
+        {isGenerating && (
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <div className="absolute inset-0 bg-bg-dark/55" />
+            <div
+              className="absolute left-0 top-0 h-full w-full origin-left bg-gradient-to-r from-[rgba(255,255,255,0.34)] to-[rgba(255,255,255,0.05)] transition-transform duration-100 ease-linear"
+              style={{ transform: `scaleX(${progress})` }}
+            />
+          </div>
+        )}
+
+        <GenerationJobStatus
+          state={isGenerating ? generationJobState : null}
+          phase={data.generationJobPhase}
+          networkRoute={data.generationNetworkRoute}
+        />
+      </div>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="video/*,.mp4,.webm,.mov,.m4v,.avi,.mkv,.mpeg,.mpg,.3gp,.3gpp"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
+      <Handle
+        type="target"
+        id="target"
+        position={Position.Left}
+        className="!h-2 !w-2 !border-surface-dark !bg-accent"
+      />
+      <Handle
+        type="source"
+        id="source"
+        position={Position.Right}
+        className="!h-2 !w-2 !border-surface-dark !bg-accent"
+      />
+      <NodeResizeHandle
+        minWidth={VIDEO_NODE_MIN_WIDTH}
+        minHeight={VIDEO_NODE_MIN_HEIGHT}
+        maxWidth={VIDEO_NODE_MAX_WIDTH}
+        maxHeight={VIDEO_NODE_MAX_HEIGHT}
+      />
+    </div>
+  );
+});
+
+VideoNode.displayName = 'VideoNode';

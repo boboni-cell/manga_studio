@@ -1737,7 +1737,7 @@ input[type=file] { display: none; }
   <button class="topbar-btn" id="topbarHistory" onclick="switchMainTab('history')">📋 历史记录</button>
   <button class="topbar-btn" onclick="location.href='/api-settings'">🔌 我的 API</button>
   <button class="topbar-btn" id="adminButton" style="display:none" onclick="location.href='/admin'">🛡 后台管理</button>
-  <button class="topbar-btn" onclick="logout()">退出</button>
+  <button class="topbar-btn" id="logoutBtn" onclick="logout()">退出</button>
 </div>
 
 <!-- ===== MAIN LAYOUT ===== -->
@@ -5029,7 +5029,7 @@ function reeditScriptHistory(idx) {
   }, 100);
 }
 
-async function logout() { await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
+async function logout() { sessionStorage.removeItem('manga_workspace_mode'); await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
 
 function adminEscape(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -5082,6 +5082,110 @@ function _showInitError(msg) {
     document.getElementById('initErrorMsg').textContent = msg || '未知错误';
   }
 }
+</script>
+
+<script>
+(function () {
+  var embedded = new URLSearchParams(location.search).get('embedded') === '1';
+  if (embedded) {
+    var logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  }
+
+  function refreshSharedWorkspaceData() {
+    var fetchers = [
+      fetch('/api/characters').then(function (r) { return r.json(); }).then(function (d) { characters = d || {}; }).catch(function () {}),
+      fetch('/api/assets/outfits').then(function (r) { return r.json(); }).then(function (d) { assets.outfits = d || []; }).catch(function () {}),
+      fetch('/api/assets/scenes').then(function (r) { return r.json(); }).then(function (d) { assets.scenes = d || []; }).catch(function () {}),
+      fetch('/api/assets/audios').then(function (r) { return r.json(); }).then(function (d) { assets.audios = d || []; }).catch(function () {}),
+      fetch('/api/assets/uploads').then(function (r) { return r.json(); }).then(function (d) { assets.uploads = d || []; }).catch(function () {}),
+      fetch('/api/styles').then(function (r) { return r.json(); }).then(function (d) { styles = d || []; }).catch(function () {}),
+      fetch('/api/history').then(function (r) { return r.json(); }).then(function (d) { history = d || []; }).catch(function () {})
+    ];
+    Promise.all(fetchers).then(function () {
+      if (typeof renderSidebar === 'function') renderSidebar();
+      if (typeof currentMainTab !== 'undefined' && currentMainTab === 'history' && typeof renderHistory === 'function') renderHistory();
+    });
+  }
+
+  window.addEventListener('message', function (event) {
+    if (event.origin !== location.origin) return;
+    var data = event.data;
+    if (data && data.type === 'workspace:activated' && data.mode === 'classic') {
+      refreshSharedWorkspaceData();
+    }
+  });
+
+  var projectId = new URLSearchParams(location.search).get('project_id') || '';
+  var draftTimer = null;
+
+  function captureClassicState() {
+    var state = {
+      currentMainTab: typeof currentMainTab !== 'undefined' ? currentMainTab : null,
+      scriptText: document.getElementById('scriptWSText') ? document.getElementById('scriptWSText').value : '',
+      imagePrompt: document.getElementById('imagePrompt') ? document.getElementById('imagePrompt').value : '',
+      editorScript: typeof getEditorText === 'function' ? getEditorText() : '',
+      selectedRefs: typeof selectedRefs !== 'undefined' ? selectedRefs.map(function (r) { return { url: r.url, role_label: r.role_label, type: r.type, name: r.name }; }) : [],
+      imageModel: typeof imageModel !== 'undefined' ? imageModel : null,
+      imageRatio: typeof imageRatio !== 'undefined' ? imageRatio : null,
+      videoModel: typeof videoModel !== 'undefined' ? videoModel : null,
+      selectedRatio: typeof selectedRatio !== 'undefined' ? selectedRatio : null,
+      selectedDuration: typeof selectedDuration !== 'undefined' ? selectedDuration : null,
+      selectedResolution: typeof selectedResolution !== 'undefined' ? selectedResolution : null,
+      selectedStyleId: typeof selectedStyleId !== 'undefined' ? selectedStyleId : null,
+      videoStyleId: typeof videoStyleId !== 'undefined' ? videoStyleId : null,
+      segments: typeof _currentSegments !== 'undefined' ? _currentSegments : []
+    };
+    return state;
+  }
+
+  function restoreClassicState(state) {
+    if (!state) return;
+    if (state.scriptText != null) { var t = document.getElementById('scriptWSText'); if (t) t.value = state.scriptText; }
+    if (state.imagePrompt != null) { var p = document.getElementById('imagePrompt'); if (p) p.value = state.imagePrompt; }
+    if (state.currentMainTab && typeof switchMainTab === 'function') switchMainTab(state.currentMainTab);
+    if (Array.isArray(state.selectedRefs)) { selectedRefs = state.selectedRefs; if (typeof updateRefSlots === 'function') updateRefSlots(); }
+    if (state.imageModel != null) imageModel = state.imageModel;
+    if (state.imageRatio != null) imageRatio = state.imageRatio;
+    if (state.videoModel != null) videoModel = state.videoModel;
+    if (state.selectedRatio != null) selectedRatio = state.selectedRatio;
+    if (state.selectedDuration != null) selectedDuration = state.selectedDuration;
+    if (state.selectedResolution != null) selectedResolution = state.selectedResolution;
+    if (state.selectedStyleId != null) selectedStyleId = state.selectedStyleId;
+    if (state.videoStyleId != null) videoStyleId = state.videoStyleId;
+    if (Array.isArray(state.segments) && state.segments.length) { _currentSegments = state.segments; if (typeof renderShots === 'function') renderShots(_currentSegments); }
+    if (state.editorScript && typeof fillShotPrompt === 'function') { var ed = document.getElementById('scriptInput'); if (ed) ed.textContent = state.editorScript; }
+  }
+
+  function saveDraft() {
+    if (!projectId) return;
+    var state = captureClassicState();
+    fetch('/api/projects/' + encodeURIComponent(projectId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ classic_state: state }) }).catch(function () {});
+  }
+
+  function scheduleDraftSave() {
+    if (!projectId) return;
+    if (draftTimer) clearTimeout(draftTimer);
+    draftTimer = setTimeout(saveDraft, 800);
+  }
+
+  if (projectId) {
+    document.addEventListener('input', scheduleDraftSave);
+    document.addEventListener('click', scheduleDraftSave);
+    document.addEventListener('keyup', scheduleDraftSave);
+    fetch('/api/projects/' + encodeURIComponent(projectId), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var cs = d && d.project && d.project.classic_state;
+        var restoreWhenReady = function () {
+          if (typeof _initDone !== 'undefined' && _initDone) restoreClassicState(cs);
+          else setTimeout(restoreWhenReady, 200);
+        };
+        restoreWhenReady();
+      })
+      .catch(function () {});
+  }
+})();
 </script>
 </body>
 </html>
