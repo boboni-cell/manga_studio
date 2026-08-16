@@ -1,4 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+
+import { api } from '@/api';
 
 import {
   AGNES_PROVIDER_DEFAULTS,
@@ -27,6 +29,27 @@ export interface ChatCatalogEntry {
   description?: string | null;
   usable: boolean;
   notReadyReason?: string;
+  mangaRoute?: {
+    scriptModel: string;
+    usePersonalApi: boolean;
+    apiProfileId: string | null;
+  };
+}
+
+interface MangaApiProfile {
+  id: string;
+  name?: string;
+  provider?: string;
+  model?: string;
+}
+
+interface MangaTextModelsResponse {
+  models?: string[];
+  default?: string;
+}
+
+interface MangaSettingsResponse {
+  api_profiles?: Record<string, MangaApiProfile[]>;
 }
 
 export function resolveAgentProtocol(
@@ -145,11 +168,90 @@ export function buildChatModelCatalog(
   return entries;
 }
 
+export function buildMangaChatModelCatalog(
+  models: readonly string[],
+  profiles: readonly MangaApiProfile[],
+): ChatCatalogEntry[] {
+  const entries: ChatCatalogEntry[] = models.map((model) => ({
+    id: `manga:platform:${model}`,
+    providerId: 'manga-platform',
+    providerLabel: '平台模型',
+    modelId: model,
+    modelLabel: model,
+    supportsMultimodal: false,
+    supportsTools: false,
+    supportsStreaming: false,
+    supportsReasoningSummary: false,
+    supportsToolSearch: false,
+    agentProtocol: 'openai-chat-completions',
+    description: '使用经典工作台管理员配置的平台文本模型',
+    usable: true,
+    mangaRoute: {
+      scriptModel: model,
+      usePersonalApi: false,
+      apiProfileId: null,
+    },
+  }));
+
+  for (const profile of profiles) {
+    if (!profile || !profile.id) continue;
+    const label = profile.name || profile.model || profile.id;
+    entries.push({
+      id: `manga:personal:${profile.id}`,
+      providerId: `manga-personal:${profile.id}`,
+      providerLabel: profile.provider ? `${label} · ${profile.provider}` : label,
+      modelId: profile.model || 'personal-api',
+      modelLabel: profile.model || label,
+      supportsMultimodal: false,
+      supportsTools: false,
+      supportsStreaming: false,
+      supportsReasoningSummary: false,
+      supportsToolSearch: false,
+      agentProtocol: 'openai-chat-completions',
+      description: '使用经典工作台“API 设置”中保存的个人文本 API',
+      usable: true,
+      mangaRoute: {
+        scriptModel: 'personal-api',
+        usePersonalApi: true,
+        apiProfileId: profile.id,
+      },
+    });
+  }
+  return entries;
+}
+
+function useMangaChatModelCatalog(enabled: boolean): ChatCatalogEntry[] {
+  const [entries, setEntries] = useState<ChatCatalogEntry[]>([]);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    Promise.all([
+      api<MangaTextModelsResponse>('/api/text-models'),
+      api<MangaSettingsResponse>('/api/settings'),
+    ]).then(([modelResponse, settingsResponse]) => {
+      if (cancelled) return;
+      setEntries(buildMangaChatModelCatalog(
+        Array.isArray(modelResponse.models) ? modelResponse.models : [],
+        Array.isArray(settingsResponse.api_profiles?.text) ? settingsResponse.api_profiles.text : [],
+      ));
+    }).catch(() => {
+      if (!cancelled) setEntries([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled]);
+  return entries;
+}
+
 export function useChatModelCatalog(): ChatCatalogEntry[] {
   const customProviders = useCustomProvidersStore((state) => state.providers);
   const agnesApiKey = useSettingsStore((state) => state.agnesApiKey);
-  return useMemo(
+  const upstreamEntries = useMemo(
     () => buildChatModelCatalog(customProviders, agnesApiKey),
     [agnesApiKey, customProviders],
   );
+  const useMangaBackend = typeof window !== 'undefined' && window.location.pathname.startsWith('/canvas-v2');
+  const mangaEntries = useMangaChatModelCatalog(useMangaBackend);
+  return useMangaBackend ? mangaEntries : upstreamEntries;
 }

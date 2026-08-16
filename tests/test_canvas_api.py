@@ -455,6 +455,39 @@ class CanvasV2ApiTest(unittest.TestCase):
         self.assertEqual(body['models'], list(app_module.SCRIPT_MODELS))
         self.assertEqual(body['default'], app_module.SCRIPT_MODEL_DEFAULT)
 
+    def test_canvas_v2_text_generation_uses_classic_provider_pipeline(self):
+        self.login('v2_text_generate')
+        self.grant_text_permission('v2_text_generate')
+        import unittest.mock as mock
+        with mock.patch.object(app_module, 'resolve_api', return_value={'provider': 'mock'}) as resolve_mock, \
+             mock.patch.object(app_module, 'reserve_model_points', return_value=2) as reserve_mock, \
+             mock.patch.object(app_module, 'call_script_text_model', return_value='平台文本结果') as call_mock:
+            resp = self.client.post('/api/text/generate', json={
+                'prompt': '写一个雨夜开场',
+                'script_model': app_module.SCRIPT_MODEL_DEFAULT,
+                'use_personal_api': False,
+            })
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {'text': '平台文本结果', 'points': 2})
+        self.assertEqual(resolve_mock.call_args.args[0], 'text')
+        self.assertEqual(reserve_mock.call_args.args[:2], ('text', app_module.SCRIPT_MODEL_DEFAULT))
+        self.assertEqual(call_mock.call_args.args[2], '写一个雨夜开场')
+
+    def test_canvas_v2_text_generation_refunds_failed_platform_call(self):
+        self.login('v2_text_refund')
+        self.grant_text_permission('v2_text_refund')
+        import unittest.mock as mock
+        with mock.patch.object(app_module, 'resolve_api', return_value={'provider': 'mock'}), \
+             mock.patch.object(app_module, 'reserve_model_points', return_value=3), \
+             mock.patch.object(app_module, 'call_script_text_model', side_effect=RuntimeError('mock failure')), \
+             mock.patch.object(app_module, 'refund_model_points') as refund_mock:
+            resp = self.client.post('/api/text/generate', json={
+                'prompt': '测试失败退款',
+                'script_model': app_module.SCRIPT_MODEL_DEFAULT,
+            })
+        self.assertEqual(resp.status_code, 500)
+        refund_mock.assert_called_once_with('v2_text_refund', 3)
+
     def test_asset_soft_delete_and_restore(self):
         self.login('v2_assets')
         resp = self.client.post('/api/assets/scenes/item', json={'name': '雨夜小巷', 'url': 'https://example.com/rain.jpg'})

@@ -1,12 +1,15 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import { Film, ImageIcon, Search, X } from 'lucide-react';
+import { Film, ImageIcon, Music, Search, X } from 'lucide-react';
 
-export type CanvasAssetKind = 'image' | 'video';
+import { MANGA_ASSET_CATEGORIES, type MangaAssetCategory } from '@/lib/mangaAssetLibrary';
+
+export type CanvasAssetKind = 'image' | 'video' | 'audio';
 
 interface CanvasAssetItemBase {
   id: string;
-  nodeId: string;
+  nodeId?: string | null;
   kind: CanvasAssetKind;
+  category: MangaAssetCategory;
   aspectRatio?: string;
   title: string;
   sourceLabel: string;
@@ -29,7 +32,13 @@ export interface CanvasVideoAssetItem extends CanvasAssetItemBase {
   thumbnailUrl?: string | null;
 }
 
-export type CanvasAssetItem = CanvasImageAssetItem | CanvasVideoAssetItem;
+export interface CanvasAudioAssetItem extends CanvasAssetItemBase {
+  kind: 'audio';
+  rawAudioUrl: string;
+  audioUrl: string;
+}
+
+export type CanvasAssetItem = CanvasImageAssetItem | CanvasVideoAssetItem | CanvasAudioAssetItem;
 
 interface AssetPanelProps {
   isOpen: boolean;
@@ -43,55 +52,38 @@ interface AssetPanelProps {
   onRename?: (asset: CanvasAssetItem, title: string) => void;
 }
 
-function groupAssets(assets: CanvasAssetItem[]) {
-  const sorted = assets.slice().sort((a, b) => b.order - a.order);
-  if (sorted.length <= 8) {
-    return [{ label: '当前项目资产', items: sorted }];
-  }
-  return [
-    { label: '最新资产', items: sorted.slice(0, 8) },
-    { label: '较早资产', items: sorted.slice(8) },
-  ].filter((group) => group.items.length > 0);
-}
-
 export const AssetPanel = memo(({
   isOpen,
   assets,
   buttonRect,
   mode = 'browse',
   title = '资产',
-  subtitle = '当前项目 · 双击资产定位到画布节点',
+  subtitle = '与经典工作台资产库同步 · 双击项目资产定位，单击素材添加到画布',
   onClose,
   onActivate,
   onRename,
 }: AssetPanelProps) => {
   const [query, setQuery] = useState('');
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
-  const [activeKind, setActiveKind] = useState<CanvasAssetKind>('image');
-  const imageCount = useMemo(() => assets.filter((asset) => asset.kind === 'image').length, [assets]);
-  const videoCount = useMemo(() => assets.filter((asset) => asset.kind === 'video').length, [assets]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    if (activeKind === 'image' && imageCount === 0 && videoCount > 0) {
-      setActiveKind('video');
-    }
-    if (activeKind === 'video' && videoCount === 0 && imageCount > 0) {
-      setActiveKind('image');
-    }
-  }, [activeKind, imageCount, isOpen, videoCount]);
+  const [activeCategory, setActiveCategory] = useState<MangaAssetCategory>('project');
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<MangaAssetCategory, number>();
+    for (const asset of assets) counts.set(asset.category, (counts.get(asset.category) || 0) + 1);
+    return counts;
+  }, [assets]);
 
   const filteredAssets = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    const kindAssets = assets.filter((asset) => asset.kind === activeKind);
-    if (!normalized) return kindAssets;
-    return kindAssets.filter((asset) => {
+    const categoryAssets = assets
+      .filter((asset) => asset.category === activeCategory)
+      .sort((a, b) => b.order - a.order);
+    if (!normalized) return categoryAssets;
+    return categoryAssets.filter((asset) => {
       const haystack = `${asset.title} ${asset.sourceLabel}`.toLowerCase();
       return haystack.includes(normalized);
     });
-  }, [activeKind, assets, query]);
-  const groups = useMemo(() => groupAssets(filteredAssets), [filteredAssets]);
-  const activeKindLabel = activeKind === 'image' ? '图片' : '视频';
+  }, [activeCategory, assets, query]);
+  const activeCategoryLabel = MANGA_ASSET_CATEGORIES.find((category) => category.id === activeCategory)?.label || '资产';
 
   useEffect(() => {
     if (!isOpen) return;
@@ -154,33 +146,22 @@ export const AssetPanel = memo(({
         </button>
       </div>
 
-      <div className="flex gap-1 border-b border-white/8 px-3 py-2">
-        <button
-          type="button"
-          onClick={() => setActiveKind('image')}
-          className={`inline-flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs transition-colors ${
-            activeKind === 'image'
-              ? 'bg-accent/85 text-white'
-              : 'bg-white/[0.04] text-white/60 hover:bg-white/10 hover:text-white/85'
-          }`}
-        >
-          <ImageIcon className="h-3.5 w-3.5" />
-          图片
-          <span className="text-[10px] opacity-70">{imageCount}</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveKind('video')}
-          className={`inline-flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md text-xs transition-colors ${
-            activeKind === 'video'
-              ? 'bg-accent/85 text-white'
-              : 'bg-white/[0.04] text-white/60 hover:bg-white/10 hover:text-white/85'
-          }`}
-        >
-          <Film className="h-3.5 w-3.5" />
-          视频
-          <span className="text-[10px] opacity-70">{videoCount}</span>
-        </button>
+      <div className="ui-scrollbar flex gap-1 overflow-x-auto border-b border-white/8 px-3 py-2">
+        {MANGA_ASSET_CATEGORIES.map((category) => (
+          <button
+            key={category.id}
+            type="button"
+            onClick={() => setActiveCategory(category.id)}
+            className={`inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-xs transition-colors ${
+              activeCategory === category.id
+                ? 'bg-accent/85 text-white'
+                : 'bg-white/[0.04] text-white/60 hover:bg-white/10 hover:text-white/85'
+            }`}
+          >
+            {category.label}
+            <span className="text-[10px] opacity-70">{categoryCounts.get(category.id) || 0}</span>
+          </button>
+        ))}
       </div>
 
       <div className="border-b border-white/8 px-3 py-2">
@@ -189,7 +170,7 @@ export const AssetPanel = memo(({
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={`搜索${activeKindLabel}名称`}
+            placeholder={`搜索${activeCategoryLabel}名称`}
             className="min-w-0 flex-1 bg-transparent text-xs text-white/85 outline-none placeholder:text-white/30"
           />
           {query && (
@@ -209,58 +190,54 @@ export const AssetPanel = memo(({
         {assets.length === 0 ? (
           <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-white/12 bg-white/[0.03] px-6 text-center">
             <ImageIcon className="mb-3 h-8 w-8 text-white/25" />
-            <div className="text-sm text-white/70">这个项目还没有资产</div>
+            <div className="text-sm text-white/70">资产库为空</div>
             <div className="mt-1 text-[11px] leading-5 text-white/40">
-              上传或生成图片、视频、故事板或全景图后，会自动出现在这里。
+              可以前往首页“资产”添加，保存后会自动同步到这里。
             </div>
           </div>
         ) : filteredAssets.length === 0 ? (
           <div className="flex min-h-40 flex-col items-center justify-center rounded-lg border border-dashed border-white/12 bg-white/[0.03] px-6 text-center">
             {query ? (
               <Search className="mb-3 h-7 w-7 text-white/25" />
-            ) : activeKind === 'image' ? (
-              <ImageIcon className="mb-3 h-7 w-7 text-white/25" />
+            ) : activeCategory === 'audio' ? (
+              <Music className="mb-3 h-7 w-7 text-white/25" />
             ) : (
-              <Film className="mb-3 h-7 w-7 text-white/25" />
+              <ImageIcon className="mb-3 h-7 w-7 text-white/25" />
             )}
             <div className="text-sm text-white/70">
-              {query ? `没有匹配的${activeKindLabel}` : `这个项目还没有${activeKindLabel}资产`}
+              {query ? `没有匹配的${activeCategoryLabel}资产` : `暂无${activeCategoryLabel}资产`}
             </div>
             <div className="mt-1 text-[11px] leading-5 text-white/40">
-              {query ? '换个名称试试，或清空搜索查看全部资产。' : `切换到其他类型，或先在画布中创建${activeKindLabel}节点。`}
+              {query ? '换个名称试试，或清空搜索查看全部资产。' : '可以前往首页“资产”添加，保存后会自动同步到这里。'}
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
-            {groups.map((group) => (
-              <section key={group.label}>
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-xs font-medium text-white/70">{group.label}</h3>
-                  <span className="text-[10px] text-white/35">
-                    {group.items.length} {activeKind === 'image' ? '张' : '个'}
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  {group.items.map((asset) => (
+          <section>
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-medium text-white/70">{activeCategoryLabel}</h3>
+              <span className="text-[10px] text-white/35">{filteredAssets.length} 个</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+                  {filteredAssets.map((asset) => (
                     <div
                       key={asset.id}
-                      title={mode === 'select' ? `${asset.title} · 选择并连接` : `${asset.title} · 双击定位`}
+                      title={mode === 'select' ? `${asset.title} · 选择并连接` : asset.nodeId ? `${asset.title} · 双击定位` : `${asset.title} · 添加到画布`}
                       className="group overflow-hidden rounded-lg border border-white/10 bg-white/[0.04] text-left transition-colors hover:border-accent/70 hover:bg-accent/10"
                     >
                       <button
                         type="button"
                         onClick={() => {
-                          if (mode === 'select') {
+                          if (mode === 'select' || !asset.nodeId) {
                             onActivate(asset);
                           }
                         }}
                         onDoubleClick={() => {
-                          if (mode === 'browse') {
+                          if (mode === 'browse' && asset.nodeId) {
                             onActivate(asset);
                           }
                         }}
                         className="block aspect-square w-full overflow-hidden bg-black/30"
-                        title={mode === 'select' ? `${asset.title} · 选择并连接` : `${asset.title} · 双击定位`}
+                        title={mode === 'select' ? `${asset.title} · 选择并连接` : asset.nodeId ? `${asset.title} · 双击定位` : `${asset.title} · 添加到画布`}
                       >
                         {asset.kind === 'image' ? (
                           <img
@@ -269,7 +246,7 @@ export const AssetPanel = memo(({
                             className="h-full w-full object-cover transition-transform group-hover:scale-105"
                             draggable={false}
                           />
-                        ) : (
+                        ) : asset.kind === 'video' ? (
                           <div className="relative h-full w-full bg-black">
                             <video
                               src={asset.videoUrl}
@@ -285,10 +262,14 @@ export const AssetPanel = memo(({
                               </span>
                             </div>
                           </div>
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center bg-black/35 text-white/70">
+                            <Music className="h-8 w-8" />
+                          </div>
                         )}
                       </button>
                       <div className="space-y-0.5 px-2 py-1.5">
-                        {mode === 'browse' ? (
+                        {mode === 'browse' && asset.nodeId && onRename ? (
                           <input
                             value={nameDrafts[asset.id] ?? asset.title}
                             onChange={(event) => {
@@ -321,9 +302,7 @@ export const AssetPanel = memo(({
                     </div>
                   ))}
                 </div>
-              </section>
-            ))}
-          </div>
+          </section>
         )}
       </div>
     </div>

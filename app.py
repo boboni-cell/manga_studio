@@ -2879,6 +2879,48 @@ def get_text_models():
         'default': SCRIPT_MODEL_DEFAULT
     })
 
+@app.route('/api/text/generate', methods=['POST'])
+@login_required
+@model_access_required('text')
+def generate_canvas_text():
+    """Generic Canvas V2 text generation through the same provider resolver,
+    permissions and point accounting as the classic workbench."""
+    body = request.json or {}
+    prompt = body.get('prompt')
+    if not isinstance(prompt, str) or not prompt.strip():
+        return jsonify(error='请输入文本任务'), 400
+    if len(prompt) > 100000:
+        return jsonify(error='文本任务过长'), 413
+    script_model = body.get('script_model', SCRIPT_MODEL_DEFAULT)
+    force_personal = bool(body.get('use_personal_api')) or script_model == 'personal-api'
+    if not force_personal and script_model not in SCRIPT_MODELS:
+        return jsonify(error='无效的文本模型'), 400
+    point_cost = 0
+    try:
+        api_cfg = resolve_api(
+            'text', builtin_text_api(SCRIPT_MODEL_DEFAULT if force_personal else script_model),
+            current_user_id(), force_personal=force_personal,
+            profile_id=body.get('api_profile_id'),
+            strict_builtin='use_personal_api' in body and not force_personal,
+        )
+        point_cost = reserve_model_points(
+            'text', script_model, current_user_id(), personal=force_personal
+        )
+        text = call_script_text_model(
+            script_model,
+            '你是 Manga Studio 的创作助手。准确完成用户给出的文本任务。直接输出结果，不要解释执行过程。',
+            prompt.strip(),
+            temperature=0.7,
+            max_tokens=4000,
+            api_cfg=api_cfg,
+        )
+        return jsonify(text=text, points=point_cost)
+    except QuotaError as e:
+        return jsonify(error=str(e)), 402
+    except Exception as e:
+        refund_model_points(current_user_id(), point_cost)
+        return jsonify(error=f'生成失败: {str(e)}'), 500
+
 # ── prompt refinement ──────────────────────────────────────────
 def builtin_text_api(model_key=SCRIPT_MODEL_DEFAULT):
     model_cfg = SCRIPT_MODELS.get(model_key, SCRIPT_MODELS[SCRIPT_MODEL_DEFAULT])

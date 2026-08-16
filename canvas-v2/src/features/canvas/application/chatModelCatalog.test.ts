@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { AGNES_PROVIDER_DEFAULTS } from '@/stores/customProvidersStore';
-import { buildChatModelCatalog, resolveAgentProtocol } from './chatModelCatalog';
+import { buildChatModelCatalog, buildMangaChatModelCatalog, resolveAgentProtocol } from './chatModelCatalog';
 
 describe('Agnes chat catalog', () => {
   it('places Agnes 2.5 first and retains saved-project compatibility ids', () => {
@@ -36,5 +36,27 @@ describe('Agnes chat catalog', () => {
       endpointPath: '/v1beta/models/{model}:generateContent',
       extraParams: { providerKind: 'openai-chat-completions' },
     }, {})).toBe('google-gemini');
+  });
+});
+
+describe('Manga Studio text catalog', () => {
+  it('groups platform models and each saved personal API as selectable providers', () => {
+    const entries = buildMangaChatModelCatalog(['doubao', 'glm46'], [{
+      id: 'profile-1',
+      name: '我的 MiniMax',
+      provider: 'MiniMax',
+      model: 'MiniMax-H3',
+    }]);
+
+    expect(entries.map((entry) => entry.providerLabel)).toEqual([
+      '平台模型',
+      '平台模型',
+      '我的 MiniMax · MiniMax',
+    ]);
+    expect(entries[2]?.mangaRoute).toEqual({
+      scriptModel: 'personal-api',
+      usePersonalApi: true,
+      apiProfileId: 'profile-1',
+    });
   });
 });

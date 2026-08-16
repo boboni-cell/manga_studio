@@ -42,6 +42,7 @@ import {
   NODE_CONTROL_PRIMARY_BUTTON_CLASS,
 } from '@/features/canvas/ui/nodeControlStyles';
 import { UiButton, UiChipButton, UiModal } from '@/components/ui';
+import { api } from '@/api';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 
@@ -361,9 +362,15 @@ export const AiTextNode = memo(({ id, data, selected, width, height }: AiTextNod
       userPrompt: effectiveUserPrompt,
       parts: previewParts,
     });
-    const providerRequest = entry
-      ? buildCustomChatCompletionRequestDebugPreview(entry.id, payload, true)
-      : null;
+    const providerRequest = entry?.mangaRoute
+      ? {
+          endpoint: '/api/text/generate',
+          provider: entry.providerLabel,
+          model: entry.modelLabel,
+        }
+      : entry
+        ? buildCustomChatCompletionRequestDebugPreview(entry.id, payload, true)
+        : null;
 
     return {
       provider: entry
@@ -465,7 +472,7 @@ export const AiTextNode = memo(({ id, data, selected, width, height }: AiTextNod
       let responseUsage: unknown = null;
       let streamFailureWarning: string | null = null;
       let lastStreamPreviewUpdateAt = 0;
-      if (enableAiTextStreaming) try {
+      if (!nextEntry.mangaRoute && enableAiTextStreaming) try {
           usedStreaming = true;
           const streamResult = await streamCustomChatCompletion(nextEntry.id, payloadPreview.payload, {
             onTextDelta: (_delta, fullText) => {
@@ -544,18 +551,39 @@ export const AiTextNode = memo(({ id, data, selected, width, height }: AiTextNod
       }
 
       if (!rawOutput.trim()) {
-        const result = await submitCustomChatCompletion(nextEntry.id, payloadPreview.payload);
-        rawOutput = result.text;
-        finishReason = result.finishReason ?? finishReason;
-        responseStatus = typeof result.status === 'number' ? result.status : responseStatus;
-        requestDebug = result.requestDebug ?? requestDebug;
-        responseUsage = result.usage ?? responseUsage;
-        streamDiagnostics = result.usage
-          ? {
-            ...(streamDiagnostics && typeof streamDiagnostics === 'object' ? streamDiagnostics : {}),
-            usage: result.usage,
-          }
-          : streamDiagnostics;
+        if (nextEntry.mangaRoute) {
+          const result = await api<{ text?: string; points?: number }>('/api/text/generate', {
+            method: 'POST',
+            body: JSON.stringify({
+              prompt: payloadPreview.textPrompt,
+              script_model: nextEntry.mangaRoute.scriptModel,
+              use_personal_api: nextEntry.mangaRoute.usePersonalApi,
+              api_profile_id: nextEntry.mangaRoute.apiProfileId,
+            }),
+          });
+          rawOutput = typeof result.text === 'string' ? result.text : '';
+          finishReason = 'stop';
+          responseStatus = 200;
+          requestDebug = {
+            endpoint: '/api/text/generate',
+            provider: nextEntry.providerLabel,
+            model: nextEntry.modelLabel,
+          };
+          responseUsage = typeof result.points === 'number' ? { points: result.points } : null;
+        } else {
+          const result = await submitCustomChatCompletion(nextEntry.id, payloadPreview.payload);
+          rawOutput = result.text;
+          finishReason = result.finishReason ?? finishReason;
+          responseStatus = typeof result.status === 'number' ? result.status : responseStatus;
+          requestDebug = result.requestDebug ?? requestDebug;
+          responseUsage = result.usage ?? responseUsage;
+          streamDiagnostics = result.usage
+            ? {
+              ...(streamDiagnostics && typeof streamDiagnostics === 'object' ? streamDiagnostics : {}),
+              usage: result.usage,
+            }
+            : streamDiagnostics;
+        }
       }
       let effectiveRawOutput = rawOutput;
       if (!effectiveRawOutput.trim()) {

@@ -98,6 +98,7 @@ import { NodeToolDialog } from './ui/NodeToolDialog';
 import { ImageViewerModal } from './ui/ImageViewerModal';
 import { AssetPanel, type CanvasAssetItem } from './ui/AssetPanel';
 import { MissingApiKeyHint } from '@/features/settings/MissingApiKeyHint';
+import { loadMangaAssetLibrary, type MangaLibraryAsset } from '@/lib/mangaAssetLibrary';
 
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
 const CANVAS_MARQUEE_MIN_DISTANCE = 4;
@@ -881,13 +882,24 @@ function createUiNodeId(prefix: string): string {
 
 function toAssetPanelItem(asset: CanvasAssetCatalogItem): CanvasAssetItem | null {
   if (asset.kind === 'audio') {
-    return null;
+    return {
+      id: asset.id,
+      nodeId: asset.nodeId,
+      kind: 'audio',
+      category: 'project',
+      rawAudioUrl: asset.url,
+      audioUrl: asset.url,
+      title: asset.title,
+      sourceLabel: asset.sourceLabel,
+      order: asset.order,
+    };
   }
   if (asset.kind === 'image') {
     return {
       id: asset.id,
       nodeId: asset.nodeId,
       kind: 'image',
+      category: 'project',
       rawImageUrl: asset.url,
       rawPreviewImageUrl: asset.previewUrl,
       imageUrl: resolveImageDisplayUrl(asset.url),
@@ -902,12 +914,58 @@ function toAssetPanelItem(asset: CanvasAssetCatalogItem): CanvasAssetItem | null
     id: asset.id,
     nodeId: asset.nodeId,
     kind: 'video',
+    category: 'project',
     rawVideoUrl: asset.url,
     rawThumbnailUrl: asset.previewUrl,
     videoUrl: resolveImageDisplayUrl(asset.url),
     thumbnailUrl: asset.previewUrl ? resolveImageDisplayUrl(asset.previewUrl) : null,
     aspectRatio: asset.aspectRatio,
     title: asset.title,
+    sourceLabel: asset.sourceLabel,
+    order: asset.order,
+  };
+}
+
+function toLibraryAssetPanelItem(asset: MangaLibraryAsset): CanvasAssetItem {
+  if (asset.kind === 'video') {
+    return {
+      id: asset.id,
+      nodeId: null,
+      kind: 'video',
+      category: asset.category,
+      rawVideoUrl: asset.url,
+      rawThumbnailUrl: asset.previewUrl,
+      videoUrl: resolveImageDisplayUrl(asset.url),
+      thumbnailUrl: asset.previewUrl ? resolveImageDisplayUrl(asset.previewUrl) : null,
+      title: asset.name,
+      sourceLabel: asset.sourceLabel,
+      order: asset.order,
+    };
+  }
+  if (asset.kind === 'audio') {
+    return {
+      id: asset.id,
+      nodeId: null,
+      kind: 'audio',
+      category: asset.category,
+      rawAudioUrl: asset.url,
+      audioUrl: asset.url,
+      title: asset.name,
+      sourceLabel: asset.sourceLabel,
+      order: asset.order,
+    };
+  }
+  return {
+    id: asset.id,
+    nodeId: null,
+    kind: 'image',
+    category: asset.category,
+    rawImageUrl: asset.url,
+    rawPreviewImageUrl: asset.previewUrl,
+    imageUrl: resolveImageDisplayUrl(asset.url),
+    previewImageUrl: resolveImageDisplayUrl(asset.previewUrl || asset.url),
+    aspectRatio: '1:1',
+    title: asset.name,
     sourceLabel: asset.sourceLabel,
     order: asset.order,
   };
@@ -954,6 +1012,7 @@ export function Canvas() {
   const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(false);
   const [assetButtonRect, setAssetButtonRect] = useState<DOMRect | null>(null);
   const [assetPanelMode, setAssetPanelMode] = useState<'browse' | 'select'>('browse');
+  const [libraryAssets, setLibraryAssets] = useState<CanvasAssetItem[]>([]);
   const [assetConnectTargetNodeId, setAssetConnectTargetNodeId] = useState<string | null>(null);
   const [pendingConnectStart, setPendingConnectStart] = useState<PendingConnectStart | null>(
     null
@@ -1053,12 +1112,28 @@ export function Canvas() {
       : EMPTY_CANVAS_ASSETS),
     [isAssetPanelOpen, nodes]
   );
+  useEffect(() => {
+    if (!isAssetPanelOpen) return;
+    let cancelled = false;
+    loadMangaAssetLibrary().then((items) => {
+      if (!cancelled) setLibraryAssets(items.map(toLibraryAssetPanelItem));
+    }).catch(() => {
+      if (!cancelled) setLibraryAssets([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAssetPanelOpen]);
+  const allAssetPanelAssets = useMemo(
+    () => [...canvasAssets, ...libraryAssets],
+    [canvasAssets, libraryAssets]
+  );
   const assetPanelAssets = useMemo(() => {
     if (assetPanelMode !== 'select' || !assetConnectTargetNodeId) {
-      return canvasAssets;
+      return allAssetPanelAssets;
     }
-    return canvasAssets.filter((asset) => asset.kind === 'image' && asset.nodeId !== assetConnectTargetNodeId);
-  }, [assetConnectTargetNodeId, assetPanelMode, canvasAssets]);
+    return allAssetPanelAssets.filter((asset) => asset.kind === 'image' && asset.nodeId !== assetConnectTargetNodeId);
+  }, [allAssetPanelAssets, assetConnectTargetNodeId, assetPanelMode]);
   const panOnDragButtons = useMemo(
     () => CANVAS_MOUSE_BUTTONS.filter(
       (button) => getCanvasMouseAction(canvasMouseBindings, button, 'drag') === 'panCanvas'
@@ -1363,7 +1438,7 @@ export function Canvas() {
         if (asset.kind !== 'image' || !assetConnectTargetNodeId || asset.nodeId === assetConnectTargetNodeId) {
           return;
         }
-        const sourceNode = nodes.find((node) => node.id === asset.nodeId);
+        const sourceNode = asset.nodeId ? nodes.find((node) => node.id === asset.nodeId) : null;
         const targetNode = nodes.find((node) => node.id === assetConnectTargetNodeId);
         if (targetNode && nodeHasTargetHandle(targetNode.type)) {
           const canConnectExistingSource =
@@ -1377,7 +1452,7 @@ export function Canvas() {
             nodeHasSourceHandle(sourceNode.type);
           const sourceNodeId = canConnectExistingSource
             ? sourceNode.id
-            : addNode(CANVAS_NODE_TYPES.exportImage, {
+            : addNode(asset.nodeId ? CANVAS_NODE_TYPES.exportImage : CANVAS_NODE_TYPES.upload, {
                 x: targetNode.position.x - 300,
                 y: targetNode.position.y,
               }, {
@@ -1397,8 +1472,49 @@ export function Canvas() {
         return;
       }
 
-      const targetNode = nodes.find((node) => node.id === asset.nodeId);
+      const targetNode = asset.nodeId ? nodes.find((node) => node.id === asset.nodeId) : null;
       if (!targetNode) {
+        const containerRect = wrapperRef.current?.getBoundingClientRect();
+        const position = reactFlowInstance.screenToFlowPosition({
+          x: (containerRect?.left ?? 0) + (containerRect?.width ?? window.innerWidth) / 2,
+          y: (containerRect?.top ?? 0) + (containerRect?.height ?? window.innerHeight) / 2,
+        });
+        let createdNodeId: string;
+        if (asset.kind === 'video') {
+          createdNodeId = addNode(CANVAS_NODE_TYPES.video, position, {
+            displayName: asset.title,
+            videoUrl: asset.rawVideoUrl,
+            sourceFileName: asset.title,
+            aspectRatio: asset.aspectRatio || '16:9',
+          });
+        } else if (asset.kind === 'audio') {
+          createdNodeId = addNode(CANVAS_NODE_TYPES.audio, position, {
+            displayName: asset.title,
+            audioUrl: asset.rawAudioUrl,
+            sourceFileName: asset.title,
+          });
+        } else if (asset.category === 'style') {
+          createdNodeId = addNode(CANVAS_NODE_TYPES.imageEdit, position, {
+            displayName: asset.title,
+            prompt: '',
+            styleId: asset.id.replace(/^style:/, ''),
+            style_id: asset.id.replace(/^style:/, ''),
+            imageUrl: null,
+            previewImageUrl: null,
+            aspectRatio: '1:1',
+          });
+        } else {
+          createdNodeId = addNode(CANVAS_NODE_TYPES.upload, position, {
+            displayName: asset.title,
+            imageUrl: asset.rawImageUrl,
+            previewImageUrl: asset.rawPreviewImageUrl ?? asset.rawImageUrl,
+            aspectRatio: asset.aspectRatio ?? '1:1',
+            sourceFileName: asset.title,
+          });
+        }
+        setSelectedNode(createdNodeId);
+        scheduleCanvasPersist(0);
+        setIsAssetPanelOpen(false);
         return;
       }
 
@@ -1436,6 +1552,7 @@ export function Canvas() {
 
   const handleRenameAsset = useCallback(
     (asset: CanvasAssetItem, title: string) => {
+      if (!asset.nodeId) return;
       const node = nodes.find((item) => item.id === asset.nodeId);
       updateNodeData(asset.nodeId, {
         displayName: title,

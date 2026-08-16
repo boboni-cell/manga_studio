@@ -9,9 +9,15 @@ import {
   type ChangeEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { FileUp, Image as ImageIcon, PenLine, Sparkles, Tags, X } from 'lucide-react';
+import { FileUp, Film, Image as ImageIcon, Music, PenLine, Sparkles, Tags, X } from 'lucide-react';
 
 import { api } from '@/api';
+import {
+  loadMangaAssetLibrary,
+  MANGA_ASSET_CATEGORIES,
+  type MangaAssetCategory,
+  type MangaLibraryAsset,
+} from '@/lib/mangaAssetLibrary';
 import { webApiGateway } from '../infrastructure/webApiGateway';
 import { useCanvasStore } from '@/stores/canvasStore';
 import { CANVAS_NODE_TYPES, type CanvasNode } from '../domain/canvasNodes';
@@ -50,15 +56,6 @@ interface SkillItem {
   input_schema?: Record<string, unknown>;
   output_type?: string;
 }
-interface AssetItem {
-  kind: 'character' | 'outfit' | 'scene' | 'upload' | 'style' | 'audio';
-  id: string;
-  name: string;
-  url?: string;
-  thumbnail_url?: string;
-  deleted_at?: string | null;
-}
-
 type TabKey = 'params' | 'skills' | 'assets';
 
 function useSelectedNodeRect(nodeId: string | null): DOMRect | null {
@@ -95,7 +92,8 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
   const [selectedProfiles, setSelectedProfiles] = useState<Record<string, string>>({});
   const [isAdmin, setIsAdmin] = useState(false);
   const [skills, setSkills] = useState<SkillItem[]>([]);
-  const [assets, setAssets] = useState<AssetItem[]>([]);
+  const [assets, setAssets] = useState<MangaLibraryAsset[]>([]);
+  const [activeAssetCategory, setActiveAssetCategory] = useState<MangaAssetCategory>('character');
   const [requirement, setRequirement] = useState('');
 
   const nodeRect = useSelectedNodeRect(node.id);
@@ -123,35 +121,7 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
     api<{ skills?: SkillItem[] }>('/api/skills')
       .then((r) => setSkills(Array.isArray(r.skills) ? r.skills : []))
       .catch(() => setSkills([]));
-    Promise.all([
-      api<unknown[]>('/api/assets/outfits').catch(() => []),
-      api<unknown[]>('/api/assets/scenes').catch(() => []),
-      api<unknown[]>('/api/assets/uploads').catch(() => []),
-      api<unknown[]>('/api/assets/audios').catch(() => []),
-      api<Record<string, { name?: string; images?: { url?: string }[]; deleted_at?: string | null }>>('/api/characters').catch(() => ({})),
-      api<StyleItem[] | { styles?: StyleItem[] }>('/api/styles').catch(() => []),
-    ]).then(([outfits, scenes, uploads, audios, characters, styleResp]) => {
-      const list: AssetItem[] = [];
-      const push = (kind: AssetItem['kind'], items: unknown[]) => {
-        for (const it of items as Array<{ id?: string; name?: string; url?: string; thumbnail_url?: string; deleted_at?: string | null }>) {
-          if (it && it.id) list.push({ kind, id: String(it.id), name: String(it.name || '未命名'), url: it.url, thumbnail_url: it.thumbnail_url, deleted_at: it.deleted_at });
-        }
-      };
-      push('outfit', outfits as unknown[]);
-      push('scene', scenes as unknown[]);
-      push('upload', uploads as unknown[]);
-      push('audio', audios as unknown[]);
-      for (const [id, ch] of Object.entries(characters)) {
-        if (!ch) continue;
-        const url = Array.isArray(ch.images) && ch.images[0]?.url ? ch.images[0].url : undefined;
-        list.push({ kind: 'character', id, name: String(ch.name || id), url, deleted_at: ch.deleted_at });
-      }
-      const styleList = Array.isArray(styleResp) ? styleResp : (Array.isArray((styleResp as { styles?: StyleItem[] }).styles) ? (styleResp as { styles?: StyleItem[] }).styles! : []);
-      for (const s of styleList) {
-        list.push({ kind: 'style', id: s.id, name: s.name, thumbnail_url: s.thumbnail_url, deleted_at: s.deleted_at });
-      }
-      setAssets(list.filter((a) => !a.deleted_at));
-    }).catch(() => setAssets([]));
+    loadMangaAssetLibrary().then(setAssets).catch(() => setAssets([]));
   }, []);
 
   const update = useCallback((patch: Record<string, unknown>) => updateNodeData(node.id, patch), [node.id, updateNodeData]);
@@ -322,25 +292,46 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
     }
   };
 
-  const insertAsset = (asset: AssetItem) => {
-    const url = asset.url || asset.thumbnail_url || '';
+  const insertAsset = (asset: MangaLibraryAsset) => {
+    if (asset.kind === 'style') {
+      update({ styleId: asset.styleId || '', style_id: asset.styleId || '' });
+      setTab('params');
+      return;
+    }
+    const url = asset.url;
     if (!url) return;
     const store = useCanvasStore.getState();
     const feedable = new Set<string>([CANVAS_NODE_TYPES.imageEdit, CANVAS_NODE_TYPES.aiVideo, CANVAS_NODE_TYPES.aiText, CANVAS_NODE_TYPES.storyboardGen]).has(node.type);
     const pos = feedable
       ? { x: (node.position.x ?? 0) - 340, y: node.position.y ?? 0 }
       : { x: (node.position.x ?? 0) + 400, y: node.position.y ?? 0 };
-    const newNodeId = store.addNode(feedable ? CANVAS_NODE_TYPES.upload : CANVAS_NODE_TYPES.exportImage, pos, {
-      displayName: asset.name,
-      imageUrl: url,
-      previewImageUrl: url,
-      aspectRatio: '1:1',
-      sourceFileName: asset.name,
-    });
+    const nodeType = asset.kind === 'video'
+      ? CANVAS_NODE_TYPES.video
+      : asset.kind === 'audio'
+        ? CANVAS_NODE_TYPES.audio
+        : feedable ? CANVAS_NODE_TYPES.upload : CANVAS_NODE_TYPES.exportImage;
+    const nodeData = asset.kind === 'video'
+      ? { displayName: asset.name, videoUrl: url, sourceFileName: asset.name, aspectRatio: '16:9' }
+      : asset.kind === 'audio'
+        ? { displayName: asset.name, audioUrl: url, sourceFileName: asset.name }
+        : {
+            displayName: asset.name,
+            imageUrl: url,
+            previewImageUrl: asset.previewUrl || url,
+            aspectRatio: '1:1',
+            sourceFileName: asset.name,
+          };
+    const newNodeId = store.addNode(nodeType, pos, nodeData);
     if (feedable) store.addEdge(newNodeId, node.id);
     else store.addEdge(node.id, newNodeId);
     onClose();
   };
+
+  const assetCategoryCounts = MANGA_ASSET_CATEGORIES.reduce<Record<string, number>>((counts, category) => {
+    counts[category.id] = assets.filter((asset) => asset.category === category.id).length;
+    return counts;
+  }, {});
+  const visibleAssets = assets.filter((asset) => asset.category === activeAssetCategory);
 
   const rect = nodeRect;
   const panelStyle: React.CSSProperties | undefined = rect
@@ -590,10 +581,28 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
         )}
 
         {tab === 'assets' && (
-          <div className="space-y-1">
+          <div className="space-y-2">
+            <div className="ui-scrollbar flex gap-1 overflow-x-auto pb-1">
+              {MANGA_ASSET_CATEGORIES.filter((category) => category.id !== 'project').map((category) => (
+                <button
+                  key={category.id}
+                  type="button"
+                  onClick={() => setActiveAssetCategory(category.id)}
+                  className={'inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors ' + (activeAssetCategory === category.id ? 'bg-accent/20 text-accent' : 'bg-bg-dark/50 text-text-muted hover:text-text-dark')}
+                >
+                  {category.label}
+                  <span className="opacity-65">{assetCategoryCounts[category.id] || 0}</span>
+                </button>
+              ))}
+            </div>
             {assets.length === 0 && <div className="text-xs text-text-muted">资产库为空，请先在首页资产库添加素材。</div>}
+            {assets.length > 0 && visibleAssets.length === 0 && (
+              <div className="rounded-md border border-dashed border-[var(--canvas-node-field-border)] px-3 py-6 text-center text-xs text-text-muted">
+                该分类暂无资产，可前往首页“资产”添加。
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-1.5">
-              {assets.map((a) => (
+              {visibleAssets.map((a) => (
                 <button
                   key={a.kind + ':' + a.id}
                   type="button"
@@ -601,12 +610,17 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
                   className="overflow-hidden rounded-md border border-[var(--canvas-node-field-border)] bg-bg-dark/40 hover:border-accent/50"
                   onClick={() => insertAsset(a)}
                 >
-                  {a.url || a.thumbnail_url ? (
-                    <img src={a.url || a.thumbnail_url} alt={a.name} className="h-14 w-full object-cover" />
+                  {(a.kind === 'image' || a.kind === 'style') && (a.previewUrl || a.url) ? (
+                    <img src={a.previewUrl || a.url} alt={a.name} className="h-14 w-full object-cover" />
+                  ) : a.kind === 'video' ? (
+                    <div className="flex h-14 w-full items-center justify-center bg-bg-dark text-text-muted"><Film className="h-5 w-5" /></div>
+                  ) : a.kind === 'audio' ? (
+                    <div className="flex h-14 w-full items-center justify-center bg-bg-dark text-text-muted"><Music className="h-5 w-5" /></div>
                   ) : (
                     <div className="flex h-14 w-full items-center justify-center bg-bg-dark text-[10px] text-text-muted">{a.name.slice(0, 6)}</div>
                   )}
                   <div className="truncate px-1 py-0.5 text-[10px] text-text-muted">{a.name}</div>
+                  <div className="truncate px-1 pb-1 text-[9px] text-text-muted/60">{a.sourceLabel}</div>
                 </button>
               ))}
             </div>
