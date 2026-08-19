@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>漫剧工作室</title>
+    <link rel="icon" type="image/png" href="/static/site-icon.png" />
+    <link rel="stylesheet" href="/static/workspace.css" />
+  </head>
+  <body>
+    <div id="workspace-shell">
+      <header id="workspace-switcher">
+        <a id="wsBack" class="ws-back" href="/">← 返回项目</a>
+        <span id="wsProjectTitle" class="ws-project-title"></span>
+        <span class="ws-brand">🎬</span>
+        <nav class="ws-tabs">
+          <button id="tabClassic" data-mode="classic" class="ws-tab">经典工作台</button>
+          <button id="tabCanvas" data-mode="canvas" class="ws-tab">画布工作台</button>
+        </nav>
+        <span id="wsSaveState" class="ws-save-state"></span>
+        <a class="ws-logout" href="/api-settings">API 设置</a>
+        <a id="wsAdmin" class="ws-logout" href="/admin" style="display:none">后台</a>
+        <button id="wsLogout" class="ws-logout">退出</button>
+      </header>
+      <main id="workspace-stage">
+        <iframe id="classicFrame" title="经典工作台" class="ws-frame"></iframe>
+        <iframe id="canvasFrame" title="画布工作台" class="ws-frame"></iframe>
+      </main>
+      <div id="workspace-choice" class="ws-choice">
+        <div class="ws-choice-inner">
+          <h1 class="ws-choice-title">选择工作区</h1>
+          <div class="ws-choice-grid">
+            <button class="ws-choice-card" data-mode="classic" type="button">
+              <h2>经典工作台</h2>
+              <p>剧本、素材管理、图片生成、镜头生成、历史记录</p>
+            </button>
+            <button class="ws-choice-card" data-mode="canvas" type="button">
+              <h2>画布工作台</h2>
+              <p>节点式剧本拆分、素材引用、图片与视频生成</p>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="/static/workspace.js"></script>
+  </body>
+</html>

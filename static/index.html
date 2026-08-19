@@ -4,8 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>漫剧工作室 - 专业漫剧生成工作台</title>
-<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-<link rel="shortcut icon" href="/static/favicon.svg">
+<link rel="icon" type="image/png" href="/static/site-icon.png">
+<link rel="shortcut icon" href="/static/site-icon.png">
+<link rel="apple-touch-icon" href="/static/site-icon.png">
 <meta name="theme-color" content="#101018">
 <style>
 /* ===== RESET & VARIABLES ===== */
@@ -71,6 +72,7 @@ body {
   letter-spacing: -0.3px;
 }
 .topbar-logo .icon { font-size: 18px; }
+.topbar-logo img.icon { width: 28px; height: 28px; border-radius: 7px; object-fit: cover; flex: none; }
 .topbar-logo .accent { color: var(--accent); }
 .topbar-spacer { flex: 1; }
 .topbar-status {
@@ -106,6 +108,8 @@ body {
 }
 .topbar-btn:hover { border-color: var(--accent); color: var(--text); }
 .topbar-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.api-profile-select { max-width: 190px; border-color: #40547e; }
+.api-route-control { display:none; align-items:center; gap:4px; }
 
 /* ===== MAIN LAYOUT ===== */
 .main {
@@ -559,6 +563,12 @@ body {
   gap: 3px;
 }
 .ref-slot:hover { border-color: var(--border-light); }
+.ref-slot.model-unsupported {
+  opacity: 0.38;
+  cursor: not-allowed;
+  border-color: var(--border);
+}
+.ref-slot.model-unsupported:hover { border-color: var(--border); }
 .ref-slot.filled {
   border-style: solid;
   border-color: var(--border-light);
@@ -678,10 +688,23 @@ body {
   transition: border-color 0.15s;
 }
 .slot-gallery-item:hover { border-color: var(--accent); }
-.slot-gallery-item img {
+.slot-gallery-item img,
+.slot-gallery-item video {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.slot-gallery-item .at-audio {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--text-dim);
+  text-align: center;
+  padding: 4px;
 }
 .slot-gallery-item .gallery-item-del {
   position: absolute;
@@ -830,6 +853,12 @@ body {
   border-color: var(--accent);
   color: #fff;
   font-weight: 500;
+}
+.ratio-btn:disabled, .dur-btn:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 .toolbar-sep {
   width: 1px; height: 16px;
@@ -1061,6 +1090,22 @@ body {
 .image-ref-item img {
   width: 100%; height: 100%; object-fit: cover;
 }
+.image-ref-role {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  padding: 2px 3px;
+  border-radius: 3px;
+  background: rgba(5, 6, 12, 0.78);
+  color: #fff;
+  font-size: 8px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .image-ref-item .ref-del {
   position: absolute;
   top: -4px; right: -4px;
@@ -1133,10 +1178,45 @@ body {
   background: var(--surface3);
 }
 .at-item:hover { border-color: var(--accent); }
+.at-item.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .at-item img, .at-item video {
   width: 100%; height: 100%;
   object-fit: cover;
   display: block;
+}
+.at-check, .at-delete {
+  position: absolute;
+  top: 5px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+}
+.at-check { left: 5px; background: var(--accent); pointer-events: none; }
+.at-delete { right: 5px; background: rgba(192,57,57,.92); cursor: pointer; }
+.at-upload-summary {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.at-upload-summary button {
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  background: var(--surface2);
+  color: var(--text);
+  padding: 4px 10px;
+  cursor: pointer;
 }
 .at-label {
   position: absolute;
@@ -1643,7 +1723,7 @@ input[type=file] { display: none; }
 <!-- ===== TOP BAR ===== -->
 <div class="topbar">
   <div class="topbar-logo">
-    <span class="icon">🎬</span>
+    <img class="icon" src="/static/site-icon.png" alt="">
     <span>漫剧<span class="accent">工作室</span></span>
   </div>
   <div class="topbar-status">
@@ -1655,19 +1735,10 @@ input[type=file] { display: none; }
   <button class="topbar-btn" id="topbarImageGen" onclick="switchMainTab('imageGen')">🎨 图片生成</button>
   <button class="topbar-btn active" id="topbarStudio" onclick="switchMainTab('studio')">📷 镜头生成</button>
   <button class="topbar-btn" id="topbarHistory" onclick="switchMainTab('history')">📋 历史记录</button>
-  <button class="topbar-btn" onclick="openApiSettings()">⚙ API 接入</button>
-  <button class="topbar-btn" onclick="logout()">退出</button>
+  <button class="topbar-btn" onclick="location.href='/api-settings'">🔌 我的 API</button>
+  <button class="topbar-btn" id="adminButton" style="display:none" onclick="location.href='/admin'">🛡 后台管理</button>
+  <button class="topbar-btn" id="logoutBtn" onclick="logout()">退出</button>
 </div>
-
-<dialog id="apiSettingsDialog" style="color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px;width:min(460px,90vw)">
-  <h3 style="margin-bottom:6px">个人 API 接入</h3><p style="color:var(--text-dim);margin-bottom:14px">密钥保存在服务端并仅供你的账号使用。留空表示保留原值。</p>
-  <input id="arkApiKey" class="form-input" type="password" placeholder="火山 Ark API Key">
-  <input id="nanoApiKey" class="form-input" type="password" placeholder="Nano-GPT API Key" style="margin-top:8px">
-  <input id="thirdApiBase" class="form-input" placeholder="第三方 API Base URL" style="margin-top:8px">
-  <input id="thirdApiKey" class="form-input" type="password" placeholder="第三方 API Key" style="margin-top:8px">
-  <div id="apiSettingsStatus" style="color:var(--text-dim);margin:12px 0;min-height:20px"></div>
-  <div style="display:flex;justify-content:flex-end;gap:8px"><button class="topbar-btn" onclick="apiSettingsDialog.close()">取消</button><button class="topbar-btn active" onclick="saveApiSettings()">保存</button></div>
-</dialog>
 
 <!-- ===== MAIN LAYOUT ===== -->
 <div class="main">
@@ -1707,63 +1778,63 @@ input[type=file] { display: none; }
       <div class="shot-editor">
         <!-- Reference Slots -->
         <div class="ref-slots" id="refSlots">
-          <div class="ref-slot" data-slot="character" onclick="showSlotGallery(this,'character')">
+          <div class="ref-slot" data-slot="character" onclick="handleSlotClick(this,'character')">
             <span class="slot-icon">👤</span>
             <span class="slot-label">角色参考</span>
             <span class="slot-count" id="slotCountChar">0</span>
             <img class="slot-preview" id="slotPreviewChar" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('character')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="outfit" onclick="showSlotGallery(this,'outfit')">
+          <div class="ref-slot" data-slot="outfit" onclick="handleSlotClick(this,'outfit')">
             <span class="slot-icon">👗</span>
             <span class="slot-label">服装参考</span>
             <span class="slot-count" id="slotCountOutfit">0</span>
             <img class="slot-preview" id="slotPreviewOutfit" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('outfit')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="scene" onclick="showSlotGallery(this,'scene')">
+          <div class="ref-slot" data-slot="scene" onclick="handleSlotClick(this,'scene')">
             <span class="slot-icon">🏞</span>
             <span class="slot-label">场景参考</span>
             <span class="slot-count" id="slotCountScene">0</span>
             <img class="slot-preview" id="slotPreviewScene" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('scene')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="storyboard" onclick="showSlotGallery(this,'storyboard')">
+          <div class="ref-slot" data-slot="storyboard" onclick="handleSlotClick(this,'storyboard')">
             <span class="slot-icon">🎬</span>
             <span class="slot-label">分镜参考</span>
             <span class="slot-count" id="slotCountStoryboard">0</span>
             <img class="slot-preview" id="slotPreviewStoryboard" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('storyboard')" title="清除">✕</button>
           </div>
-          <div class="ref-slot audio-slot" data-slot="audio" onclick="focusSlot('audio')">
+          <div class="ref-slot audio-slot" data-slot="audio" onclick="handleSlotClick(this,'audio')">
             <span class="slot-icon">🎵</span>
             <span class="slot-label">音频参考</span>
             <span class="slot-count" id="slotCountAudio">0</span>
             <span class="slot-preview" id="slotPreviewAudio" style="display:none">🎵 <span class="audio-name"></span></span>
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('audio')" title="移除音频">✕</button>
           </div>
-          <div class="ref-slot" data-slot="firstframe" onclick="showSlotGallery(this,'firstframe')">
+          <div class="ref-slot" data-slot="firstframe" onclick="handleSlotClick(this,'firstframe')">
             <span class="slot-icon">🎞️</span>
             <span class="slot-label">首帧图</span>
             <span class="slot-count" id="slotCountFirstframe">0</span>
             <img class="slot-preview" id="slotPreviewFirstframe" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('firstframe')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="lastframe" onclick="showSlotGallery(this,'lastframe')">
+          <div class="ref-slot" data-slot="lastframe" onclick="handleSlotClick(this,'lastframe')">
             <span class="slot-icon">🏁</span>
             <span class="slot-label">尾帧图</span>
             <span class="slot-count" id="slotCountLastframe">0</span>
             <img class="slot-preview" id="slotPreviewLastframe" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('lastframe')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="multiref" onclick="showSlotGallery(this,'multiref')">
+          <div class="ref-slot" data-slot="multiref" onclick="handleSlotClick(this,'multiref')">
             <span class="slot-icon">🗂</span>
             <span class="slot-label">多图参考</span>
             <span class="slot-count" id="slotCountMultiref">0</span>
             <img class="slot-preview" id="slotPreviewMultiref" style="display:none">
             <button class="slot-remove" onclick="event.stopPropagation();clearSlot('multiref')" title="清除">✕</button>
           </div>
-          <div class="ref-slot" data-slot="video" onclick="showSlotGallery(this,'video')">
+          <div class="ref-slot" data-slot="video" onclick="handleSlotClick(this,'video')">
             <span class="slot-icon">🎬</span>
             <span class="slot-label">上一段视频</span>
             <span class="slot-count" id="slotCountVideo">0</span>
@@ -1792,6 +1863,7 @@ input[type=file] { display: none; }
                 <div class="at-tab active" onclick="switchAtTab('chars')">角色</div>
                 <div class="at-tab" onclick="switchAtTab('outfits')">服装</div>
                 <div class="at-tab" onclick="switchAtTab('scenes')">场景</div>
+                <div class="at-tab" onclick="switchAtTab('uploads')">多图参考</div>
                 <div class="at-tab" onclick="switchAtTab('audios')">音频</div>
                 <div class="at-tab" onclick="switchAtTab('history')">上段视频</div>
               </div>
@@ -1818,6 +1890,7 @@ input[type=file] { display: none; }
           <select class="model-select" id="modelSelect" onchange="setVideoModel(this.value)">
             <option value="seedance">Seedance</option>
           </select>
+          <span class="api-route-control" id="videoApiControl"><span class="tlabel">个人接口</span><select class="model-select api-profile-select" id="videoApiSelect" onchange="selectWorkbenchApi('video',this.value)"><option value="">未接入</option></select></span>
           <span class="tlabel">分辨率</span>
           <select class="model-select" id="resSelect" onchange="selectedResolution=this.value">
             <option value="720p">720p</option>
@@ -1853,10 +1926,12 @@ input[type=file] { display: none; }
             <button class="ratio-btn" onclick="document.getElementById('scriptFileInput').click()">上传剧本</button>
             <button class="ratio-btn" onclick="brainstormScript()">没灵感，帮我想</button>
             <span style="flex:1;"></span>
+            <span class="api-route-control" id="textApiControl"><span class="tlabel" style="font-size:11px;">个人接口</span><select class="model-select api-profile-select" id="textApiSelect" onchange="selectWorkbenchApi('text',this.value)"><option value="">未接入</option></select></span>
             <span class="tlabel" style="font-size:11px;">剧本模型</span>
             <button class="ratio-btn active" id="smDoubao" onclick="setScriptModel('doubao',this)">豆包</button>
             <button class="ratio-btn" id="smGlm46" onclick="setScriptModel('glm46',this)">GPT-4.1M</button>
             <button class="ratio-btn" id="smClaude46" onclick="setScriptModel('claude46',this)">Claude4.6</button>
+            <button class="ratio-btn" id="smPersonalApi" onclick="setScriptModel('personal-api',this)">自己的 API</button>
             <span style="flex:1;"></span>
             <span class="tlabel" style="font-size:11px;">模式</span>
             <button class="ratio-btn active" id="modeSmart" onclick="setSplitMode('smart',this)">智能段落</button>
@@ -1875,7 +1950,7 @@ input[type=file] { display: none; }
       <div class="history-panel">
         <div class="history-header">
           <h3>图片生成</h3>
-          <p>使用 AI 生成角色立绘、场景图、服装参考图</p>
+          <p>使用 AI 生成角色立绘、人物设定卡、场景图、服装参考图</p>
         </div>
         <div class="image-gen-panel" style="display:block;">
           <div class="image-gen-row" style="flex-direction:column;gap:8px;">
@@ -1883,8 +1958,9 @@ input[type=file] { display: none; }
               <span class="tlabel" style="line-height:22px;">模板</span>
               <button class="tpl-btn" id="tpl_scene_angle" onclick="applyTemplate('scene_angle')">场景换视角</button>
               <button class="tpl-btn" id="tpl_char_turnaround" onclick="applyTemplate('char_turnaround')">角色三视图</button>
-              <button class="tpl-btn" id="tpl_char_portrait" onclick="applyTemplate('char_portrait')">真人短剧定妆</button>
-              <button class="tpl-btn" id="tpl_outfit_ref" onclick="applyTemplate('outfit_ref')">服装参考</button>
+              <button class="tpl-btn" id="tpl_character_sheet" onclick="applyTemplate('character_sheet')">人物设定卡</button>
+              <button class="tpl-btn" id="tpl_char_portrait" onclick="applyTemplate('char_portrait')">角色定妆照</button>
+              <button class="tpl-btn" id="tpl_outfit_ref" onclick="applyTemplate('outfit_ref')">服装替换三视图</button>
               <button class="tpl-btn" id="tpl_storyboard" onclick="applyTemplate('storyboard')">分镜构图</button>
               <button class="tpl-btn" id="tpl_group_photo" onclick="applyTemplate('group_photo')">人物同场合照</button>
               <button class="tpl-btn" id="tpl_scene_master" onclick="applyTemplate('scene_master')">场景母图</button>
@@ -1895,6 +1971,7 @@ input[type=file] { display: none; }
               <button class="ratio-btn" onclick="toggleTemplateDetail()">查看详情</button>
               <button class="ratio-btn" onclick="cancelTemplate()">取消模板</button>
             </div>
+            <div id="templateHint" style="display:none;padding:7px 9px;background:rgba(94,142,240,.08);border:1px solid rgba(94,142,240,.28);border-radius:var(--radius-sm);font-size:10px;color:var(--text-dim);line-height:1.6;"></div>
             <div id="templateDetail" style="display:none;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:11px;color:var(--text-muted);line-height:1.6;max-height:120px;overflow-y:auto;white-space:pre-wrap;"></div>
             <div style="font-size:10px;color:var(--text-muted);display:flex;gap:12px;">
               <span>📋 模板：负责稳定结构和质量</span>
@@ -1902,6 +1979,7 @@ input[type=file] { display: none; }
             </div>
             <textarea class="image-gen-prompt" id="imagePrompt" placeholder="写你的补充要求，例如：换成夜晚、镜头从楼梯上方俯拍、保持红色沙发" rows="3"></textarea>
             <div class="image-gen-controls">
+              <span class="api-route-control" id="imageApiControl"><span class="tlabel">个人接口</span><select class="model-select api-profile-select" id="imageApiSelect" onchange="selectWorkbenchApi('image',this.value)"><option value="">未接入</option></select></span>
               <select class="model-select" id="imageModelSelect"></select>
               <select class="model-select" id="imageRatioSelect"></select>
               <input class="model-select" id="customSizeInput" placeholder="宽x高" style="display:none;width:100px;text-align:center;background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;font-family:inherit;padding:4px 6px;outline:none;" oninput="imageCustomSize=this.value">
@@ -2033,7 +2111,8 @@ input[type=file] { display: none; }
 <!-- Hidden File Inputs -->
 <input type="file" id="imgFileInput" accept="image/*" multiple>
 <input type="file" id="audioFileInput" accept="audio/mp3,audio/mpeg" multiple>
-<input type="file" id="directFileInput" accept="image/*,video/mp4,video/mov,video/quicktime">
+<input type="file" id="directFileInput" accept="image/*,video/mp4,video/mov,video/quicktime" multiple>
+<input type="file" id="slotFileInput">
 
 <!-- Error Banner -->
 <div id="apiErrorBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#c0392b;color:#fff;font-size:12px;padding:6px 12px;text-align:center;cursor:pointer;" onclick="this.style.display='none'">⚠️ 接口加载失败，部分功能不可用（点击关闭）</div>
@@ -2142,7 +2221,7 @@ async function uploadFile(file) {
         throw new Error(data.error || ('上传失败 HTTP ' + res.status));
       }
       if (!data.url) throw new Error('上传成功但没有返回图片地址');
-      showTempBanner('上传成功：' + (data.storage || 'unknown'), 'ok');
+      showTempBanner('上传成功', 'ok');
       hideTempBannerSoon();
       return data;
     } finally {
@@ -2151,7 +2230,7 @@ async function uploadFile(file) {
   }
 
   try {
-    showTempBanner('正在获取上传签名：' + file.name, 'warn');
+    showTempBanner('正在准备上传：' + file.name, 'warn');
     var signRes = await fetch('/api/tos-presign', {
       method: 'POST',
       credentials: 'same-origin',
@@ -2167,7 +2246,7 @@ async function uploadFile(file) {
       throw new Error(signData.error || '直传签名缺少上传地址');
     }
 
-    showTempBanner('正在直传 TOS：' + file.name, 'warn');
+    showTempBanner('正在上传：' + file.name, 'warn');
     var putController = new AbortController();
     var putTimer = setTimeout(function() { putController.abort(); }, 180000);
     try {
@@ -2177,12 +2256,12 @@ async function uploadFile(file) {
         body: file,
         signal: putController.signal
       });
-      if (!putRes.ok) throw new Error('TOS 直传失败 HTTP ' + putRes.status);
+      if (!putRes.ok) throw new Error('上传失败 HTTP ' + putRes.status);
     } finally {
       clearTimeout(putTimer);
     }
 
-    showTempBanner('上传成功：tos-direct', 'ok');
+    showTempBanner('上传成功', 'ok');
     hideTempBannerSoon();
     return {
       url: signData.public_url,
@@ -2195,7 +2274,7 @@ async function uploadFile(file) {
       alert(e.message);
       throw e;
     }
-    console.warn('TOS direct upload failed, falling back to server upload:', e);
+    console.warn('Direct upload failed, falling back to server upload:', e);
     try {
       return await uploadViaServer();
     } catch (fallbackError) {
@@ -2230,7 +2309,7 @@ function safeFetch(url, opts) {
 
 // ── State ────────────────────────────────────────────────────
 let characters = {};
-let assets = { outfits: [], scenes: [], audios: [] };
+let assets = { outfits: [], scenes: [], audios: [], uploads: [] };
 let history = [];
 let selectedRefs = [];
 let currentSideTab = 'chars';
@@ -2263,34 +2342,108 @@ let sessionImageResults = [];
 let sessionVideoResults = [];
 let skipImageCheck = false;
 let skipVideoCheck = false;
-const IMAGE_MODEL_LABELS = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'volc-seedream-4-5': 'Seedream 4.5' };
-const VIDEO_MODEL_LABELS = { 'seedance': 'Seedance', 'kling-v30-pro': 'Kling v3.0 Pro', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
+let apiProfileData = { api_profiles: {}, selected_api_profiles: {}, points: 0 };
+const IMAGE_MODEL_LABELS = { 'personal-api': '自己的 API', 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'agnes-image-2.1-flash': 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5' };
+const VIDEO_MODEL_LABELS = { 'personal-api': '自己的 API', 'seedance': 'Seedance', 'agnes-video-v2.0': 'Agnes Video v2.0', 'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine', 'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro' };
 
 // Mirror of app.py NANO_GPT_NAMES for frontend model filtering
-const NANO_GPT_NAMES = new Set(['kling-v30-pro','grok-imagine-video','vidu-q3','seedance-v15-pro']);
+const NANO_GPT_NAMES = new Set(['kling-v30-std','grok-imagine-video','vidu-q3','seedance-v15-pro']);
 
 // ── Init ─────────────────────────────────────────────────────
 let _initDone = false;
 async function init() {
   _debugLog('INIT', '开始初始化...');
+  const me = await fetch('/api/auth/me').then(r => r.json());
+  if (me.is_admin) document.getElementById('adminButton').style.display = '';
   // Load each API independently so one failure doesn't block others
   const fetchers = [
     safeFetch('/api/characters').then(r => r.json()).then(d => { characters = d || {}; }).catch(function(e) { console.error('加载角色失败:', e); }),
     safeFetch('/api/assets/outfits').then(r => r.json()).then(d => { assets.outfits = d || []; }).catch(function(e) { console.error('加载服装失败:', e); }),
     safeFetch('/api/assets/scenes').then(r => r.json()).then(d => { assets.scenes = d || []; }).catch(function(e) { console.error('加载场景失败:', e); }),
     safeFetch('/api/assets/audios').then(r => r.json()).then(d => { assets.audios = d || []; }).catch(function(e) { console.error('加载音频失败:', e); }),
+    safeFetch('/api/assets/uploads').then(r => r.json()).then(d => { assets.uploads = d || []; }).catch(function(e) { console.error('加载多图参考失败:', e); }),
     safeFetch('/api/styles').then(r => r.json()).then(d => { styles = d || []; }).catch(function(e) { console.error('加载风格失败:', e); }),
-    safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; }).catch(function(e) { console.error('加载历史失败:', e); })
+    safeFetch('/api/history').then(r => r.json()).then(d => { history = d || []; restoreRecentImageResults(); }).catch(function(e) { console.error('加载历史失败:', e); }),
+    safeFetch('/api/settings').then(r => r.json()).then(d => { apiProfileData = d || apiProfileData; }).catch(function(e) { console.error('加载接口配置失败:', e); })
   ];
   await Promise.allSettled(fetchers);
   _initDone = true;
   buildDurBtns();
   buildModelSelect();
   buildImageSelects();
+  buildApiProfileSelects();
   renderSidebar();
   updateRefSlots();
   // If already on history tab, re-render now that data is loaded
   if (currentMainTab === 'history') renderHistory();
+}
+
+function buildApiProfileSelects() {
+  ['text','image','video'].forEach(function(kind) {
+    const sel = document.getElementById(kind + 'ApiSelect');
+    if (!sel) return;
+    const profiles = (apiProfileData.api_profiles || {})[kind] || [];
+    const selected = (apiProfileData.selected_api_profiles || {})[kind];
+    sel.innerHTML = '';
+    if (!profiles.length) {
+      const option = document.createElement('option');
+      option.value = ''; option.textContent = '未接入（平台内置）';
+      sel.appendChild(option); sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    profiles.forEach(function(profile) {
+      const option = document.createElement('option');
+      option.value = profile.id;
+      option.textContent = profile.name + (profile.configured ? '' : '（缺少密钥）');
+      option.selected = profile.id === selected;
+      sel.appendChild(option);
+    });
+    sel.title = '当前生成使用这里选中的个人接口（不扣平台积分）';
+  });
+  syncApiRouteControls();
+}
+
+function syncApiRouteControls() {
+  const states = {
+    text: scriptModel === 'personal-api',
+    image: imageModel === 'personal-api',
+    video: videoModel === 'personal-api'
+  };
+  Object.keys(states).forEach(function(kind) {
+    const control = document.getElementById(kind + 'ApiControl');
+    if (control) control.style.display = states[kind] ? 'inline-flex' : 'none';
+  });
+}
+
+async function selectWorkbenchApi(kind, profileId) {
+  if (!profileId) return;
+  const sel = document.getElementById(kind + 'ApiSelect');
+  if (sel) sel.disabled = true;
+  try {
+    const res = await fetch('/api/settings/' + kind + '/' + encodeURIComponent(profileId) + '/select', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '切换接口失败');
+    apiProfileData.selected_api_profiles[kind] = profileId;
+    if (kind === 'video') {
+      videoModel = 'personal-api';
+      buildModelSelect();
+    } else if (kind === 'image') {
+      imageModel = 'personal-api';
+      buildImageSelects();
+    } else if (kind === 'text') {
+      scriptModel = 'personal-api';
+      document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46,#smPersonalApi').forEach(b => b.classList.toggle('active', b.id === 'smPersonalApi'));
+    }
+    syncApiRouteControls();
+    document.getElementById('projectStatus').textContent = '接口已切换';
+    setTimeout(function() { document.getElementById('projectStatus').textContent = '就绪'; }, 1200);
+  } catch (e) {
+    alert(e.message || '切换接口失败');
+    buildApiProfileSelects();
+  } finally {
+    if (sel) sel.disabled = false;
+  }
 }
 
 // ── Duration Buttons ─────────────────────────────────────────
@@ -2307,8 +2460,9 @@ function buildDurBtns() {
 }
 
 function setRatio(btn) {
+  if (btn.disabled) return;
   selectedRatio = btn.dataset.r;
-  document.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.ratio-btn[data-r]').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
 }
 
@@ -2326,6 +2480,8 @@ function toggleOptimize() {
 function setVideoModel(val) {
   videoModel = val;
   buildResSelect();
+  syncVideoModelControls();
+  syncApiRouteControls();
 }
 
 function updateVideoStyleSlot() {
@@ -2373,7 +2529,8 @@ async function buildModelSelect() {
     sel.innerHTML = '';
     const labels = {
       'seedance': 'Seedance (火山)',
-      'kling-v30-pro': 'Kling v3.0 Pro',
+      'agnes-video-v2.0': 'Agnes Video v2.0',
+      'kling-v30-std': 'Kling v3.0 Std',
       'grok-imagine-video': 'Grok Imagine',
       'vidu-q3': 'Vidu Q3',
       'seedance-v15-pro': 'Seedance v1.5 Pro',
@@ -2386,11 +2543,25 @@ async function buildModelSelect() {
       if (m === videoModel) opt.selected = true;
       sel.appendChild(opt);
     });
+    const personalProfiles = (apiProfileData.api_profiles || {}).video || [];
+    if (personalProfiles.length) {
+      const selectedId = (apiProfileData.selected_api_profiles || {}).video;
+      const selectedProfile = personalProfiles.find(p => p.id === selectedId) || personalProfiles[0];
+      const opt = document.createElement('option');
+      opt.value = 'personal-api';
+      opt.textContent = '自己的 API' + (selectedProfile ? ' · ' + selectedProfile.name : '');
+      opt.selected = videoModel === 'personal-api';
+      sel.appendChild(opt);
+    }
     // Disable nano models if not available
     if (!res.nano_available) {
       sel.querySelectorAll('option').forEach(opt => {
         if (NANO_GPT_NAMES.has(opt.value)) opt.disabled = true;
       });
+    }
+    if (!res.agnes_available) {
+      const agnesOption = sel.querySelector('option[value="agnes-video-v2.0"]');
+      if (agnesOption) agnesOption.disabled = true;
     }
     // Disable third-party if not available
     if (!res.third_party_available) {
@@ -2400,6 +2571,8 @@ async function buildModelSelect() {
     // Store model caps
     if (res.caps) modelCaps = res.caps;
     buildResSelect();
+    syncVideoModelControls();
+    syncApiRouteControls();
   } catch (e) {
     console.error('加载模型列表失败:', e);
   }
@@ -2408,7 +2581,7 @@ async function buildModelSelect() {
 function buildResSelect() {
   let sel = document.getElementById('resSelect');
   if (!sel) return;
-  const caps = modelCaps[videoModel] || {};
+  const caps = currentVideoCaps();
   const resolutions = caps.resolutions || ['480p','720p'];
   sel.innerHTML = '';
   resolutions.forEach(r => {
@@ -2424,6 +2597,88 @@ function buildResSelect() {
   }
 }
 
+function currentVideoCaps() {
+  if (videoModel !== 'personal-api') return modelCaps[videoModel] || {};
+  const profiles = (apiProfileData.api_profiles || {}).video || [];
+  const selectedId = (apiProfileData.selected_api_profiles || {}).video;
+  const profile = profiles.find(p => p.id === selectedId);
+  return (profile && (profile.capabilities || modelCaps[profile.model])) || {};
+}
+
+function slotSupportedByCurrentModel(slotName) {
+  const caps = currentVideoCaps();
+  if (slotName === 'firstframe') return caps.supports_first_frame !== false;
+  if (slotName === 'lastframe') return caps.supports_last_frame !== false;
+  if (slotName === 'video') return caps.supports_reference_video !== false;
+  if (slotName === 'audio') return caps.supports_reference_audio !== false;
+  if (['character','outfit','scene','storyboard','multiref'].includes(slotName)) {
+    return caps.supports_reference_images !== false;
+  }
+  return true;
+}
+
+function syncReferenceSlotCapabilities() {
+  document.querySelectorAll('.ref-slot[data-slot]').forEach(function(slot) {
+    const slotName = slot.dataset.slot;
+    const supported = slotSupportedByCurrentModel(slotName);
+    slot.classList.toggle('model-unsupported', !supported);
+    slot.setAttribute('aria-disabled', supported ? 'false' : 'true');
+    slot.title = supported ? '点击选择或上传' : '当前模型不支持' + getSlotLabel(slotName);
+  });
+}
+
+function syncVideoModelControls() {
+  const caps = currentVideoCaps();
+  const ratios = caps.ratios || [];
+  const ratioButtons = Array.from(document.querySelectorAll('.ratio-btn[data-r]'));
+  ratioButtons.forEach(function(btn) {
+    const supported = !ratios.length || ratios.includes(btn.dataset.r);
+    btn.disabled = !supported;
+    btn.title = supported ? '' : '当前模型不支持该比例';
+  });
+  if (ratios.length && !ratios.includes(selectedRatio)) {
+    const next = ratioButtons.find(function(btn) { return !btn.disabled; });
+    if (next) setRatio(next);
+  }
+
+  const minDuration = Number(caps.min_duration || 4);
+  const maxDuration = Number(caps.max_duration || 15);
+  const durationButtons = Array.from(document.querySelectorAll('.dur-btn'));
+  durationButtons.forEach(function(btn) {
+    const seconds = parseInt(btn.textContent, 10);
+    btn.disabled = seconds < minDuration || seconds > maxDuration;
+    btn.title = btn.disabled ? '当前模型不支持该时长' : '';
+  });
+  if (selectedDuration < minDuration || selectedDuration > maxDuration) {
+    const next = durationButtons.find(function(btn) { return !btn.disabled; });
+    if (next) setDuration(parseInt(next.textContent, 10), next);
+  }
+  syncReferenceSlotCapabilities();
+}
+
+function restoreRecentImageResults() {
+  const recent = (history || []).filter(function(item) {
+    return item && item.type === 'image' && item.image_url;
+  }).slice(0, 20);
+  sessionImageResults = recent.slice().reverse().map(function(item) {
+    return {
+      url: item.image_url,
+      name: item.name || '历史图片',
+      time: item.time || '',
+      model: item.model || '',
+      ratio: item.ratio || '-',
+      prompt: item.script || item.original_script || '',
+      refCount: item.ref_count || 0
+    };
+  });
+  if (!imageStash.length) {
+    imageStash = recent.map(function(item) {
+      return { url: item.image_url, name: item.name || '历史图片' };
+    });
+    activeStashIdx = imageStash.length ? 0 : -1;
+  }
+}
+
 // ── Image Gen UI ─────────────────────────────────────────────
 async function buildImageSelects() {
   try {
@@ -2431,15 +2686,26 @@ async function buildImageSelects() {
     // Model select
     const mSel = document.getElementById('imageModelSelect');
     mSel.innerHTML = '';
-    const labels = { 'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney', 'volc-seedream-4-5': 'Seedream 4.5' };
+    const labels = IMAGE_MODEL_LABELS;
     (res.models || []).forEach(m => {
       const opt = document.createElement('option');
       opt.value = m;
       opt.textContent = labels[m] || m;
       if (m === imageModel) opt.selected = true;
+      if (m === 'agnes-image-2.1-flash' && !res.agnes_available) opt.disabled = true;
       mSel.appendChild(opt);
     });
-    mSel.onchange = () => { imageModel = mSel.value; };
+    const personalProfiles = (apiProfileData.api_profiles || {}).image || [];
+    if (personalProfiles.length) {
+      const selectedId = (apiProfileData.selected_api_profiles || {}).image;
+      const selectedProfile = personalProfiles.find(p => p.id === selectedId) || personalProfiles[0];
+      const opt = document.createElement('option');
+      opt.value = 'personal-api';
+      opt.textContent = '自己的 API' + (selectedProfile ? ' · ' + selectedProfile.name : '');
+      opt.selected = imageModel === 'personal-api';
+      mSel.appendChild(opt);
+    }
+    mSel.onchange = () => { imageModel = mSel.value; syncApiRouteControls(); };
     // Ratio select
     const rSel = document.getElementById('imageRatioSelect');
     rSel.innerHTML = '';
@@ -2455,6 +2721,7 @@ async function buildImageSelects() {
       const customInput = document.getElementById('customSizeInput');
       customInput.style.display = imageRatio === 'custom' ? 'inline-block' : 'none';
     };
+    syncApiRouteControls();
   } catch (e) {
     console.error('加载图片模型失败:', e);
   }
@@ -2469,6 +2736,14 @@ async function generateImage() {
 
 async function _doGenerateImage() {
   const userInput = document.getElementById('imagePrompt').value.trim();
+  if (selectedTemplate === 'outfit_ref' && imageRefs.length === 0) {
+    alert('请先上传原人物三视图。');
+    return;
+  }
+  if (selectedTemplate === 'outfit_ref' && imageRefs.length < 2 && !userInput) {
+    alert('请再上传服装照片，或在补充要求里填写服装描述。');
+    return;
+  }
   // Combine template + user supplement
   // storyboard template: user content first, template rules appended
   const templateText = selectedTemplate ? (PROMPT_TEMPLATES[selectedTemplate] || '') : '';
@@ -2493,7 +2768,7 @@ async function _doGenerateImage() {
     res = await fetch('/api/generate-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, image_model: imageModel, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map(r => ({ url: r.url })), style_id: selectedStyleId || undefined })
+      body: JSON.stringify({ prompt, image_model: imageModel, use_personal_api: imageModel === 'personal-api', api_profile_id: imageModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).image : undefined, ratio: imageRatio, custom_size: imageCustomSize, mode: 'storyboard', input_images: imageRefs.map((r, i) => ({ url: r.url, role_label: imageRefRole(i) })), style_id: selectedStyleId || undefined })
     }).then(function(r) { return r.json(); });
   } catch (e) {
     sessionImageResults = sessionImageResults.filter(function(r) { return !r.generating; });
@@ -2561,7 +2836,7 @@ function renderImageResults(generating) {
   if (totalOk > 0) {
     html += '<div class="result-section-header" style="display:flex;align-items:center;gap:8px;padding:8px 0 4px;border-bottom:1px solid var(--border);margin-bottom:8px;">' +
       '<span style="font-size:14px;">📸</span>' +
-      '<span style="font-size:12px;font-weight:600;color:var(--text);">本次图片结果</span>' +
+      '<span style="font-size:12px;font-weight:600;color:var(--text);">最近图片结果</span>' +
       '<span style="font-size:10px;color:var(--text-muted);">共 ' + totalOk + ' 张</span>' +
       '</div>';
   }
@@ -2743,14 +3018,15 @@ async function confirmNewLibItem() {
 
 // ── Prompt Templates ────────────────────────────────────────
 const PROMPT_TEMPLATES = {
-  scene_angle: '基于参考图生成同一场景的另一个机位视角。保持空间结构、装修风格、主要家具、材质、色调、光线方向一致。改变镜头位置和构图，让画面像同一真实空间中的连续镜头。不要改变房间类型，不要新增不合理家具，不要让门窗、楼梯、沙发、桌椅位置逻辑混乱。真人短剧质感，真实摄影风格，画面清晰，适合后续图生视频。',
-  char_turnaround: '基于参考人物生成同一角色的三视图设定图：正面、侧面、背面。保持同一人物身份、脸型轮廓、五官比例、发型、发色、身材比例、服装款式和颜色完全一致。三视图按所选比例合理排列展示，站姿自然，光线均匀，背景简洁。不要换脸，不要改变年龄，不要改变性别，不要改变服装，不要生成不同人物。真人短剧角色定妆照质感，高清清晰。',
-  char_portrait: '基于参考人物生成真人短剧角色定妆照。保持人物身份特征、脸型轮廓、五官比例、发型、发色、气质和服装主特征一致。生成真实人物质感，五官清晰，皮肤自然，表情自然有戏，适合短剧角色档案和后续视频参考。避免廉价网红脸、过度磨皮、塑料感、年龄漂移、性别变化、欧美化、脸部变形。构图适配所选比例，主体突出不裁切关键部位，柔和棚拍光，背景简洁。',
-  outfit_ref: '基于参考图生成真人短剧服装参考图。重点保持服装款式、颜色、面料质感、版型、领口、袖口、腰线、配饰和整体穿搭风格一致。人物姿态自然，服装完整清晰可见，正面展示为主。不要改变服装设计，不要让衣服穿模，不要增加多余配饰，不要遮挡关键服装细节。真实摄影质感，背景简洁，适合后续作为服装参考图。',
-  storyboard: '基于当前剧情生成一张专业导演分镜构图参考图，用于后续视频生成。画面可以采用导演分镜板形式，展示同一段剧情的关键镜头设计。可以包含 3-9 个小画面，每个小画面代表一个镜头构图，例如远景、全景、中景、近景、特写、高角度、低角度、侧面、背影、俯拍等。每个小画面必须围绕同一场景、同一组人物和同一段剧情，不要生成无关画面。每个小画面要清楚表达镜头景别、机位角度、人物站位、主体动作、情绪重点、场景空间关系、前景/中景/背景层次和光线氛围。人物脸部只需要表达大致方向和表情，不要过于具体，不要生成真实明星脸或固定真人身份。重点是镜头构图、人物站位、动作关系、景别变化和场景调度。可以有简单镜头标记或景别缩写，但不要出现大段文字。不要生成字幕、对白气泡、水印、Logo。构图清晰，画面可读性强。风格跟随当前选择的风格库，如果没有选择风格，使用电影导演分镜板风格，画面干净，镜头感强，光影明确。',
-  group_photo: '基于多张人物参考图，生成这些角色在同一场景中的合照。保持每个角色各自的脸型、五官、发型、年龄感、气质和服装特征，不要混脸，不要换脸，不要把一个人的五官套到另一个人身上。人物站位自然，比例正确，互动关系清楚，真人短剧质感，真实摄影风格，画面清晰。',
-  scene_master: '生成一个可长期复用的真人短剧场景母图。场景空间结构清楚，主要家具和关键物件位置明确，风格统一，光线稳定，适合后续多个镜头反复参考。画面中不要出现人物，不要出现文字、水印、商标。构图尽量展示完整空间关系，真实摄影风格，高清清晰。',
-  video_first_frame: '生成适合作为图生视频首帧的画面。主体清楚，动作处于可继续运动的起始状态，人物表情自然，画面边缘不要裁切头部和身体关键部位。背景稳定，光线统一，构图适合后续镜头运动。不要加入文字、水印、边框、拼贴元素。真人短剧摄影质感，高清清晰。'
+  scene_angle: '任务：基于参考图生成同一场景的另一个机位视角。保持空间结构、装修、主要家具、材质、色调和光线方向一致；只改变镜头位置、视角和构图。不得改变房间类型，不得新增不合理物件，不得破坏门窗、楼梯、沙发、桌椅的位置关系。画面清晰，适合后续图生视频。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  char_turnaround: '任务：生成横向角色三视图设定图。版式严格分为左右两区：左侧约占画面 40%，放同一角色的正面头肩近景；右侧约占 60%，从左到右放同一角色的全身正面、90度侧面、背面。右侧三个人物必须从头到脚完整显示，等高、同一比例、同一基线、间距均匀。四个视图必须是同一人物，脸型、五官、年龄、发型、发色、身材、服装、鞋子和配饰完全一致；仅视角不同。背景纯净，光线均匀。不得裁切头脚，不得增加人物，不得换脸、换装或改变体型，不得添加文字、边框、Logo、水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  character_sheet: '任务：生成一张横向人物设定卡。版式包含：左侧角色主肖像与简短资料区；中间同一角色的全身正面、四分之三侧面、90度侧面、背面；右上色板；右侧脸部、眼睛、手部、服装材质等细节特写；底部服装、鞋子、配饰和随身物品的拆解展示。所有视图必须属于同一人物，身份、五官、发型、身材、服装和配色完全一致。用户提供了姓名、年龄、职业、性格等资料时才展示对应短标签；未提供时留出整洁信息区，不编造长文。构图整齐，分区清楚，主体不裁切，不生成无关人物，不添加水印或Logo。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  char_portrait: '任务：基于参考人物生成角色定妆照。保持人物身份、脸型、五官比例、年龄、发型、发色、气质和服装主特征一致。主体突出，关键部位不裁切，背景简洁。不得换脸、改变年龄或性别，不得增加人物，不得添加文字、Logo或水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  outfit_ref: '任务：给原角色更换服装，并输出与原图相同版式的横向三视图。参考图1是原人物三视图，只用于锁定角色身份、脸型、五官、年龄、发型、发色、身材比例和版式；参考图2若存在，是目标服装照片，只用于锁定服装款式、颜色、面料、版型、领口、袖口、腰线、鞋子和配饰。若没有参考图2，则严格采用用户的文字服装描述。输出左侧正面头肩近景，右侧全身正面、90度侧面、背面；四个视图必须是同一人物并穿同一套新服装，右侧三视图等高、同一基线、从头到脚完整显示。只更换服装，不改变人物身份、发型、身材、姿态基准、背景和原有视觉风格。不得混用两张参考图的用途，不得保留旧服装，不得增加人物，不得裁切头脚，不得添加文字、Logo或水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图1风格。',
+  storyboard: '任务：基于当前剧情生成一张导演分镜构图参考图，用于后续视频生成。使用 3-9 个小画面展示同一场景、同一组人物、同一段剧情的关键镜头；覆盖远景、全景、中景、近景、特写、高低机位、侧面、背影或俯拍等必要变化。每格明确景别、机位、人物站位、动作、情绪重点、空间层次、光线和运镜方向。人物身份与服装保持一致，不生成无关画面。只允许简短镜头标记，不得出现大段文字、字幕、对白气泡、Logo或水印。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  group_photo: '任务：基于多张人物参考图，生成这些角色在同一场景中的合照。分别保持每个角色的脸型、五官、年龄、发型、气质和服装特征；不得混脸、换脸或交换服装。人物站位自然，比例正确，互动关系清楚，画面清晰。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  scene_master: '任务：生成可长期复用的场景母图。空间结构清楚，主要家具和关键物件位置明确，光线稳定，适合后续镜头重复参考。画面中不得出现人物、文字、Logo、水印或商标；构图应完整展示空间关系。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。',
+  video_first_frame: '任务：生成适合作为图生视频首帧的画面。主体清楚，动作处于可继续运动的起始状态，表情与姿态自然，画面边缘不得裁切头部或身体关键部位。背景稳定，光线统一，构图支持后续镜头运动。不得添加文字、边框、Logo、水印或拼贴元素。视觉风格只跟随用户选择的风格或文字要求；未指定时保持参考图风格。'
 };
 function applyTemplate(key) {
   if (!key) return;
@@ -2763,14 +3039,29 @@ function applyTemplate(key) {
   if (btn) btn.classList.add('active');
   // Show status bar
   const labels = {
-    scene_angle: '场景换视角', char_turnaround: '角色三视图', char_portrait: '真人短剧定妆',
-    outfit_ref: '服装参考', storyboard: '分镜构图', group_photo: '人物同场合照',
+    scene_angle: '场景换视角', char_turnaround: '角色三视图', character_sheet: '人物设定卡', char_portrait: '角色定妆照',
+    outfit_ref: '服装替换三视图', storyboard: '分镜构图', group_photo: '人物同场合照',
     scene_master: '场景母图', video_first_frame: '视频首帧'
   };
   document.getElementById('templateLabel').textContent = '已选模板：' + (labels[key] || key);
   document.getElementById('templateStatus').style.display = 'flex';
   document.getElementById('templateDetail').style.display = 'none';
   document.getElementById('templateDetail').textContent = PROMPT_TEMPLATES[key] || '';
+  const hints = {
+    char_turnaround: '参考图：上传角色原图。输出：左侧脸部近景 + 右侧正面 / 侧面 / 背面全身。',
+    character_sheet: '参考图：上传角色图。补充要求：填写姓名、年龄、职业、性格及需要展示的细节。',
+    outfit_ref: '① 上传原人物三视图（必传）  ② 再上传服装照片，或直接填写服装文字描述。'
+  };
+  const hint = document.getElementById('templateHint');
+  hint.textContent = hints[key] || '';
+  hint.style.display = hints[key] ? 'block' : 'none';
+  const placeholders = {
+    char_turnaround: '补充角色信息或本次调整要求（可选）',
+    character_sheet: '姓名、年龄、职业、性格、服装及需要展示的细节',
+    outfit_ref: '服装文字描述；已上传服装照片时可补充修改要求'
+  };
+  document.getElementById('imagePrompt').placeholder = placeholders[key] || '写你的补充要求';
+  renderImageRefs();
 }
 
 function cancelTemplate() {
@@ -2778,6 +3069,9 @@ function cancelTemplate() {
   document.querySelectorAll('.tpl-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('templateStatus').style.display = 'none';
   document.getElementById('templateDetail').style.display = 'none';
+  document.getElementById('templateHint').style.display = 'none';
+  document.getElementById('imagePrompt').placeholder = '写你的补充要求，例如：换成夜晚、镜头从楼梯上方俯拍、保持红色沙发';
+  renderImageRefs();
 }
 
 function toggleTemplateDetail() {
@@ -2854,9 +3148,21 @@ function renderImageRefs() {
   container.innerHTML = imageRefs.map((ref, i) => `
     <div class="image-ref-item">
       <img src="${ref.url}" loading="lazy">
+      <span class="image-ref-role">${imageRefRole(i)}</span>
       <button class="ref-del" onclick="removeImageRef(${i})">✕</button>
     </div>`).join('');
   document.getElementById('refModelHint').textContent = `已选 ${imageRefs.length} 张`;
+}
+
+function imageRefRole(index) {
+  if (selectedTemplate === 'outfit_ref') {
+    if (index === 0) return '原人物三视图';
+    if (index === 1) return '服装照片';
+    return '辅助参考';
+  }
+  if (selectedTemplate === 'char_turnaround') return index === 0 ? '角色参考' : '辅助参考';
+  if (selectedTemplate === 'character_sheet') return index === 0 ? '角色参考' : '细节参考';
+  return imageRefs[index]?.name || '参考图';
 }
 
 function addImageRef(url, name) {
@@ -2936,6 +3242,10 @@ function switchMainTab(tab) {
       renderHistory();
     }
   }
+  if (tab === 'imageGen' && sessionImageResults.length) {
+    renderImageResults(false);
+    renderStash();
+  }
 }
 
 function switchSideTab(tab) {
@@ -2949,7 +3259,7 @@ function switchSideTab(tab) {
 function switchAtTab(tab) {
   currentAtTab = tab;
   document.querySelectorAll('.at-tab').forEach((el, i) => {
-    el.classList.toggle('active', ['chars', 'outfits', 'scenes', 'audios', 'history'][i] === tab);
+    el.classList.toggle('active', ['chars', 'outfits', 'scenes', 'uploads', 'audios', 'history'][i] === tab);
   });
   renderAtGrid();
 }
@@ -3235,16 +3545,40 @@ function deleteAsset(cat, idx) {
 function openDirectUpload() {
   const inp = document.getElementById('directFileInput');
   inp.onchange = async () => {
-    const f = inp.files[0];
-    if (!f) return;
-    const r = await uploadFile(f);
-    const isVideo = f.type.startsWith('video/');
-    selectRef({
-      url: r.url,
-      role_label: isVideo ? '参考视频' : '多图参考',
-      type: isVideo ? 'video' : 'image',
-      name: f.name
-    });
+    const files = Array.from(inp.files || []);
+    if (!files.length) return;
+
+    let uploadsChanged = false;
+    let skippedImages = 0;
+    for (const f of files) {
+      let r;
+      try { r = await uploadFile(f); } catch (e) { continue; }
+      const isVideo = f.type.startsWith('video/');
+      const ref = {
+        url: r.url,
+        role_label: isVideo ? '参考视频' : '多图参考',
+        type: isVideo ? 'video' : 'image',
+        name: f.name
+      };
+      if (!isVideo && !assets.uploads.some(a => a.url === ref.url)) {
+        assets.uploads.push({ url: ref.url, name: ref.name });
+        uploadsChanged = true;
+      }
+      if (isVideo || selectedRefs.filter(item => item.type === 'image').length < 10) {
+        selectRef(ref);
+      } else {
+        skippedImages += 1;
+      }
+    }
+    if (uploadsChanged) {
+      const saveRes = await fetch('/api/assets/uploads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assets.uploads)
+      });
+      if (!saveRes.ok) alert('多图参考已上传，但素材列表保存失败，请稍后重试');
+    }
+    if (skippedImages) alert('图片参考已达上限10张，其余图片已保存到“多图参考”素材库');
   };
   inp.value = ''; inp.click();
 }
@@ -3338,6 +3672,22 @@ function renderAtGrid() {
       html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"场景参考",type:"image",name:a.name||("场景"+i)})})'>
         <img src="${a.url}" loading="lazy"><div class="at-label">${escHtml(a.name||'')}</div></div>`;
     });
+  } else if (currentAtTab === 'uploads') {
+    if (!assets.uploads.length) {
+      html = `<div class="at-empty">暂无多图参考，请点击左侧“＋”上传</div>`;
+    } else {
+      const selectedCount = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0).length;
+      html += `<div class="at-upload-summary"><span>点击图片选择或取消，已选 ${selectedCount}/10 张</span><button onclick="closeAtPicker()">完成</button></div>`;
+      assets.uploads.slice().reverse().forEach((a, i) => {
+        const originalIdx = assets.uploads.length - 1 - i;
+        const selected = selectedRefs.some(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url);
+        html += `<div class="at-item${selected ? ' selected' : ''}" onclick="toggleUploadedRef(${originalIdx})">
+          <img src="${escAttr(a.url)}" loading="lazy">
+          ${selected ? '<span class="at-check">✓</span>' : ''}
+          <button class="at-delete" aria-label="删除参考图" title="删除参考图" onclick="event.stopPropagation();deleteUploadedRef(${originalIdx})">✕</button>
+          <div class="at-label">${escHtml(a.name||'多图参考')}</div></div>`;
+      });
+    }
   } else if (currentAtTab === 'audios') {
     assets.audios.forEach((a, i) => {
       html += `<div class="at-item" onclick='selectRef(${JSON.stringify({url:a.url,role_label:"参考音频",type:"audio",name:a.name||("音频"+i)})})'>
@@ -3352,6 +3702,48 @@ function renderAtGrid() {
   }
   if (!html) html = `<div class="at-empty">暂无素材，请先上传</div>`;
   grid.innerHTML = html;
+}
+
+function toggleUploadedRef(idx) {
+  const a = assets.uploads[idx];
+  if (!a) return;
+  const selectedIdx = selectedRefs.findIndex(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url);
+  if (selectedIdx >= 0) {
+    removeInlineRef(selectedRefs[selectedIdx]);
+    selectedRefs.splice(selectedIdx, 1);
+  } else {
+    const imgCount = selectedRefs.filter(r => r.type === 'image').length;
+    if (imgCount >= 10) {
+      alert('图片参考已达模型接口上限10张，请先取消一张');
+      return;
+    }
+    const ref = { url: a.url, role_label: '多图参考', type: 'image', name: a.name || '多图参考' };
+    insertInlineRef(ref);
+    selectedRefs.push(ref);
+  }
+  updateRefSlots();
+  renderAtGrid();
+}
+
+async function deleteUploadedRef(idx) {
+  const a = assets.uploads[idx];
+  if (!a || !confirm('确定从多图参考素材库删除“' + (a.name || '这张图片') + '”吗？')) return;
+  const nextUploads = assets.uploads.filter((_, i) => i !== idx);
+  const saveRes = await fetch('/api/assets/uploads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(nextUploads)
+  });
+  if (!saveRes.ok) {
+    alert('删除失败，请稍后重试');
+    return;
+  }
+  const removedRefs = selectedRefs.filter(r => r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url);
+  removedRefs.forEach(removeInlineRef);
+  selectedRefs = selectedRefs.filter(r => !(r.type === 'image' && (r.role_label || '').indexOf('多图') >= 0 && r.url === a.url));
+  assets.uploads = nextUploads;
+  updateRefSlots();
+  renderAtGrid();
 }
 
 // ── Inline Ref Insertion ─────────────────────────────────────
@@ -3553,11 +3945,65 @@ function updateSlotUI(slotName, refs) {
 
 // ── Focus / Clear Slots ──────────────────────────────────────
 function focusSlot(slotName) {
-  const tabMap = { character: 'chars', outfit: 'outfits', scene: 'scenes', audio: 'audios', video: 'history' };
+  const tabMap = { character: 'chars', outfit: 'outfits', scene: 'scenes', multiref: 'uploads', audio: 'audios', video: 'history' };
   if (tabMap[slotName]) {
     switchAtTab(tabMap[slotName]);
     openAtPicker();
   }
+}
+
+const SLOT_UPLOAD_CONFIG = {
+  character: { accept: 'image/*', multiple: true, role: '角色参考', type: 'image' },
+  outfit: { accept: 'image/*', multiple: true, role: '服装参考', type: 'image' },
+  scene: { accept: 'image/*', multiple: true, role: '场景参考', type: 'image' },
+  storyboard: { accept: 'image/*', multiple: false, role: '分镜构图参考', type: 'image', replace: true },
+  firstframe: { accept: 'image/*', multiple: false, role: '首帧图', type: 'image', replace: true },
+  lastframe: { accept: 'image/*', multiple: false, role: '尾帧图', type: 'image', replace: true },
+  multiref: { accept: 'image/*', multiple: true, role: '多图参考', type: 'image' },
+  audio: { accept: 'audio/*', multiple: false, role: '参考音频', type: 'audio', replace: true },
+  video: { accept: 'video/*', multiple: false, role: '参考视频', type: 'video', replace: true }
+};
+
+function handleSlotClick(slotEl, slotName) {
+  if (!slotSupportedByCurrentModel(slotName)) {
+    alert('当前模型不支持' + getSlotLabel(slotName) + '，请更换模型后再上传');
+    return;
+  }
+  const refs = getSlotRefs(slotName);
+  if (refs.length) showSlotGallery(slotEl, slotName);
+  else openSlotUpload(slotName);
+}
+
+function openSlotUpload(slotName) {
+  if (!slotSupportedByCurrentModel(slotName)) {
+    alert('当前模型不支持' + getSlotLabel(slotName));
+    return;
+  }
+  const config = SLOT_UPLOAD_CONFIG[slotName];
+  const input = document.getElementById('slotFileInput');
+  if (!config || !input) return;
+  input.accept = config.accept;
+  input.multiple = config.multiple;
+  input.onchange = async function() {
+    const files = Array.from(input.files || []);
+    if (!files.length) return;
+    let replaced = false;
+    for (const file of files) {
+      try {
+        const uploaded = await uploadFile(file);
+        if (config.replace && !replaced) {
+          clearSlot(slotName);
+          replaced = true;
+        }
+        selectRef({ url: uploaded.url, role_label: config.role, type: config.type, name: file.name });
+      } catch (e) {
+        console.error('槽位上传失败:', slotName, e);
+      }
+    }
+    closeSlotGallery();
+  };
+  input.value = '';
+  input.click();
 }
 
 // ── Slot Gallery Popover ─────────────────────────────────────
@@ -3590,14 +4036,21 @@ function showSlotGallery(slotEl, slotName) {
   grid.innerHTML = refs.map(function(r, i) {
     var url = r.url || '';
     var label = r.role_label || r.name || '';
+    var preview = r.type === 'video'
+      ? '<video src="' + escAttr(url) + '" muted playsinline></video>'
+      : r.type === 'audio'
+        ? '<div class="at-audio"><div class="icon">🎵</div><div>' + escHtml(r.name || '音频') + '</div></div>'
+        : '<img src="' + escAttr(url) + '" loading="lazy" onclick="viewSlotImage(\'' + escAttr(url) + '\')">';
     return '<div class="slot-gallery-item" title="' + escAttr(label) + '">' +
-      '<img src="' + escAttr(url) + '" loading="lazy" onclick="viewSlotImage(\'' + escAttr(url) + '\')">' +
+      preview +
       '<button class="gallery-item-del" onclick="event.stopPropagation();removeSlotRef(\'' + slotName + '\',' + i + ')">✕</button>' +
       '</div>';
   }).join('');
 
   var footer = document.getElementById('slotGalleryFooter');
-  footer.innerHTML = '<button class="ratio-btn" onclick="clearSlot(\'' + slotName + '\')">清空此槽</button>';
+  var uploadLabel = SLOT_UPLOAD_CONFIG[slotName] && SLOT_UPLOAD_CONFIG[slotName].replace ? '替换' : '继续上传';
+  footer.innerHTML = '<button class="ratio-btn" onclick="openSlotUpload(\'' + slotName + '\')">' + uploadLabel + '</button>' +
+    '<button class="ratio-btn" onclick="clearSlot(\'' + slotName + '\')">清空此槽</button>';
 }
 
 function closeSlotGallery() {
@@ -3812,7 +4265,7 @@ function checkBeforeVideoGen(callback) {
   if (!storyRef && !firstRef) warnings.push('没有分镜参考且没有首帧，构图可能随机');
   if (promptLen < 20) warnings.push('prompt太短，动作和情绪可能不明确');
   if (selectedRefs.length > 6) warnings.push('参考图超过6张，可能互相干扰');
-  if (videoModel === 'kling-v30-pro' || videoModel === 'vidu-q3') warnings.push('当前模型成本较高');
+  if (videoModel === 'kling-v30-std' || videoModel === 'vidu-q3') warnings.push('当前模型成本较高');
   openCheckModal('视频生成前检查', items, warnings, 'video', callback);
 }
 
@@ -3837,9 +4290,26 @@ async function _doGenerate() {
   const firstFrame = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('首帧') >= 0);
   const lastFrame = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('尾帧') >= 0);
   const storyboard = selectedRefs.find(r => r.type === 'image' && (r.role_label || '').indexOf('分镜构图') >= 0);
+  const caps = currentVideoCaps();
+  const usableImages = images.filter(function(image) {
+    const label = image.role_label || '';
+    if (label.indexOf('首帧') >= 0 || label.indexOf('尾帧') >= 0 || label.indexOf('分镜构图') >= 0) return false;
+    return caps.supports_reference_images !== false;
+  });
+  const usableAudio = caps.supports_reference_audio === false ? null : audio;
+  const usableVideo = caps.supports_reference_video === false ? null : video;
+  const usableFirstFrame = caps.supports_first_frame === false ? null : firstFrame;
+  const usableLastFrame = caps.supports_last_frame === false ? null : lastFrame;
+  const usableStoryboard = caps.supports_reference_images === false ? null : storyboard;
+  const strictSeedanceFrames = videoModel === 'seedance' && !!usableFirstFrame;
+
+  if (videoModel === 'seedance' && usableLastFrame && !usableFirstFrame) {
+    alert('Seedance 严格尾帧模式必须同时选择首帧图');
+    return;
+  }
 
   document.getElementById('sendBtn').disabled = true;
-  document.getElementById('projectStatus').textContent = '生成中...';
+  document.getElementById('projectStatus').textContent = strictSeedanceFrames ? '首尾帧严格模式生成中...' : '生成中...';
   const currentRatio2 = selectedRatio;
   const currentDuration2 = selectedDuration;
   const currentResolution2 = selectedResolution;
@@ -3856,16 +4326,18 @@ async function _doGenerate() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         script,
-        images,
-        audio_url: audio ? audio.url : undefined,
-        video_url: video ? video.url : undefined,
-        first_frame_url: firstFrame ? firstFrame.url : undefined,
-        last_frame_url: lastFrame ? lastFrame.url : undefined,
-        storyboard_ref_url: storyboard ? storyboard.url : undefined,
+        images: strictSeedanceFrames ? [] : usableImages,
+        audio_url: !strictSeedanceFrames && usableAudio ? usableAudio.url : undefined,
+        video_url: !strictSeedanceFrames && usableVideo ? usableVideo.url : undefined,
+        first_frame_url: usableFirstFrame ? usableFirstFrame.url : undefined,
+        last_frame_url: usableLastFrame ? usableLastFrame.url : undefined,
+        storyboard_ref_url: !strictSeedanceFrames && usableStoryboard ? usableStoryboard.url : undefined,
         ratio: selectedRatio,
         duration: selectedDuration,
         optimize_prompt: optimizePrompt,
         video_model: videoModel,
+        use_personal_api: videoModel === 'personal-api',
+        api_profile_id: videoModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).video : undefined,
         style_id: videoStyleId || undefined,
         resolution: selectedResolution
       })
@@ -3878,6 +4350,15 @@ async function _doGenerate() {
         <div class="icon">⚠️</div>
         <p>网络错误，请检查连接后重试</p>
       </div>`;
+    return;
+  }
+
+  if (res.error || !res.job_id) {
+    document.getElementById('sendBtn').disabled = false;
+    document.getElementById('projectStatus').textContent = '就绪';
+    sessionVideoResults = sessionVideoResults.filter(v => !v.generating);
+    sessionVideoResults.push({ error: res.error || '提交失败', time: new Date().toLocaleString(), ratio: currentRatio2, duration: currentDuration2, resolution: currentResolution2, model: currentVModel2, prompt: currentPrompt2, tags: [] });
+    renderVideoResults();
     return;
   }
 
@@ -3902,7 +4383,8 @@ async function pollJob(jobId, meta) {
       sessionVideoResults = sessionVideoResults.filter(v => !v.generating);
       sessionVideoResults.push({
         url: r.video_url, time: new Date().toLocaleString(),
-        ratio: meta.ratio, duration: meta.duration, resolution: meta.resolution,
+        ratio: r.ratio || meta.ratio, duration: r.duration || meta.duration,
+        resolution: r.resolution || meta.resolution, size: r.size || '',
         model: meta.model, prompt: meta.prompt, refCount: meta.refCount,
         tags: ['原始']
       });
@@ -3933,7 +4415,8 @@ function renderVideoResults() {
       '</div>';
   }
 
-  sessionVideoResults.slice().reverse().forEach(function(v, revIdx) {
+  const newestFirst = sessionVideoResults.slice().reverse();
+  newestFirst.forEach(function(v, revIdx) {
     const idx = sessionVideoResults.length - 1 - revIdx;
     if (v.generating) {
       var ar = (v.ratio || '9:16').replace(':', '/');
@@ -3958,23 +4441,25 @@ function renderVideoResults() {
       if (tgs.indexOf('已入历史') >= 0) tagsHtml += '<span class="meta-badge" style="background:#059669;color:#fff;font-size:9px;">📋 已入历史</span>';
       if (tgs.indexOf('已设为上一段') >= 0) tagsHtml += '<span class="meta-badge" style="background:#d97706;color:#fff;font-size:9px;">🔗 已设为上一段</span>';
 
+      var playableUrl = '/api/history/media?url=' + encodeURIComponent(v.url || '');
       html += '<div class="result-card" style="margin:0;" id="vcard_' + idx + '">' +
         (tagsHtml ? '<div style="display:flex;gap:4px;flex-wrap:wrap;padding:6px 8px 0;">' + tagsHtml + '</div>' : '') +
-        '<video src="' + escAttr(v.url) + '" controls playsinline preload="metadata" onclick="event.preventDefault();openVideoLightbox(\'' + escAttr(v.url) + '\',' + idx + ')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="cursor:pointer;"></video>' +
+        '<video src="' + escAttr(playableUrl) + '" controls playsinline preload="metadata" onclick="event.preventDefault();openVideoLightbox(\'' + escAttr(playableUrl) + '\',' + idx + ',\'' + escAttr(v.url) + '\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" style="cursor:pointer;"></video>' +
         '<div class="video-fallback" style="display:none;aspect-ratio:9/16;align-items:center;justify-content:center;background:var(--surface3);color:var(--text-muted);font-size:13px;gap:8px;flex-direction:column;min-height:150px;">' +
         '<span style="font-size:28px;">🎬</span><span>视频加载失败</span>' +
-        '<a href="' + escAttr(v.url) + '" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a></div>' +
+        '<a href="/api/history/media?download=1&amp;url=' + encodeURIComponent(v.url || '') + '" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a></div>' +
         '<div class="result-meta"><div class="meta-left">' +
         '<span class="meta-badge">' + (VIDEO_MODEL_LABELS[v.model] || v.model) + '</span>' +
         '<span class="meta-badge">' + (v.ratio || '-') + '</span>' +
         '<span class="meta-badge">' + (v.duration || '-') + 's</span>' +
         '<span class="meta-badge">' + (v.resolution || '720p') + '</span>' +
+        (v.size ? '<span class="meta-badge">' + escHtml(v.size) + '</span>' : '') +
         '<span class="meta-badge" style="font-size:9px;color:var(--text-muted);">' + v.time + '</span>' +
         '</div></div>' +
         '<div style="font-size:10px;color:var(--text-muted);padding:0 8px 6px;">' + escHtml(v.prompt || '') + ' · 素材 ' + (v.refCount || 0) + '</div>' +
         '<div class="result-actions" style="padding:0 8px 8px;display:flex;flex-wrap:wrap;gap:4px;">' +
         '<button onclick="copyVideoLink(\'' + escAttr(v.url) + '\',this)" title="复制链接">📋 复制链接</button>' +
-        '<button onclick="window.open(\'' + escAttr(v.url) + '\')" title="下载视频">⬇ 下载</button>' +
+        '<button onclick="downloadGeneratedVideo(\'' + escAttr(v.url) + '\')" title="下载视频">⬇ 下载</button>' +
         '<button onclick="upscaleVideo(\'' + escAttr(v.url) + '\',\'' + (v.ratio || '9:16') + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' +
         '<button onclick="extractAndSetFrame(\'' + escAttr(v.url) + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' +
         '<button onclick="extractAndSetFrame(\'' + escAttr(v.url) + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' +
@@ -3996,11 +4481,8 @@ function renderVideoResults() {
   }
   el.innerHTML = html;
 
-  // Auto-scroll to latest result
-  var lastCard = el.querySelector('.result-card:last-of-type');
-  if (lastCard) {
-    lastCard.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }
+  // The newest result is rendered first, so keep the result area at the top.
+  el.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function showResult(url) {
@@ -4010,7 +4492,7 @@ function showResult(url) {
 // ── Video Lightbox ───────────────────────────────────────────
 var _lightboxVideoIdx = -1;
 
-function openVideoLightbox(url, idx) {
+function openVideoLightbox(url, idx, originalUrl) {
   _lightboxVideoIdx = idx;
   var lb = document.getElementById('videoLightbox');
   var video = document.getElementById('lbVideo');
@@ -4024,13 +4506,14 @@ function openVideoLightbox(url, idx) {
   var actionsEl = document.getElementById('lbActions');
   var ratio = v ? (v.ratio || '9:16') : '9:16';
   var safeUrl = escAttr(url);
+  var safeOriginalUrl = escAttr(originalUrl || (v && v.url) || url);
   actionsEl.innerHTML =
-    '<button onclick="copyVideoLink(\'' + safeUrl + '\',this)" title="复制链接">📋 复制链接</button>' +
-    '<button onclick="window.open(\'' + safeUrl + '\')" title="下载视频">⬇ 下载</button>' +
-    (v ? '<button onclick="upscaleVideo(\'' + safeUrl + '\',\'' + ratio + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' : '') +
-    (v ? '<button onclick="extractAndSetFrame(\'' + safeUrl + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' : '') +
-    (v ? '<button onclick="extractAndSetFrame(\'' + safeUrl + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' : '') +
-    (v ? '<button class="lb-primary" onclick="setAsPreviousVideo(\'' + safeUrl + '\',' + idx + ')" title="设为上一段视频">🔗 设为上一段</button>' : '');
+    '<button onclick="copyVideoLink(\'' + safeOriginalUrl + '\',this)" title="复制链接">📋 复制链接</button>' +
+    '<button onclick="downloadGeneratedVideo(\'' + safeOriginalUrl + '\')" title="下载视频">⬇ 下载</button>' +
+    (v ? '<button onclick="upscaleVideo(\'' + safeOriginalUrl + '\',\'' + ratio + '\',' + idx + ')" title="本地转1080p">🆙 转1080p</button>' : '') +
+    (v ? '<button onclick="extractAndSetFrame(\'' + safeOriginalUrl + '\',\'first\',' + idx + ')" title="截取首帧">🎞 截首帧</button>' : '') +
+    (v ? '<button onclick="extractAndSetFrame(\'' + safeOriginalUrl + '\',\'last\',' + idx + ')" title="截取尾帧">🎞 截尾帧</button>' : '') +
+    (v ? '<button class="lb-primary" onclick="setAsPreviousVideo(\'' + safeOriginalUrl + '\',' + idx + ')" title="设为上一段视频">🔗 设为上一段</button>' : '');
 }
 
 function closeVideoLightbox() {
@@ -4062,6 +4545,10 @@ function copyVideoLink(url, btn) {
     document.execCommand('copy'); document.body.removeChild(ta);
     if (btn) { var orig2 = btn.textContent; btn.textContent = '✅ 已复制'; setTimeout(function() { btn.textContent = orig2; }, 1500); }
   });
+}
+
+function downloadGeneratedVideo(url) {
+  window.location.href = '/api/history/media?download=1&url=' + encodeURIComponent(url);
 }
 
 function deleteVideoResult(idx) {
@@ -4235,7 +4722,7 @@ async function brainstormScript() {
   try {
     const r = await fetch('/api/script/brainstorm', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ topic, script_model: scriptModel })
+      body: JSON.stringify({ topic, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: scriptModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).text : undefined, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '生成灵感'));
     if (r.error) { alert(r.error); document.getElementById('scriptWSText').value = ''; return; }
     document.getElementById('scriptWSText').value = r.text;
@@ -4251,7 +4738,7 @@ async function splitScript() {
   try {
     const r = await fetch('/api/script/split', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel })
+      body: JSON.stringify({ script, mode: splitMode, script_model: scriptModel, use_personal_api: scriptModel === 'personal-api', api_profile_id: scriptModel === 'personal-api' ? (apiProfileData.selected_api_profiles || {}).text : undefined, style_id: videoStyleId || undefined })
     }).then(res => readApiJson(res, '拆分'));
     if (r.error) { alert(r.error); return; }
     let result = r;
@@ -4280,13 +4767,15 @@ function setSplitMode(mode, btn) {
 
 function setScriptModel(model, btn) {
   scriptModel = model;
-  document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#smDoubao,#smGlm46,#smClaude46,#smPersonalApi').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  syncApiRouteControls();
 }
 
 function renderShots(segments) {
   const el = document.getElementById('scriptShots');
-  el.innerHTML = segments.map(s => {
+  _currentSegments = Array.isArray(segments) ? segments : [];
+  el.innerHTML = _currentSegments.map((s, segmentIndex) => {
     const no = s.segment_no || s.shot_no;
     const beats = Array.isArray(s.beats) ? s.beats : [];
     const chars = Array.isArray(s.characters) ? s.characters.join('、') : (s.characters || '');
@@ -4298,7 +4787,7 @@ function renderShots(segments) {
             <span style="color:var(--accent);">${escHtml(b.time || '')}</span> ${escHtml(b.shot || '')} · ${escHtml(b.camera || '')}<br>${escHtml(b.action || '')}
           </div>`).join('')}
       </div>` : '';
-    const vp = s.video_prompt || s.visual_prompt || s.prompt || s.story_action || s.action || '';
+    const vp = getSegmentVideoPrompt(s);
     return `
     <div class="shot-card" id="shot_${no}">
       <div class="shot-header">
@@ -4313,15 +4802,35 @@ function renderShots(segments) {
       ${s.story_action || s.action ? `<div class="shot-prompt"><b>剧情：</b>${escHtml(s.story_action || s.action)}</div>` : ''}
       ${s.dialogue ? `<div class="shot-prompt"><b>台词：</b>${escHtml(s.dialogue)}</div>` : ''}
       ${beatsHtml}
-      <div class="shot-prompt" style="color:var(--accent-dim);margin-top:6px;">${escHtml(vp)}</div>
+      <div class="shot-prompt" style="color:var(--accent-dim);margin-top:6px;white-space:pre-wrap;">${escHtml(vp)}</div>
       <div class="shot-actions">
-        <button onclick="fillShotPrompt('${escAttr(vp)}')">填入当前镜头</button>
-        <button onclick="fillImagePrompt('${escAttr(vp)}','${escAttr(s.story_action || s.action || '')}')">填入图片生成</button>
+        <button onclick="fillShotPromptByIndex(${segmentIndex})">填入当前镜头</button>
+        <button onclick="fillImagePromptByIndex(${segmentIndex})">填入图片生成</button>
         <button onclick="markShotGenerated('${no}')">标记已生成</button>
       </div>
     </div>`;
   }).join('');
   updateShotProgress();
+}
+
+function getSegmentVideoPrompt(segment) {
+  const vp = segment.video_prompt || segment.visual_prompt || segment.prompt || segment.story_action || segment.action || '';
+  if (vp.includes('精准分镜时序脚本')) return vp;
+  let timeline = segment.timeline_text || '';
+  if (!timeline && Array.isArray(segment.timeline)) {
+    timeline = segment.timeline.map(item => typeof item === 'string' ? item : '').filter(Boolean).join('\n');
+  }
+  return timeline ? `${vp}\n【${segment.duration || 5}秒精准分镜时序脚本】\n${timeline}`.trim() : vp;
+}
+
+function fillShotPromptByIndex(index) {
+  const segment = _currentSegments[index];
+  if (segment) fillShotPrompt(getSegmentVideoPrompt(segment));
+}
+
+function fillImagePromptByIndex(index) {
+  const segment = _currentSegments[index];
+  if (segment) fillImagePrompt(getSegmentVideoPrompt(segment), segment.story_action || segment.action || '');
 }
 
 function fillShotPrompt(prompt) {
@@ -4411,7 +4920,7 @@ function renderHistory() {
       </div>`;
       return;
     }
-    const mediaUrl = isImage ? h.image_url : h.video_url;
+    const mediaUrl = isImage ? h.image_url : ('/api/history/media?url=' + encodeURIComponent(h.video_url || ''));
     const safeUrl = escAttr(mediaUrl || '');
     const wasOptimized = h.original_script && h.refined_script && h.original_script !== h.refined_script;
     const displayScript = h.script || h.original_script || '无描述';
@@ -4427,7 +4936,7 @@ function renderHistory() {
           <div class="video-fallback" style="display:none;aspect-ratio:16/9;align-items:center;justify-content:center;background:var(--surface3);color:var(--text-muted);font-size:13px;gap:8px;flex-direction:column;">
             <span style="font-size:28px;">🎬</span>
             <span>视频缩略图加载失败</span>
-            <a href="${safeUrl}" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a>
+            <a href="/api/history/media?download=1&url=${encodeURIComponent(h.video_url || '')}" style="color:var(--accent);font-size:11px;text-decoration:none;">点击下载查看</a>
           </div>`}
           <div class="timeline-card-body">
             <div class="info">
@@ -4435,8 +4944,8 @@ function renderHistory() {
               <div class="script" title="${escHtml((h.original_script || displayScript) + (wasOptimized ? '\n\n--- AI优化后 ---\n' + h.refined_script : ''))}">${escHtml(displayScript)}</div>
             </div>
             <div class="timeline-actions">
-              <button onclick="window.open('${safeUrl}')">下载</button>
-              ${!isImage ? `<button class="primary" onclick="useHistoryVideo('${safeUrl}')">接续此段</button>` : ''}
+              <button onclick="window.location.href='${isImage ? safeUrl : `/api/history/media?download=1&url=${encodeURIComponent(h.video_url || '')}`}'">下载</button>
+              ${!isImage ? `<button class="primary" onclick="useHistoryVideo('${escAttr(h.video_url || '')}')">接续此段</button>` : ''}
               <button onclick="reeditHistoryItem(${i})">重新编辑</button>
             </div>
           </div>
@@ -4502,23 +5011,29 @@ function reeditScriptHistory(idx) {
   }, 100);
 }
 
-async function openApiSettings() {
-  const r = await fetch('/api/settings');
-  if (r.status === 401) { location.href = '/'; return; }
-  const d = await r.json();
-  thirdApiBase.value = d.third_party_api_base || '';
-  apiSettingsStatus.textContent = ['Ark ' + (d.ark_configured ? '✓' : '未配置'), 'Nano ' + (d.nano_configured ? '✓' : '未配置'), '第三方 ' + (d.third_party_configured ? '✓' : '未配置')].join(' · ');
-  apiSettingsDialog.showModal();
+async function logout() { sessionStorage.removeItem('manga_workspace_mode'); await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
+
+function adminEscape(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
-async function saveApiSettings() {
-  const r = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ark_api_key:arkApiKey.value,nano_api_key:nanoApiKey.value,third_party_api_base:thirdApiBase.value,third_party_api_key:thirdApiKey.value})});
+async function openAdminPanel() {
+  adminDialog.showModal();
+  adminSummary.textContent = '加载中…';
+  const r = await fetch('/api/admin/users');
   const d = await r.json();
-  if (!r.ok) { apiSettingsStatus.textContent = d.error || '保存失败'; return; }
-  arkApiKey.value = nanoApiKey.value = thirdApiKey.value = '';
-  apiSettingsStatus.textContent = '保存成功 · Ark ' + (d.ark_configured?'✓':'未配置') + ' · Nano ' + (d.nano_configured?'✓':'未配置') + ' · 第三方 ' + (d.third_party_configured?'✓':'未配置');
-  buildModelSelect(); buildImageSelects();
+  if (!r.ok) { adminSummary.textContent = d.error || '加载失败'; return; }
+  adminSummary.textContent = '共 ' + d.total + ' 个账号';
+  adminUsers.innerHTML = d.users.map(u => `<tr style="border-top:1px solid var(--border)">
+    <td style="padding:10px 8px"><div>${adminEscape(u.username)}</div>${u.is_admin?'<small style="color:var(--accent)">管理员</small>':''}</td>
+    <td>${adminEscape(u.created_at ? new Date(u.created_at).toLocaleString() : '-')}</td><td>${u.history_count}</td><td>${u.api_configured?'已接入':'未接入'}</td><td>${u.disabled?'已停用':'正常'}</td>
+    <td>${u.is_admin?'—':`<button class="topbar-btn" onclick="setUserDisabled('${encodeURIComponent(u.id)}',${!u.disabled})">${u.disabled?'启用':'停用'}</button>`}</td></tr>`).join('');
 }
-async function logout() { await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
+async function setUserDisabled(encodedId, disabled) {
+  const r = await fetch('/api/admin/users/' + encodedId + '/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({disabled})});
+  const d = await r.json();
+  if (!r.ok) { alert(d.error || '操作失败'); return; }
+  openAdminPanel();
+}
 
 // ── Start ────────────────────────────────────────────────────
 (function() {
@@ -4549,6 +5064,110 @@ function _showInitError(msg) {
     document.getElementById('initErrorMsg').textContent = msg || '未知错误';
   }
 }
+</script>
+
+<script>
+(function () {
+  var embedded = new URLSearchParams(location.search).get('embedded') === '1';
+  if (embedded) {
+    var logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  }
+
+  function refreshSharedWorkspaceData() {
+    var fetchers = [
+      fetch('/api/characters').then(function (r) { return r.json(); }).then(function (d) { characters = d || {}; }).catch(function () {}),
+      fetch('/api/assets/outfits').then(function (r) { return r.json(); }).then(function (d) { assets.outfits = d || []; }).catch(function () {}),
+      fetch('/api/assets/scenes').then(function (r) { return r.json(); }).then(function (d) { assets.scenes = d || []; }).catch(function () {}),
+      fetch('/api/assets/audios').then(function (r) { return r.json(); }).then(function (d) { assets.audios = d || []; }).catch(function () {}),
+      fetch('/api/assets/uploads').then(function (r) { return r.json(); }).then(function (d) { assets.uploads = d || []; }).catch(function () {}),
+      fetch('/api/styles').then(function (r) { return r.json(); }).then(function (d) { styles = d || []; }).catch(function () {}),
+      fetch('/api/history').then(function (r) { return r.json(); }).then(function (d) { history = d || []; }).catch(function () {})
+    ];
+    Promise.all(fetchers).then(function () {
+      if (typeof renderSidebar === 'function') renderSidebar();
+      if (typeof currentMainTab !== 'undefined' && currentMainTab === 'history' && typeof renderHistory === 'function') renderHistory();
+    });
+  }
+
+  window.addEventListener('message', function (event) {
+    if (event.origin !== location.origin) return;
+    var data = event.data;
+    if (data && data.type === 'workspace:activated' && data.mode === 'classic') {
+      refreshSharedWorkspaceData();
+    }
+  });
+
+  var projectId = new URLSearchParams(location.search).get('project_id') || '';
+  var draftTimer = null;
+
+  function captureClassicState() {
+    var state = {
+      currentMainTab: typeof currentMainTab !== 'undefined' ? currentMainTab : null,
+      scriptText: document.getElementById('scriptWSText') ? document.getElementById('scriptWSText').value : '',
+      imagePrompt: document.getElementById('imagePrompt') ? document.getElementById('imagePrompt').value : '',
+      editorScript: typeof getEditorText === 'function' ? getEditorText() : '',
+      selectedRefs: typeof selectedRefs !== 'undefined' ? selectedRefs.map(function (r) { return { url: r.url, role_label: r.role_label, type: r.type, name: r.name }; }) : [],
+      imageModel: typeof imageModel !== 'undefined' ? imageModel : null,
+      imageRatio: typeof imageRatio !== 'undefined' ? imageRatio : null,
+      videoModel: typeof videoModel !== 'undefined' ? videoModel : null,
+      selectedRatio: typeof selectedRatio !== 'undefined' ? selectedRatio : null,
+      selectedDuration: typeof selectedDuration !== 'undefined' ? selectedDuration : null,
+      selectedResolution: typeof selectedResolution !== 'undefined' ? selectedResolution : null,
+      selectedStyleId: typeof selectedStyleId !== 'undefined' ? selectedStyleId : null,
+      videoStyleId: typeof videoStyleId !== 'undefined' ? videoStyleId : null,
+      segments: typeof _currentSegments !== 'undefined' ? _currentSegments : []
+    };
+    return state;
+  }
+
+  function restoreClassicState(state) {
+    if (!state) return;
+    if (state.scriptText != null) { var t = document.getElementById('scriptWSText'); if (t) t.value = state.scriptText; }
+    if (state.imagePrompt != null) { var p = document.getElementById('imagePrompt'); if (p) p.value = state.imagePrompt; }
+    if (state.currentMainTab && typeof switchMainTab === 'function') switchMainTab(state.currentMainTab);
+    if (Array.isArray(state.selectedRefs)) { selectedRefs = state.selectedRefs; if (typeof updateRefSlots === 'function') updateRefSlots(); }
+    if (state.imageModel != null) imageModel = state.imageModel;
+    if (state.imageRatio != null) imageRatio = state.imageRatio;
+    if (state.videoModel != null) videoModel = state.videoModel;
+    if (state.selectedRatio != null) selectedRatio = state.selectedRatio;
+    if (state.selectedDuration != null) selectedDuration = state.selectedDuration;
+    if (state.selectedResolution != null) selectedResolution = state.selectedResolution;
+    if (state.selectedStyleId != null) selectedStyleId = state.selectedStyleId;
+    if (state.videoStyleId != null) videoStyleId = state.videoStyleId;
+    if (Array.isArray(state.segments) && state.segments.length) { _currentSegments = state.segments; if (typeof renderShots === 'function') renderShots(_currentSegments); }
+    if (state.editorScript && typeof fillShotPrompt === 'function') { var ed = document.getElementById('scriptInput'); if (ed) ed.textContent = state.editorScript; }
+  }
+
+  function saveDraft() {
+    if (!projectId) return;
+    var state = captureClassicState();
+    fetch('/api/projects/' + encodeURIComponent(projectId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ classic_state: state }) }).catch(function () {});
+  }
+
+  function scheduleDraftSave() {
+    if (!projectId) return;
+    if (draftTimer) clearTimeout(draftTimer);
+    draftTimer = setTimeout(saveDraft, 800);
+  }
+
+  if (projectId) {
+    document.addEventListener('input', scheduleDraftSave);
+    document.addEventListener('click', scheduleDraftSave);
+    document.addEventListener('keyup', scheduleDraftSave);
+    fetch('/api/projects/' + encodeURIComponent(projectId), { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var cs = d && d.project && d.project.classic_state;
+        var restoreWhenReady = function () {
+          if (typeof _initDone !== 'undefined' && _initDone) restoreClassicState(cs);
+          else setTimeout(restoreWhenReady, 200);
+        };
+        restoreWhenReady();
+      })
+      .catch(function () {});
+  }
+})();
 </script>
 </body>
 </html>

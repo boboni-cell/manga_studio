@@ -1,0 +1,941 @@
+import { useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import { useCanvasStore, type CanvasNode, type CanvasNodeData } from '@/stores/canvasStore';
+import { CANVAS_NODE_TYPES } from '@/features/canvas/domain/canvasNodes';
+import {
+  canvasAiGateway,
+  canvasVideoGateway,
+  materializeProviderAwareImageResult,
+} from '@/features/canvas/application/canvasServices';
+import { prepareNodeImage } from '@/features/canvas/application/imageData';
+import {
+  buildGenerationErrorReport,
+  CURRENT_RUNTIME_SESSION_ID,
+  sanitizeGenerationDiagnosticText,
+} from '@/features/canvas/application/generationErrorReport';
+import { isLightweightGenerationRetryResultUrl } from '@/features/canvas/application/generationRetry';
+import { showErrorDialog } from '@/features/canvas/application/errorDialog';
+import {
+  embedStoryboardImageMetadata,
+  persistVideoSource,
+  renameLocalMediaFiles,
+} from '@/commands/image';
+import {
+  extractFileNameFromPath,
+  getLocalDateStamp,
+  resolveDefaultGeneratedImageDisplayName,
+  resolveDefaultGeneratedImageFileStem,
+  resolveDefaultGeneratedVideoDisplayName,
+  resolveDefaultGeneratedVideoFileStem,
+  resolveNextGeneratedMediaSequence,
+  resolveCustomGeneratedImageName,
+  resolveCustomGeneratedVideoName,
+} from '@/features/canvas/application/generatedMediaNaming';
+
+interface GenerationStoryboardMetadata {
+  gridRows: number;
+  gridCols: number;
+  frameNotes: string[];
+}
+
+const GENERATION_JOB_POLL_INTERVAL_MS = 1000;
+/**
+ * Hard ceiling on how long we keep polling a single job. The Tauri
+ * backend's image providers all complete (or surface an error) well
+ * within ten minutes; a longer poll loop almost certainly indicates the
+ * provider hung or the network is broken. Surfacing a timeout instead of
+ * polling forever lets the user retry instead of staring at an
+ * indefinitely-spinning node.
+ */
+const GENERATION_JOB_TIMEOUT_MS = 10 * 60 * 1000;
+// Custom video providers may spend the full 15 minutes in their own async
+// poll loop after the initial submit request; keep the UI guard slightly
+// longer so it does not fail the node just before the gateway resolves.
+const VIDEO_GENERATION_JOB_TIMEOUT_MS = 16 * 60 * 1000;
+/**
+ * Soft cap on how often we re-issue `set_api_key` for the same provider
+ * per polling-loop iteration. The original code re-issued it on every
+ * poll tick (1 Hz) which produced a steady 1 RPS keychain write per
+ * in-flight node. One write per minute is plenty — the only reason to
+ * re-set is if the user changes their key in settings mid-generation.
+ */
+const API_KEY_RESET_INTERVAL_MS = 60 * 1000;
+/**
+ * How many times to retry `prepareNodeImage` for a successful job's
+ * result URL before giving up. Generation providers occasionally serve
+ * the result from a flaky CDN; a single transient fetch failure
+ * shouldn't cost the user the entire job. 3 attempts (initial + 2
+ * retries) with exponential backoff covers >95 % of intermittent
+ * failures observed in practice without making a permanent failure
+ * feel slow.
+ */
+const PREPARE_IMAGE_MAX_ATTEMPTS = 3;
+const PREPARE_VIDEO_MAX_ATTEMPTS = 3;
+
+function isPollableNode(node: CanvasNode): boolean {
+  if (
+    node.type !== CANVAS_NODE_TYPES.exportImage
+    && node.type !== CANVAS_NODE_TYPES.panorama
+    && node.type !== CANVAS_NODE_TYPES.video
+  ) {
+    return false;
+  }
+  const data = node.data as Record<string, unknown>;
+  const hasJobId = typeof data.generationJobId === 'string' && (data.generationJobId as string).trim().length > 0;
+  const hasRetryResultUrl = isLightweightGenerationRetryResultUrl(data.generationRetryResultUrl);
+  return (
+    data.isGenerating === true &&
+    (hasJobId || hasRetryResultUrl)
+  );
+}
+
+function buildPollableNodesSignature(nodes: CanvasNode[]): string {
+  return nodes
+    .filter(isPollableNode)
+    .map((node) => {
+      const data = node.data as Record<string, unknown>;
+      return [
+        node.id,
+        typeof data.generationJobId === 'string' ? data.generationJobId : '',
+        typeof data.generationProviderId === 'string' ? data.generationProviderId : '',
+        typeof data.generationRetryResultUrl === 'string' ? data.generationRetryResultUrl : '',
+        data.generationClientSessionId === CURRENT_RUNTIME_SESSION_ID ? CURRENT_RUNTIME_SESSION_ID : '',
+      ].join(':');
+    })
+    .join('|');
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
+  });
+}
+
+/**
+ * Watches every node in `nodes` for an in-flight image generation job
+ * (`isGenerating === true` + `generationJobId` set) and polls the Rust
+ * backend for completion. On success, downloads the result, optionally
+ * embeds storyboard grid metadata, and writes the result into the node.
+ * On failure or timeout, surfaces the error and clears the in-flight
+ * flag so the user can retry.
+ *
+ * Stability guarantees this hook adds on top of the original inline
+ * version that lived in Canvas.tsx:
+ *
+ *  1. **Per-job timeout.** A poll loop can run forever if the backend
+ *     keeps reporting `queued` or returns null repeatedly. Without a
+ *     cap, an offline laptop would silently spin until the next reload.
+ *     We bail with a synthesized timeout error after
+ *     `GENERATION_JOB_TIMEOUT_MS`.
+ *  2. **`prepareNodeImage` is wrapped in try/catch.** The original code
+ *     awaited it bare — if the result URL was unreachable or returned a
+ *     non-image, the whole loop crashed and the node stayed `isGenerating`
+ *     forever. Now we treat the failure as a generation error.
+ *  3. **`set_api_key` is rate-limited per (provider × loop iteration).**
+ *     Polling at 1 Hz with N in-flight nodes was issuing N keychain
+ *     writes per second. We re-issue at most once a minute per loop.
+ *  4. **The active-poll Set is cleared on unmount.** Otherwise, after a
+ *     project close+reopen, stale entries would block the new mount
+ *     from spawning fresh polls — same family of bug as the
+ *     BlueprintScene mesh-orphan one we fixed earlier.
+ */
+export function useCanvasGenerationPolling(nodes: CanvasNode[], apiKeys: Record<string, string>): void {
+  const { t } = useTranslation();
+  const updateNodeData = useCanvasStore((state) => state.updateNodeData);
+  const activePollNodeIdsRef = useRef<Set<string>>(new Set<string>());
+  const pollableNodesSignature = buildPollableNodesSignature(nodes);
+
+  // Snapshot the latest nodes via a ref so polling loops can re-read
+  // without becoming a dep of the effect (which would restart polling
+  // on every node change).
+  useEffect(() => {
+    const activeRef = activePollNodeIdsRef.current;
+    return () => {
+      // Clear on unmount so a remount starts from zero — see jsdoc bullet #4.
+      activeRef.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    const pendingNodes = useCanvasStore.getState().nodes.filter(isPollableNode);
+
+    for (const pendingNode of pendingNodes) {
+      if (activePollNodeIdsRef.current.has(pendingNode.id)) {
+        continue;
+      }
+      activePollNodeIdsRef.current.add(pendingNode.id);
+
+      void pollSingleJob({
+        nodeId: pendingNode.id,
+        startedAt: Date.now(),
+        apiKeys,
+        updateNodeData,
+        finalize: () => {
+          activePollNodeIdsRef.current.delete(pendingNode.id);
+        },
+        translateError: (key) => t(key),
+      });
+    }
+  }, [apiKeys, pollableNodesSignature, updateNodeData, t]);
+}
+
+interface PollContext {
+  nodeId: string;
+  startedAt: number;
+  apiKeys: Record<string, string>;
+  updateNodeData: (id: string, patch: Partial<CanvasNodeData>) => void;
+  finalize: () => void;
+  translateError: (key: string) => string;
+}
+
+function formatPrepareErrorDetails(error: unknown): string {
+  if (error instanceof Error) {
+    const details = (error as Error & { details?: unknown }).details;
+    return sanitizeGenerationDiagnosticText(typeof details === 'string' && details.trim()
+      ? `${error.message}\n${details}`
+      : error.message);
+  }
+  return sanitizeGenerationDiagnosticText(String(error));
+}
+
+function formatGenerationErrorForLog(error: unknown): string {
+  if (error instanceof Error) {
+    const details = (error as Error & { details?: unknown }).details;
+    return formatPrepareErrorDetails(
+      typeof details === 'string' && details.trim()
+        ? `${error.message}\n${details}`
+        : error.message,
+    );
+  }
+  return sanitizeGenerationDiagnosticText(String(error));
+}
+
+function resolveGenerationElapsedMs(currentData: Record<string, unknown>, endedAt = Date.now()): number | null {
+  const startedAt = typeof currentData.generationStartedAt === 'number'
+    ? currentData.generationStartedAt
+    : null;
+  if (startedAt === null || !Number.isFinite(startedAt)) {
+    return null;
+  }
+  return Math.max(0, endedAt - startedAt);
+}
+
+function isRetriableVideoPollingError(errorMessage: string): boolean {
+  const normalized = errorMessage.trim();
+  return normalized === '视频任务轮询超时，未获取到结果'
+    || normalized.toLowerCase().includes('video task polling timed out');
+}
+
+function resolveExistingGeneratedSequence(currentData: Record<string, unknown>): number | null {
+  const value = currentData.generatedSequence;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function resolveGeneratedSourcePrompt(currentData: Record<string, unknown>): string {
+  const sourcePrompt = typeof currentData.sourcePrompt === 'string' ? currentData.sourcePrompt.trim() : '';
+  if (sourcePrompt) {
+    return sourcePrompt;
+  }
+  const debugContext = currentData.generationDebugContext;
+  if (debugContext && typeof debugContext === 'object' && !Array.isArray(debugContext)) {
+    const prompt = (debugContext as { prompt?: unknown }).prompt;
+    if (typeof prompt === 'string' && prompt.trim()) {
+      return prompt.trim();
+    }
+  }
+  return typeof currentData.displayName === 'string' ? currentData.displayName.trim() : '';
+}
+
+async function prepareCompletedImageResult(
+  nodeId: string,
+  resultUrl: string,
+  currentData: Record<string, unknown>,
+  updateNodeData: (id: string, patch: Partial<CanvasNodeData>) => void,
+  translateError: (key: string) => string,
+  generationWarning?: string | null,
+): Promise<boolean> {
+  let prepared;
+  let lastPrepareError: unknown = null;
+  for (let attempt = 0; attempt < PREPARE_IMAGE_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const providerId = typeof currentData.generationProviderId === 'string'
+        ? currentData.generationProviderId.trim()
+        : '';
+      const materializedSource = providerId
+        ? await materializeProviderAwareImageResult(providerId, resultUrl)
+        : resultUrl;
+      prepared = await prepareNodeImage(materializedSource);
+      lastPrepareError = null;
+      break;
+    } catch (error) {
+      lastPrepareError = error;
+      console.warn('[GenerationJob] prepareNodeImage attempt failed', {
+        nodeId,
+        attempt: attempt + 1,
+        of: PREPARE_IMAGE_MAX_ATTEMPTS,
+        error: formatGenerationErrorForLog(error),
+      });
+      if (attempt < PREPARE_IMAGE_MAX_ATTEMPTS - 1) {
+        // 500 ms, 1 s, 2 s — keeps total worst-case retry under 3.5 s
+        // so the user doesn't perceive a long stall.
+        await sleep(500 * 2 ** attempt);
+      }
+    }
+  }
+  if (!prepared) {
+    const errorMessage = translateError('node.imageNode.fetchResultFailed') || '获取生成结果失败';
+    const errorDetails = formatPrepareErrorDetails(lastPrepareError);
+    const generationClientSessionId =
+      typeof currentData.generationClientSessionId === 'string'
+        ? currentData.generationClientSessionId
+        : '';
+    if (generationClientSessionId === CURRENT_RUNTIME_SESSION_ID) {
+      const reportText = buildGenerationErrorReport({
+        errorMessage,
+        errorDetails,
+        context: currentData.generationDebugContext,
+      });
+      void showErrorDialog(
+        errorMessage,
+        translateError('common.error'),
+        errorDetails,
+        reportText,
+      );
+    }
+    markGenerationFailed(
+      nodeId,
+      errorMessage,
+      errorDetails,
+      updateNodeData,
+      { preserveRetryMetadata: true, retryResultUrl: resultUrl },
+    );
+    return false;
+  }
+
+  const storyboardMetadataRaw = currentData.generationStoryboardMetadata as
+    | GenerationStoryboardMetadata
+    | undefined;
+  const hasStoryboardMetadata = Boolean(
+    storyboardMetadataRaw &&
+      Number.isFinite(storyboardMetadataRaw.gridRows) &&
+      Number.isFinite(storyboardMetadataRaw.gridCols) &&
+      Array.isArray(storyboardMetadataRaw.frameNotes),
+  );
+
+  let imageWithMetadata = prepared.imageUrl;
+  if (hasStoryboardMetadata && storyboardMetadataRaw) {
+    imageWithMetadata = await embedStoryboardImageMetadata(prepared.imageUrl, {
+      gridRows: Math.max(1, Math.round(storyboardMetadataRaw.gridRows)),
+      gridCols: Math.max(1, Math.round(storyboardMetadataRaw.gridCols)),
+      frameNotes: storyboardMetadataRaw.frameNotes,
+    }).catch((error) => {
+      console.warn('[GenerationJob] embed storyboard metadata failed', {
+        nodeId,
+        error: formatGenerationErrorForLog(error),
+      });
+      return prepared.imageUrl;
+    });
+  }
+  const previewWithMetadata =
+    prepared.previewImageUrl === prepared.imageUrl ? imageWithMetadata : prepared.previewImageUrl;
+  const displayName = typeof currentData.displayName === 'string' ? currentData.displayName : null;
+  const sequence = resolveExistingGeneratedSequence(currentData)
+    ?? resolveNextGeneratedMediaSequence('image', useCanvasStore.getState().nodes, [nodeId]);
+  const dateStamp = typeof currentData.generatedDateStamp === 'string' && currentData.generatedDateStamp.trim()
+    ? currentData.generatedDateStamp.trim()
+    : getLocalDateStamp();
+  const sourcePrompt = resolveGeneratedSourcePrompt(currentData);
+  const customName = currentData.generatedNamingMode === 'custom'
+    ? resolveCustomGeneratedImageName(displayName)
+    : null;
+  const desiredFileName = customName ?? resolveDefaultGeneratedImageFileStem(sequence, dateStamp);
+  const resolvedDisplayName = customName
+    ? (displayName?.trim() || customName)
+    : resolveDefaultGeneratedImageDisplayName(sequence, sourcePrompt);
+  let finalImageUrl = imageWithMetadata;
+  let finalPreviewImageUrl = previewWithMetadata;
+  let generatedFileName = extractFileNameFromPath(imageWithMetadata);
+  const generatedNamingMode = customName ? 'custom' : 'default';
+  const currentGenerationWarning = typeof currentData.generationWarning === 'string'
+    ? currentData.generationWarning.trim()
+    : '';
+  const resolvedGenerationWarning = generationWarning === undefined
+    ? (currentGenerationWarning || null)
+    : (typeof generationWarning === 'string' && generationWarning.trim()
+      ? generationWarning.trim()
+      : null);
+
+  try {
+    const renamed = await renameLocalMediaFiles({
+      primaryPath: imageWithMetadata,
+      previewPath: previewWithMetadata !== imageWithMetadata ? previewWithMetadata : undefined,
+      desiredFileName,
+      mediaKind: 'image',
+    });
+    finalImageUrl = renamed.primaryPath;
+    finalPreviewImageUrl = renamed.previewPath ?? renamed.primaryPath;
+    generatedFileName = renamed.fileName;
+  } catch (error) {
+    console.warn('[GenerationJob] renameLocalMediaFiles failed for image result', {
+      nodeId,
+      error: formatGenerationErrorForLog(error),
+    });
+  }
+
+  updateNodeData(nodeId, {
+    imageUrl: finalImageUrl,
+    previewImageUrl: finalPreviewImageUrl,
+    aspectRatio: prepared.aspectRatio,
+    displayName: resolvedDisplayName,
+    generatedFileName,
+    generatedNamingMode,
+    generatedSequence: sequence,
+    generatedDateStamp: dateStamp,
+    sourcePrompt,
+    isGenerating: false,
+    generationJobState: 'succeeded',
+    generationStartedAt: null,
+    generationElapsedMs: resolveGenerationElapsedMs(currentData),
+    generationLastJobId: currentData.generationJobId ?? null,
+    generationJobId: null,
+    generationProviderId: null,
+    generationClientSessionId: null,
+    generationStoryboardMetadata: undefined,
+    generationError: null,
+    generationErrorDetails: null,
+    generationWarning: resolvedGenerationWarning,
+    generationDebugContext: undefined,
+    generationRetryResultUrl: null,
+    generationRetryRequestedAt: null,
+  });
+  return true;
+}
+
+function translateOrFallback(
+  translateError: (key: string) => string,
+  key: string,
+  fallback: string,
+): string {
+  const translated = translateError(key);
+  return translated && translated !== key ? translated : fallback;
+}
+
+async function prepareCompletedVideoResult(
+  nodeId: string,
+  resultUrl: string,
+  currentData: Record<string, unknown>,
+  updateNodeData: (id: string, patch: Partial<CanvasNodeData>) => void,
+  translateError: (key: string) => string,
+): Promise<boolean> {
+  const trimmedResultUrl = resultUrl.trim();
+  let localVideoUrl: string | null = null;
+  let lastPrepareError: unknown = null;
+  for (let attempt = 0; attempt < PREPARE_VIDEO_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      localVideoUrl = await persistVideoSource(trimmedResultUrl);
+      lastPrepareError = null;
+      break;
+    } catch (error) {
+      lastPrepareError = error;
+      console.warn('[GenerationJob] persistVideoSource attempt failed', {
+        nodeId,
+        attempt: attempt + 1,
+        of: PREPARE_VIDEO_MAX_ATTEMPTS,
+        error: formatGenerationErrorForLog(error),
+      });
+      if (attempt < PREPARE_VIDEO_MAX_ATTEMPTS - 1) {
+        await sleep(500 * 2 ** attempt);
+      }
+    }
+  }
+
+  if (!localVideoUrl) {
+    const errorMessage = translateOrFallback(
+      translateError,
+      'node.videoNode.fetchResultFailed',
+      '获取视频生成结果失败',
+    );
+    const errorDetails = lastPrepareError instanceof Error
+      ? formatGenerationErrorForLog(lastPrepareError)
+      : sanitizeGenerationDiagnosticText(String(lastPrepareError));
+    const generationClientSessionId =
+      typeof currentData.generationClientSessionId === 'string'
+        ? currentData.generationClientSessionId
+        : '';
+    if (generationClientSessionId === CURRENT_RUNTIME_SESSION_ID) {
+      const reportText = buildGenerationErrorReport({
+        errorMessage,
+        errorDetails,
+        context: currentData.generationDebugContext,
+      });
+      void showErrorDialog(
+        errorMessage,
+        translateError('common.error'),
+        errorDetails,
+        reportText,
+      );
+    }
+    markGenerationFailed(
+      nodeId,
+      errorMessage,
+      errorDetails,
+      updateNodeData,
+      { preserveRetryMetadata: true, retryResultUrl: trimmedResultUrl },
+    );
+    return false;
+  }
+
+  const lightweightResultUrl = isLightweightGenerationRetryResultUrl(trimmedResultUrl)
+    ? trimmedResultUrl
+    : null;
+  const displayName = typeof currentData.displayName === 'string' ? currentData.displayName : null;
+  const sequence = resolveExistingGeneratedSequence(currentData)
+    ?? resolveNextGeneratedMediaSequence('video', useCanvasStore.getState().nodes, [nodeId]);
+  const dateStamp = typeof currentData.generatedDateStamp === 'string' && currentData.generatedDateStamp.trim()
+    ? currentData.generatedDateStamp.trim()
+    : getLocalDateStamp();
+  const sourcePrompt = resolveGeneratedSourcePrompt(currentData);
+  const customName = currentData.generatedNamingMode === 'custom'
+    ? resolveCustomGeneratedVideoName(displayName)
+    : null;
+  const desiredFileName = customName ?? resolveDefaultGeneratedVideoFileStem(sequence, dateStamp);
+  const resolvedDisplayName = customName
+    ? (displayName?.trim() || customName)
+    : resolveDefaultGeneratedVideoDisplayName(sequence, sourcePrompt);
+  let finalLocalVideoUrl = localVideoUrl;
+  let generatedFileName = extractFileNameFromPath(localVideoUrl);
+  const generatedNamingMode = customName ? 'custom' : 'default';
+
+  try {
+    const renamed = await renameLocalMediaFiles({
+      primaryPath: localVideoUrl,
+      desiredFileName,
+      mediaKind: 'video',
+    });
+    finalLocalVideoUrl = renamed.primaryPath;
+    generatedFileName = renamed.fileName;
+  } catch (error) {
+    console.warn('[GenerationJob] renameLocalMediaFiles failed for video result', {
+      nodeId,
+      error: formatGenerationErrorForLog(error),
+    });
+  }
+
+  updateNodeData(nodeId, {
+    videoUrl: lightweightResultUrl ?? finalLocalVideoUrl,
+    localVideoUrl: finalLocalVideoUrl,
+    displayName: resolvedDisplayName,
+    generatedFileName,
+    generatedNamingMode,
+    generatedSequence: sequence,
+    generatedDateStamp: dateStamp,
+    sourcePrompt,
+    isGenerating: false,
+    generationJobState: 'succeeded',
+    generationStartedAt: null,
+    generationElapsedMs: resolveGenerationElapsedMs(currentData),
+    generationLastJobId: currentData.generationJobId ?? null,
+    generationJobId: null,
+    generationProviderId: null,
+    generationClientSessionId: null,
+    generationError: null,
+    generationErrorDetails: null,
+    generationDebugContext: undefined,
+    generationRetryResultUrl: null,
+    generationRetryRequestedAt: null,
+  });
+  return true;
+}
+
+/**
+ * One self-contained poll loop for a single in-flight job. Runs until
+ * the job resolves, the user cancels (`isGenerating` flips false), the
+ * node disappears, or we hit the per-job timeout. Always calls
+ * `finalize` so the caller's "active" set drops the node ID.
+ */
+async function pollSingleJob(ctx: PollContext): Promise<void> {
+  const { nodeId, startedAt, apiKeys, updateNodeData, finalize, translateError } = ctx;
+  let lastApiKeyResetAt = 0;
+  let lastApiKeyResetProvider: string | null = null;
+  let handledRetryRequestedAt: number | null = null;
+  let clearedGenerationWarning = false;
+  let latestGenerationWarning: string | null = null;
+
+  try {
+    while (true) {
+      const currentNode = useCanvasStore.getState().nodes.find((node) => node.id === nodeId);
+      if (!currentNode) {
+        return;
+      }
+
+      const currentData = currentNode.data as Record<string, unknown>;
+      const isVideoNode = currentNode.type === CANVAS_NODE_TYPES.video;
+      const timeoutMs = isVideoNode ? VIDEO_GENERATION_JOB_TIMEOUT_MS : GENERATION_JOB_TIMEOUT_MS;
+      if (Date.now() - startedAt > timeoutMs) {
+        markGenerationFailed(
+          nodeId,
+          isVideoNode ? 'video generation timed out after 16 minutes' : 'generation timed out after 10 minutes',
+          null,
+          updateNodeData,
+          { preserveRetryMetadata: true },
+        );
+        return;
+      }
+      const jobId =
+        typeof currentData.generationJobId === 'string' ? currentData.generationJobId.trim() : '';
+      const retryResultUrlRaw =
+        typeof currentData.generationRetryResultUrl === 'string'
+          ? currentData.generationRetryResultUrl.trim()
+          : '';
+      const retryResultUrl = isLightweightGenerationRetryResultUrl(retryResultUrlRaw)
+        ? retryResultUrlRaw
+        : '';
+      const isGenerating = currentData.isGenerating === true;
+      if (!isGenerating) {
+        return;
+      }
+      if (!clearedGenerationWarning) {
+        // A reused result node must not show the previous provider warning
+        // while a new request is still in flight. A warning received from the
+        // current job is written after this one-time reset below.
+        clearedGenerationWarning = true;
+        if (currentData.generationWarning) {
+          updateNodeData(nodeId, { generationWarning: null });
+        }
+      }
+      if (!jobId && retryResultUrl) {
+        if (isVideoNode) {
+          await prepareCompletedVideoResult(
+            nodeId,
+            retryResultUrl,
+            currentData,
+            updateNodeData,
+            translateError,
+          );
+        } else {
+          await prepareCompletedImageResult(
+            nodeId,
+            retryResultUrl,
+            currentData,
+            updateNodeData,
+            translateError,
+            latestGenerationWarning,
+          );
+        }
+        return;
+      }
+      if (!jobId) {
+        return;
+      }
+
+      const generationRetryRequestedAt =
+        typeof currentData.generationRetryRequestedAt === 'number'
+          && Number.isFinite(currentData.generationRetryRequestedAt)
+          ? currentData.generationRetryRequestedAt
+          : null;
+      const generationJobState = typeof currentData.generationJobState === 'string'
+        ? currentData.generationJobState
+        : '';
+      const retryGenerationJob = canvasAiGateway.retryGenerationJob
+        ?? (isVideoNode ? canvasVideoGateway.retryGenerateVideoJob : undefined);
+      if (
+        (generationJobState === 'recoverable_wait' || generationJobState === 'unknown')
+        && generationRetryRequestedAt !== null
+        && generationRetryRequestedAt !== handledRetryRequestedAt
+        && typeof retryGenerationJob === 'function'
+      ) {
+        handledRetryRequestedAt = generationRetryRequestedAt;
+        const restarted = await retryGenerationJob(jobId).catch((error) => {
+          console.warn('[GenerationJob] safe recovery restart failed', {
+            nodeId,
+            jobId,
+            error: formatGenerationErrorForLog(error),
+          });
+          return false;
+        });
+        if (!restarted && !retryResultUrl) {
+          const message = '缺少任务信息，无法重新获取';
+          void showErrorDialog(message, translateError('common.error'));
+          markGenerationFailed(
+            nodeId,
+            message,
+            null,
+            updateNodeData,
+            {
+              preserveRetryMetadata: true,
+              jobState: generationJobState === 'unknown' ? 'unknown' : 'recoverable_wait',
+            },
+          );
+          return;
+        }
+      }
+
+      // Refresh the provider's API key — but only once per minute per
+      // provider. The original loop re-issued every poll tick.
+      const generationProviderId =
+        typeof currentData.generationProviderId === 'string' ? currentData.generationProviderId : '';
+      if (generationProviderId && !isVideoNode) {
+        const sinceLastReset = Date.now() - lastApiKeyResetAt;
+        const providerChanged = lastApiKeyResetProvider !== generationProviderId;
+        if (providerChanged || sinceLastReset > API_KEY_RESET_INTERVAL_MS) {
+          const providerApiKey = apiKeys[generationProviderId] ?? '';
+          if (providerApiKey) {
+            await canvasAiGateway.setApiKey(generationProviderId, providerApiKey).catch((error) => {
+              console.warn('[GenerationJob] set_api_key failed before poll', {
+                nodeId,
+                generationProviderId,
+                error: formatGenerationErrorForLog(error),
+              });
+            });
+            lastApiKeyResetAt = Date.now();
+            lastApiKeyResetProvider = generationProviderId;
+          }
+        }
+      }
+
+      const status = await (isVideoNode
+        ? canvasVideoGateway.getGenerateVideoJob(jobId)
+        : canvasAiGateway.getGenerateImageJob(jobId)
+      ).catch((error) => {
+        console.warn('[GenerationJob] poll failed', {
+          nodeId,
+          jobId,
+          error: formatGenerationErrorForLog(error),
+        });
+        return null;
+      });
+      if (!status) {
+        await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
+        continue;
+      }
+
+      const providerWarning = typeof status.warning === 'string'
+        ? sanitizeGenerationDiagnosticText(status.warning.trim())
+        : '';
+      if (providerWarning) {
+        console.warn('[GenerationJob] provider warning', {
+          nodeId,
+          jobId,
+          warning: providerWarning,
+        });
+        if (!isVideoNode && providerWarning) {
+          latestGenerationWarning = providerWarning;
+          updateNodeData(nodeId, { generationWarning: providerWarning });
+        }
+      }
+
+      const currentStatusWarning: string | null = providerWarning || latestGenerationWarning;
+      if (currentStatusWarning) {
+        latestGenerationWarning = currentStatusWarning;
+      }
+      const metadataPatch: Partial<CanvasNodeData> = {};
+      if (currentData.generationJobState !== status.status) {
+        metadataPatch.generationJobState = status.status;
+      }
+      if (currentData.generationJobPhase !== status.phase) {
+        metadataPatch.generationJobPhase = status.phase ?? null;
+      }
+      if (currentData.generationNetworkRoute !== status.network_route) {
+        metadataPatch.generationNetworkRoute = status.network_route ?? null;
+      }
+      const safeRecoveryAvailable = status.resumable === true && Boolean(
+        (typeof status.external_task_id === 'string' && status.external_task_id.trim())
+        || (typeof status.result_url === 'string'
+          && isLightweightGenerationRetryResultUrl(status.result_url)),
+      );
+      if (currentData.generationSafeRecoveryAvailable !== safeRecoveryAvailable) {
+        metadataPatch.generationSafeRecoveryAvailable = safeRecoveryAvailable;
+      }
+      if (
+        typeof status.updated_at === 'number'
+        && currentData.generationJobUpdatedAt !== status.updated_at
+      ) {
+        metadataPatch.generationJobUpdatedAt = status.updated_at;
+      }
+      if (Object.keys(metadataPatch).length > 0) updateNodeData(nodeId, metadataPatch);
+
+      if (
+        status.status === 'queued'
+        || status.status === 'submitting'
+        || status.status === 'running'
+        || status.status === 'materializing'
+      ) {
+        await sleep(GENERATION_JOB_POLL_INTERVAL_MS);
+        continue;
+      }
+
+      if (status.status === 'recoverable_wait') {
+        const message = sanitizeGenerationDiagnosticText(
+          status.error ?? '任务已暂停，可使用已保存的上游任务信息安全恢复。',
+        );
+        markGenerationFailed(nodeId, message, status.error ? message : null, updateNodeData, {
+          preserveRetryMetadata: true,
+          jobState: 'recoverable_wait',
+        });
+        return;
+      }
+
+      if (status.status === 'succeeded' && typeof status.result === 'string' && status.result.trim()) {
+        if (isVideoNode) {
+          await prepareCompletedVideoResult(
+            nodeId,
+            status.result.trim(),
+            currentData,
+            updateNodeData,
+            translateError,
+          );
+          return;
+        }
+
+        await prepareCompletedImageResult(
+          nodeId,
+          status.result.trim(),
+          currentData,
+          updateNodeData,
+          translateError,
+          currentStatusWarning,
+        );
+        return;
+      }
+
+      if (status.status === 'succeeded') {
+        markGenerationFailed(
+          nodeId,
+          isVideoNode ? 'video generation succeeded without a result URL' : 'generation succeeded without a result URL',
+          null,
+          updateNodeData,
+          isVideoNode ? { preserveRetryMetadata: true } : undefined,
+        );
+        return;
+      }
+
+      if (status.status === 'not_found' && retryResultUrl) {
+        if (isVideoNode) {
+          await prepareCompletedVideoResult(
+            nodeId,
+            retryResultUrl,
+            currentData,
+            updateNodeData,
+            translateError,
+          );
+        } else {
+          await prepareCompletedImageResult(
+            nodeId,
+            retryResultUrl,
+            currentData,
+            updateNodeData,
+            translateError,
+            currentStatusWarning,
+          );
+        }
+        return;
+      }
+
+      // Failure / not_found / canceled / unknown.
+      const errorMessage = sanitizeGenerationDiagnosticText(
+        status.error
+          ?? (status.status === 'not_found'
+            ? 'generation job not found'
+            : status.status === 'unknown'
+              ? '提交结果未知：上游可能已经开始计费，系统不会自动重复提交。'
+              : 'generation failed'),
+      );
+      const errorDetails = status.error
+        ? sanitizeGenerationDiagnosticText(status.error)
+        : null;
+      const generationClientSessionId =
+        typeof currentData.generationClientSessionId === 'string'
+          ? currentData.generationClientSessionId
+          : '';
+      const shouldShowDialog = generationClientSessionId === CURRENT_RUNTIME_SESSION_ID;
+      if (shouldShowDialog) {
+        const reportText = buildGenerationErrorReport({
+          errorMessage,
+          errorDetails: errorDetails ?? undefined,
+          context: currentData.generationDebugContext,
+        });
+        void showErrorDialog(
+          errorMessage,
+          translateError('common.error'),
+          errorDetails ?? undefined,
+          reportText,
+        );
+      }
+      const statusRetryResultUrl =
+        typeof status.result === 'string' && isLightweightGenerationRetryResultUrl(status.result)
+          ? status.result.trim()
+          : null;
+      markGenerationFailed(
+        nodeId,
+        errorMessage,
+        errorDetails,
+        updateNodeData,
+        statusRetryResultUrl
+          ? { preserveRetryMetadata: true, retryResultUrl: statusRetryResultUrl, clearJobMetadata: true }
+          : status.status === 'unknown' || (status.status === 'not_found' && safeRecoveryAvailable)
+            ? { preserveRetryMetadata: true, jobState: 'unknown' }
+          : safeRecoveryAvailable
+            ? { preserveRetryMetadata: true, jobState: 'recoverable_wait' }
+          : isVideoNode && isRetriableVideoPollingError(errorMessage)
+            ? { preserveRetryMetadata: true }
+          : undefined,
+      );
+      return;
+    }
+  } finally {
+    finalize();
+  }
+}
+
+function markGenerationFailed(
+  nodeId: string,
+  errorMessage: string,
+  errorDetails: string | null,
+  updateNodeData: (id: string, patch: Partial<CanvasNodeData>) => void,
+  options?: {
+    preserveRetryMetadata?: boolean;
+    retryResultUrl?: string | null;
+    clearJobMetadata?: boolean;
+    jobState?: 'recoverable_wait' | 'unknown';
+  },
+): void {
+  const currentNode = useCanvasStore.getState().nodes.find((node) => node.id === nodeId);
+  const currentData = (currentNode?.data ?? {}) as Record<string, unknown>;
+  const patch: Partial<CanvasNodeData> = {
+    isGenerating: false,
+    generationStartedAt: null,
+    generationElapsedMs: resolveGenerationElapsedMs(currentData),
+    generationStoryboardMetadata: undefined,
+    generationError: errorMessage,
+    generationErrorDetails: errorDetails,
+    generationJobState: options?.jobState
+      ?? (options?.preserveRetryMetadata ? currentData.generationJobState : 'failed'),
+  };
+
+  if (options?.preserveRetryMetadata) {
+    if (options.clearJobMetadata) {
+      patch.generationJobId = null;
+      patch.generationClientSessionId = null;
+    }
+    const retryResultUrl = typeof options.retryResultUrl === 'string'
+      ? options.retryResultUrl.trim()
+      : '';
+    if (isLightweightGenerationRetryResultUrl(retryResultUrl)) {
+      patch.generationRetryResultUrl = retryResultUrl;
+    } else if (retryResultUrl) {
+      patch.generationRetryResultUrl = null;
+    }
+  } else {
+    patch.generationJobId = null;
+    patch.generationProviderId = null;
+    patch.generationClientSessionId = null;
+    patch.generationRetryResultUrl = null;
+    patch.generationRetryRequestedAt = null;
+  }
+
+  updateNodeData(nodeId, patch);
+}

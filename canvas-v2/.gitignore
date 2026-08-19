@@ -1,0 +1,54 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+ComfyUI/
+ComfyUI_frontend/
+Henji-AI/
+
+# Local agent/tool state
+.agents/
+.claude/
+.codex/
+.codex-run/
+.learnings/
+.omc/
+.trellis/
+AGENTS.md
+CLAUDE.md
+
+# Local backups and scratch output
+backups/
+tmp/
+src-tauri/src-backups/
+docs/plans/
+findings.md
+progress.md
+task_plan.md
+
+# Ad-hoc file backups created during iterative UI/provider work
+*.bak
+*.bak_*
+*-backups/
+ui-backups/
+settings-backups/

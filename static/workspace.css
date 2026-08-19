@@ -1,0 +1,33 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { background: #0d0d13; color: #ededf5; font: 14px system-ui, -apple-system, 'PingFang SC', sans-serif; }
+
+#workspace-shell { position: relative; height: 100dvh; }
+
+#workspace-switcher {
+  position: fixed; top: 8px; left: 8px; z-index: 40;
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  background: rgba(23, 23, 31, 0.72); border: 1px solid #34344a; border-radius: 999px;
+  backdrop-filter: blur(8px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.ws-brand { font-weight: 600; font-size: 13px; }
+.ws-tabs { display: flex; gap: 2px; padding: 2px; background: #101016; border-radius: 999px; }
+.ws-tab { border: 0; background: transparent; color: #9d9db5; padding: 4px 10px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12px; }
+.ws-tab.active { background: #29293a; color: #fff; }
+.ws-logout { background: transparent; color: #9d9db5; border: 1px solid #34344a; border-radius: 999px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px; }
+.ws-save-state { font-size: 12px; color: #9d9db5; }
+
+#workspace-stage { position: fixed; inset: 0; }
+.ws-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; opacity: 0; visibility: hidden; pointer-events: none; z-index: 0; transition: opacity 0.15s ease; }
+.ws-frame.active { opacity: 1; visibility: visible; pointer-events: auto; z-index: 1; }
+
+.ws-choice { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: radial-gradient(circle at 50% -20%, #263760, #0c0c10 45%); }
+.ws-choice.hidden { display: none; }
+.ws-choice-inner { text-align: center; }
+.ws-choice-title { font-size: 24px; margin-bottom: 22px; }
+.ws-choice-grid { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; }
+.ws-choice-card { width: 300px; padding: 26px 22px; background: #16161df5; border: 1px solid #34344a; border-radius: 16px; color: #ededf5; cursor: pointer; text-align: left; font: inherit; box-shadow: 0 24px 70px rgba(0,0,0,0.5); }
+.ws-choice-card:hover { border-color: #5b8def; }
+.ws-choice-card h2 { margin: 0 0 10px; font-size: 19px; }
+.ws-choice-card p { margin: 0; color: #9d9db5; line-height: 1.7; }

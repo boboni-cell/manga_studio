@@ -1,0 +1,252 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "id": "seedance-prompt",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "Seedance 提示词",
+      "description": "根据镜头内容生成可编辑的视频提示词草稿",
+      "input_schema": {
+        "shot": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "seedance/seedance-prompt.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "seedance-sequence",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "连续镜头",
+      "description": "为连续镜头生成时序脚本草稿",
+      "input_schema": {
+        "shots": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "seedance/seedance-sequence.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "seedance-continuation",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "续接",
+      "description": "生成与上一镜头连贯的续接提示词草稿",
+      "input_schema": {
+        "previous": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "video",
+      "prompt_file": "seedance/seedance-continuation.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "seedance-camera",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "运镜",
+      "description": "生成运镜与机位建议草稿",
+      "input_schema": {
+        "shot": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "seedance/seedance-camera.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "seedance-motion",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "动作",
+      "description": "生成人物动作与节奏建议草稿",
+      "input_schema": {
+        "shot": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "seedance/seedance-motion.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "seedance-characters",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "角色一致性",
+      "description": "生成角色一致性约束建议草稿",
+      "input_schema": {
+        "characters": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "seedance/seedance-characters.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "seedance-audio",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "音频",
+      "description": "生成环境音与音频描述建议草稿",
+      "input_schema": {
+        "shot": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "seedance/seedance-audio.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "seedance-troubleshoot",
+      "source": "seedance-2.0",
+      "version": "1",
+      "title": "故障修复",
+      "description": "对失败镜头生成诊断与修改建议草稿",
+      "input_schema": {
+        "error": "string",
+        "shot": "string",
+        "requirement": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "note",
+      "prompt_file": "seedance/seedance-troubleshoot.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "短剧初始化",
+      "description": "创建项目创作 brief 文本草稿",
+      "input_schema": {
+        "topic": "string"
+      },
+      "output_type": "text",
+      "target_node_type": null,
+      "prompt_file": "drama/short-drama.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-novel-analyze",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "原著分析",
+      "description": "生成原著分析文档草稿",
+      "input_schema": {
+        "source_text": "string"
+      },
+      "output_type": "text",
+      "target_node_type": null,
+      "prompt_file": "drama/short-drama-novel-analyze.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-develop",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "故事开发",
+      "description": "生成故事引擎与分集地图草稿",
+      "input_schema": {
+        "brief": "string"
+      },
+      "output_type": "text",
+      "target_node_type": null,
+      "prompt_file": "drama/short-drama-develop.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-write",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "单集剧本",
+      "description": "生成单集剧本文本草稿",
+      "input_schema": {
+        "outline": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "script",
+      "prompt_file": "drama/short-drama-write.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-assets",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "资产拆解",
+      "description": "生成角色/服装/场景资产建议草稿",
+      "input_schema": {
+        "script": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "asset",
+      "prompt_file": "drama/short-drama-assets.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-image-prompts",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "图片提示词",
+      "description": "生成图片提示词草稿",
+      "input_schema": {
+        "shot": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "image",
+      "prompt_file": "drama/short-drama-image-prompts.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-storyboard",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "分镜",
+      "description": "生成分镜 shot 草稿",
+      "input_schema": {
+        "script": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "drama/short-drama-storyboard.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-video-prompts",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "视频提示词",
+      "description": "生成视频提示词草稿",
+      "input_schema": {
+        "shot": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "shot",
+      "prompt_file": "drama/short-drama-video-prompts.md",
+      "consumes_text_points": true
+    },
+    {
+      "id": "short-drama-review",
+      "source": "drama-skills",
+      "version": "1",
+      "title": "独立审查",
+      "description": "生成审查意见 note 草稿",
+      "input_schema": {
+        "text": "string"
+      },
+      "output_type": "text",
+      "target_node_type": "note",
+      "prompt_file": "drama/short-drama-review.md",
+      "consumes_text_points": true
+    }
+  ]
+}
