@@ -68,10 +68,31 @@
   }
 
   document.querySelectorAll('.ws-choice-card').forEach(function (card) {
-    card.addEventListener('click', function () { activate(card.getAttribute('data-mode')); });
+    card.addEventListener('click', function (event) {
+      // Stop before the backdrop handler so the card's own mode wins.
+      event.stopPropagation();
+      activate(card.getAttribute('data-mode'));
+    });
   });
   document.getElementById('tabClassic').addEventListener('click', function () { activate('classic'); });
   document.getElementById('tabCanvas').addEventListener('click', function () { activate('canvas'); });
+
+  // Escape hatches so the mode-chooser overlay never traps the user:
+  // 1) clicking the dark backdrop (not on a card) dismisses with the default;
+  // 2) pressing Esc while the overlay is up dismisses with the default too.
+  // This matters because boot() can leave the overlay visible when no mode
+  // has been chosen yet, and without these the only way forward is clicking
+  // the (relatively small) cards — everything else looks "都点不动".
+  var choiceBackdrop = document.getElementById('workspace-choice');
+  if (choiceBackdrop) {
+    choiceBackdrop.addEventListener('click', function () { activate('classic'); });
+  }
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    var choice = document.getElementById('workspace-choice');
+    if (!choice || choice.classList.contains('hidden')) return;
+    activate('classic');
+  });
 
   fetch('/api/auth/me', { credentials: 'same-origin' })
     .then(function (r) { return r.json(); })

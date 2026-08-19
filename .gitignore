@@ -1,6 +1,5 @@
 .env
 .DS_Store
-node_modules/
 __pycache__/
 *.pyc
 static/uploads/*
@@ -11,3 +10,16 @@ data_backup*/
 data/*.local.backup.*.json
 node_modules/
 canvas/node_modules/
+
+# Local developer tooling / environment (never commit)
+.venv/
+.vscode/
+.opencode/
+.mcp.json
+.dsh-vision-toolkit/
+
+# Runtime data with secrets / user accounts (never commit)
+data/users.json
+data/users/
+data/admin_settings.json
+data/invitations.json

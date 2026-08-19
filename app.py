@@ -1604,7 +1604,14 @@ def _projects_get(project_id):
     project = data['projects'].get(project_id)
     if not isinstance(project, dict):
         return jsonify(error='项目不存在'), 404
-    return jsonify(project=project)
+    # Mirror _projects_list so clients always see a known last_mode. Without
+    # this, projects migrated from legacy canvas data (which never set
+    # last_mode) expose last_mode=None, and the workspace shell's boot() can
+    # leave the mode-chooser overlay stuck on top of everything.
+    out = dict(project)
+    if out.get('last_mode') not in ('classic', 'canvas'):
+        out['last_mode'] = 'classic'
+    return jsonify(project=out)
 
 def _projects_update(project_id):
     body, err = _projects_request_body()

@@ -80,12 +80,32 @@
         modal.querySelectorAll('.mode-card').forEach(function (x) { x.classList.toggle('active', x === b); });
       });
     });
-    document.getElementById('cancelCreate').addEventListener('click', function () { modal.remove(); });
-    document.getElementById('confirmCreate').addEventListener('click', async function () {
-      const title = document.getElementById('createTitle').value.trim() || '未命名项目';
-      const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ title: title, initial_mode: mode }) });
+    function closeCreateModal() {
       modal.remove();
-      location.href = '/workspace/' + r.project.id + '?mode=' + mode;
+      document.removeEventListener('keydown', escHandler);
+    }
+    function escHandler(e) { if (e.key === 'Escape') closeCreateModal(); }
+    // Dismiss on backdrop click AND on Esc so users are never trapped by the
+    // modal — clicks on the modal-card itself must NOT bubble up to dismiss.
+    modal.addEventListener('click', function (e) { if (e.target === modal) closeCreateModal(); });
+    document.addEventListener('keydown', escHandler);
+    var titleInput = document.getElementById('createTitle');
+    if (titleInput) titleInput.focus();
+    document.getElementById('cancelCreate').addEventListener('click', closeCreateModal);
+    document.getElementById('confirmCreate').addEventListener('click', async function () {
+      var btn = this;
+      if (btn.disabled) return;
+      btn.disabled = true; btn.textContent = '创建中…';
+      const title = document.getElementById('createTitle').value.trim() || '未命名项目';
+      try {
+        const r = await api('/api/projects', { method: 'POST', body: JSON.stringify({ title: title, initial_mode: mode }) });
+        modal.remove();
+        document.removeEventListener('keydown', escHandler);
+        location.href = '/workspace/' + r.project.id + '?mode=' + mode;
+      } catch (e) {
+        btn.disabled = false; btn.textContent = '创建并进入';
+        window.alert('创建项目失败：' + (e && e.message || e));
+      }
     });
   }
 
