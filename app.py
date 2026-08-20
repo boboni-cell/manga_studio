@@ -195,42 +195,103 @@ JOB_OWNERS = {}
 HISTORY_LOCK = threading.Lock()
 
 _postgres_ready = False
+_pg_pool = None
+_pg_pool_lock = threading.Lock()
+_pg_down_until = 0.0
 
 def data_key(path):
     return os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
 
-def init_postgres():
-    global _postgres_ready
+def _pg_pool_get():
+    """Lazily create a shared Postgres connection pool (thread-safe).
+
+    Replaces the old per-call psycopg.connect() — opening a fresh TCP+TLS
+    connection for every load_json/save_json was the dominant latency in
+    project delete / open flows (100-400ms per handshake on Railway).
+    """
+    global _pg_pool, _postgres_ready, _pg_down_until
+    if _pg_pool is not None:
+        return _pg_pool
     if not DATABASE_URL or not psycopg:
-        return False
+        return None
+    if time.time() < _pg_down_until:
+        return None
+    with _pg_pool_lock:
+        if _pg_pool is not None:
+            return _pg_pool
+        if time.time() < _pg_down_until:
+            return None
+        try:
+            from psycopg_pool import ConnectionPool
+            pool = ConnectionPool(
+                DATABASE_URL,
+                min_size=1,
+                max_size=8,
+                open=False,
+                kwargs={'connect_timeout': 10},
+            )
+            pool.open(wait=False, timeout=10)
+            with pool.connection(timeout=10) as conn:
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS kv_store (
+                        key TEXT PRIMARY KEY,
+                        data JSONB NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                ''')
+            _pg_pool = pool
+            _postgres_ready = True
+            print('[Postgres] connection pool ready', flush=True)
+        except Exception as e:
+            print(f'[Postgres] pool unavailable, using /app/data: {e}', flush=True)
+            _pg_pool = None
+            _postgres_ready = False
+            _pg_down_until = time.time() + 60  # backoff before retrying the DB
+    return _pg_pool
+
+def _pg_drop_pool(reason):
+    global _pg_pool, _postgres_ready, _pg_down_until
+    with _pg_pool_lock:
+        if _pg_pool is not None:
+            try:
+                _pg_pool.close()
+            except Exception:
+                pass
+            _pg_pool = None
+        _postgres_ready = False
+        _pg_down_until = time.time() + 30
+        print(f'[Postgres] {reason}, re-init after backoff', flush=True)
+
+def _pg_conn():
+    """Return a pooled connection (as a context manager) or None."""
+    pool = _pg_pool_get()
+    if pool is None:
+        return None
     try:
-        with psycopg.connect(DATABASE_URL) as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS kv_store (
-                    key TEXT PRIMARY KEY,
-                    data JSONB NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            ''')
-        _postgres_ready = True
+        return pool.connection(timeout=3)
     except Exception as e:
-        print(f'[Postgres] unavailable, using /app/data: {e}', flush=True)
+        _pg_drop_pool(f'pool acquire failed: {e}')
+        return None
+
+def init_postgres():
+    _pg_pool_get()
     return _postgres_ready
 
 def postgres_save(key, data, overwrite=True):
-    global _postgres_ready
     if not _postgres_ready:
         return False
     conflict = 'DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()' if overwrite else 'DO NOTHING'
+    conn = _pg_conn()
+    if conn is None:
+        return False
     try:
-        with psycopg.connect(DATABASE_URL) as conn:
+        with conn:
             conn.execute(
                 f'INSERT INTO kv_store (key, data) VALUES (%s, %s) ON CONFLICT (key) {conflict}',
                 (key, Jsonb(data))
             )
         return True
     except Exception as e:
-        _postgres_ready = False
         print(f'[Postgres] write failed for {key}: {e}', flush=True)
         return False
 
@@ -258,13 +319,15 @@ def load_json(path, default):
     """Load from Postgres first, falling back to the local JSON copy."""
     key = os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
     if _postgres_ready:
-        try:
-            with psycopg.connect(DATABASE_URL) as conn:
-                row = conn.execute('SELECT data FROM kv_store WHERE key = %s', (key,)).fetchone()
-            if row:
-                return row[0]
-        except Exception as e:
-            print(f'[Postgres] read failed for {key}, using /app/data: {e}', flush=True)
+        conn = _pg_conn()
+        if conn is not None:
+            try:
+                with conn:
+                    row = conn.execute('SELECT data FROM kv_store WHERE key = %s', (key,)).fetchone()
+                if row:
+                    return row[0]
+            except Exception as e:
+                print(f'[Postgres] read failed for {key}, using /app/data: {e}', flush=True)
     try:
         with open(path, 'r', encoding='utf-8') as f: return json.load(f)
     except: return default
@@ -1666,7 +1729,12 @@ def project_open(project_id):
         return jsonify(error='项目不存在'), 404
     project['last_opened_at'] = datetime.now(timezone.utc).isoformat()
     _projects_save(user_id, data)
-    return jsonify(ok=True, last_opened_at=project['last_opened_at'])
+    # Return the full project (mirroring _projects_get's last_mode default) so
+    # the client can skip the follow-up GET /api/projects/<id> round trip.
+    out = dict(project)
+    if out.get('last_mode') not in ('classic', 'canvas'):
+        out['last_mode'] = 'classic'
+    return jsonify(ok=True, project=out, last_opened_at=project['last_opened_at'])
 
 @app.route('/api/projects/<project_id>', methods=['DELETE'])
 @login_required
@@ -2015,11 +2083,14 @@ def project_canvas_v2(project_id):
         if resp.status_code >= 400:
             return resp, status
         # One-time compatible read of the legacy canvas for client-side migration.
+        # Only needed before the v2 document has been migrated; skip the
+        # (expensive) legacy canvases load on every subsequent open.
         legacy = None
-        legacy_id = project.get('canvas_id')
-        if legacy_id:
-            legacy_data = _canvas_load(current_user_id())
-            legacy = legacy_data['canvases'].get(legacy_id)
+        if not project.get('canvas_v2_migrated_at'):
+            legacy_id = project.get('canvas_id')
+            if legacy_id:
+                legacy_data = _canvas_load(current_user_id())
+                legacy = legacy_data['canvases'].get(legacy_id)
         result = resp.get_json()
         result['legacy_canvas'] = legacy
         result['canvas_v2_migrated_at'] = project.get('canvas_v2_migrated_at')

@@ -110,9 +110,10 @@
   }
 
   async function openProject(id) {
-    await api('/api/projects/' + id + '/open', { method: 'POST' });
-    const d = await api('/api/projects/' + id);
-    location.href = '/workspace/' + id + '?mode=' + (d.project.last_mode || 'classic');
+    // Single round trip: /open returns the full project (incl. last_mode).
+    const r = await api('/api/projects/' + id + '/open', { method: 'POST' });
+    const mode = (r.project && r.project.last_mode) || 'classic';
+    location.href = '/workspace/' + id + '?mode=' + mode;
   }
 
   async function renameProject(id) {
@@ -123,8 +124,13 @@
   }
 
   async function deleteProject(id) {
-    const p = await api('/api/projects/' + id);
-    const name = p.project.title || '未命名项目';
+    // Use the already-rendered card title instead of a GET round trip.
+    var name = '未命名项目';
+    var card = document.querySelector('.p-card[data-id="' + id + '"]');
+    if (card) {
+      var titleEl = card.querySelector('.p-card-title');
+      if (titleEl) name = titleEl.textContent.trim() || name;
+    }
     if (!window.confirm('确定把《' + name + '》移入回收站吗？项目画布、草稿、资产和历史不会永久删除。')) return;
     await api('/api/projects/' + id, { method: 'DELETE' });
     render();
