@@ -285,8 +285,10 @@ def postgres_save(key, data, overwrite=True):
     if conn is None:
         return False
     try:
-        with conn:
-            conn.execute(
+        # pool.connection() returns a context manager; "with conn as c"
+        # yields the real connection and returns it to the pool on exit.
+        with conn as c:
+            c.execute(
                 f'INSERT INTO kv_store (key, data) VALUES (%s, %s) ON CONFLICT (key) {conflict}',
                 (key, Jsonb(data))
             )
@@ -322,8 +324,8 @@ def load_json(path, default):
         conn = _pg_conn()
         if conn is not None:
             try:
-                with conn:
-                    row = conn.execute('SELECT data FROM kv_store WHERE key = %s', (key,)).fetchone()
+                with conn as c:
+                    row = c.execute('SELECT data FROM kv_store WHERE key = %s', (key,)).fetchone()
                 if row:
                     return row[0]
             except Exception as e:
