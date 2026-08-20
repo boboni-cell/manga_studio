@@ -3,10 +3,10 @@ builder = "nixpacks"
 
 [deploy]
 numReplicas = 1
-startCommand = "sh -c 'gunicorn app:app --bind 0.0.0.0:${PORT:-5001} --timeout 180 --workers 1 --threads 4'"
+startCommand = "sh -c 'gunicorn app:app --bind 0.0.0.0:${PORT:-3000} --timeout 180 --workers 1 --threads 4'"
 
 [service]
-port = 5001
+port = 3000
 
 [volumes]
 # 持久化数据目录，部署重启后不丢失
