@@ -1,8 +1,15 @@
 .git
 .venv
+node_modules/
 __pycache__/
 *.pyc
 .env
 tmp_frames/
 tmp_upscale/
 static/uploads/
+data/
+tests/
+.dsh-vision-toolkit/
+.opencode/
+.vscode/
+.mcp.json
