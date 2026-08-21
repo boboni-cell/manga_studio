@@ -1,5 +1,7 @@
 (function () {
   var trashMode = false;
+  var allProjects = [];
+  var searchTerm = '';
 
   async function api(url, options) {
     const res = await fetch(url, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, ...options });
@@ -17,25 +19,43 @@
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   }
 
-  async function render() {
-    const data = await api('/api/projects' + (trashMode ? '?trash=1' : ''));
+  function updateSummary(projects) {
+    var total = projects.length;
+    var weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    var recent = projects.filter(function (p) { return new Date(p.updated_at || p.last_opened_at || 0).getTime() >= weekAgo; }).length;
+    var canvas = projects.filter(function (p) { return p.last_mode === 'canvas'; }).length;
+    document.getElementById('statProjects').textContent = total;
+    document.getElementById('statRecent').textContent = recent;
+    document.getElementById('statCanvas').textContent = canvas;
+    document.getElementById('statClassic').textContent = total - canvas;
+    document.getElementById('projectCount').textContent = total + ' 个';
+    document.getElementById('sideProjectCount').textContent = total;
+    document.getElementById('welcomeSubtitle').textContent = trashMode ? '这里的项目可以恢复或永久删除' : (total ? '你有 ' + total + ' 个漫剧项目，继续今天的创作吧' : '从第一个项目开始你的漫剧创作之旅');
+    document.getElementById('projectSectionTitle').firstChild.nodeValue = trashMode ? '回收站 ' : '我的项目 ';
+  }
+
+  function paint() {
     const grid = document.getElementById('projectGrid');
-    const projects = data.projects || [];
+    const projects = allProjects.filter(function (p) { return !searchTerm || String(p.title || '').toLowerCase().includes(searchTerm); });
     document.getElementById('navTrash').classList.toggle('active', trashMode);
     document.getElementById('navProjects').classList.toggle('active', !trashMode);
+    document.getElementById('mobileTrash').classList.toggle('active', trashMode);
+    document.getElementById('mobileProjects').classList.toggle('active', !trashMode);
+    updateSummary(allProjects);
     const cards = [];
-    if (!trashMode) cards.push('<div class="p-card p-new" id="newCard">＋</div>');
+    if (!trashMode && !searchTerm) cards.push('<div class="p-card p-new" id="newCard"><div class="p-new-wrap"><span class="p-new-plus">＋</span><strong>创建新项目</strong><small>从经典工作台或画布开始</small></div></div>');
     for (const p of projects) {
       const menu = trashMode
-        ? '<div class="p-card-actions"><button class="p-card-menu" data-restore="' + esc(p.id) + '" title="恢复">↩</button><button class="p-card-menu danger" data-perm="' + esc(p.id) + '" title="删除">🗑</button></div>'
-        : '<div class="p-card-actions"><button class="p-card-menu" data-rename="' + esc(p.id) + '" title="重命名">✎</button><button class="p-card-menu danger" data-del="' + esc(p.id) + '" title="移入回收站">🗑</button></div>';
+        ? '<div class="p-card-actions"><button class="p-card-menu" data-restore="' + esc(p.id) + '" title="恢复">↩</button><button class="p-card-menu danger" data-perm="' + esc(p.id) + '" title="永久删除">×</button></div>'
+        : '<div class="p-card-actions"><button class="p-card-menu" data-rename="' + esc(p.id) + '" title="重命名">✎</button><button class="p-card-menu danger" data-del="' + esc(p.id) + '" title="移入回收站">⌫</button></div>';
       cards.push(
         '<div class="p-card" data-id="' + esc(p.id) + '">' + menu +
-        '<div class="p-cover">' + (p.cover_url ? '<img src="' + esc(p.cover_url) + '" alt="">' : '') + '</div>' +
-        '<div class="p-card-body"><div class="p-card-title">' + esc(p.title || '未命名项目') + '</div><div class="p-card-time">' + esc(timeText(p.last_opened_at || p.updated_at)) + '</div></div>' +
+        '<div class="p-cover">' + (p.cover_url ? '<img src="' + esc(p.cover_url) + '" alt="">' : '') + '<span class="p-status">' + (trashMode ? '已删除' : '进行中') + '</span></div>' +
+        '<div class="p-card-body"><div class="p-card-title">' + esc(p.title || '未命名项目') + '</div><div class="p-card-time">◴ ' + esc(timeText(p.last_opened_at || p.updated_at)) + '</div><span class="p-card-mode">' + (p.last_mode === 'canvas' ? '画布工作台' : '经典工作台') + '</span></div>' +
         '</div>'
       );
     }
+    if (!cards.length) cards.push('<div class="p-empty">' + (searchTerm ? '没有找到匹配的项目' : '这里还没有项目') + '</div>');
     grid.innerHTML = cards.join('');
     const newCard = document.getElementById('newCard');
     if (newCard) newCard.addEventListener('click', openCreateModal);
@@ -54,6 +74,12 @@
     document.querySelectorAll('[data-perm]').forEach(function (btn) {
       btn.addEventListener('click', function (event) { event.stopPropagation(); permanentDeleteProject(btn.getAttribute('data-perm')); });
     });
+  }
+
+  async function render() {
+    const data = await api('/api/projects' + (trashMode ? '?trash=1' : ''));
+    allProjects = data.projects || [];
+    paint();
   }
 
   function openCreateModal() {
@@ -132,8 +158,19 @@
       if (titleEl) name = titleEl.textContent.trim() || name;
     }
     if (!window.confirm('确定把《' + name + '》移入回收站吗？项目画布、草稿、资产和历史不会永久删除。')) return;
-    await api('/api/projects/' + id, { method: 'DELETE' });
-    render();
+    // Optimistic UI: soft delete only changes project metadata. Remove the
+    // card immediately and avoid a second full Postgres read after DELETE.
+    var index = allProjects.findIndex(function (p) { return p.id === id; });
+    var removed = index >= 0 ? allProjects.splice(index, 1)[0] : null;
+    if (card) card.classList.add('removing');
+    paint();
+    try {
+      await api('/api/projects/' + id, { method: 'DELETE' });
+    } catch (e) {
+      if (removed) allProjects.splice(index, 0, removed);
+      paint();
+      window.alert('删除项目失败：' + (e && e.message || e));
+    }
   }
 
   async function restoreProject(id) {
@@ -150,6 +187,8 @@
   document.getElementById('createProject').addEventListener('click', openCreateModal);
   document.getElementById('navTrash').addEventListener('click', function () { trashMode = !trashMode; render(); });
   document.getElementById('navProjects').addEventListener('click', function () { trashMode = false; render(); });
+  document.getElementById('mobileTrash').addEventListener('click', function () { trashMode = true; render(); });
+  document.getElementById('mobileProjects').addEventListener('click', function () { trashMode = false; render(); });
   document.getElementById('navLogout').addEventListener('click', async function () {
     sessionStorage.removeItem('manga_workspace_mode');
     await fetch('/api/auth/logout', { method: 'POST' }).catch(function () {});
@@ -159,11 +198,20 @@
   fetch('/api/auth/me', { credentials: 'same-origin' })
     .then(function (r) { return r.json(); })
     .then(function (me) {
+      var username = me && me.username || '创作者';
+      var avatar = username.slice(0, 1).toUpperCase();
+      document.getElementById('sideUsername').textContent = username;
+      ['sideAvatar', 'mobileAvatar', 'topAvatar'].forEach(function (id) { document.getElementById(id).textContent = avatar; });
       if (me && me.is_admin === true) {
         var adminBtn = document.getElementById('navAdmin');
+        var mobileAdmin = document.getElementById('mobileAdmin');
         if (adminBtn) {
           adminBtn.hidden = false;
           adminBtn.addEventListener('click', function () { location.href = '/admin'; });
+        }
+        if (mobileAdmin) {
+          mobileAdmin.hidden = false;
+          mobileAdmin.addEventListener('click', function () { location.href = '/admin'; });
         }
       }
     })
@@ -190,6 +238,17 @@
       if (file) importProject(file);
     };
     input.click();
+  });
+
+  document.getElementById('welcomeImport').addEventListener('click', function () { document.getElementById('importProject').click(); });
+  document.getElementById('projectSearch').addEventListener('input', function (event) {
+    searchTerm = event.target.value.trim().toLowerCase();
+    paint();
+  });
+  document.addEventListener('keydown', function (event) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      event.preventDefault(); document.getElementById('projectSearch').focus();
+    }
   });
 
   render().catch(function (e) { window.alert(e.message); });

@@ -3,32 +3,58 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>项目 · Manga Studio</title>
+    <title>漫剧工坊</title>
     <link rel="icon" type="image/png" href="/static/site-icon.png" />
     <link rel="stylesheet" href="/static/projects.css" />
   </head>
   <body>
+    <div class="bg-orb bg-orb-one"></div><div class="bg-orb bg-orb-two"></div><div class="bg-grid"></div>
     <div class="p-shell">
       <aside class="p-side">
-        <div class="p-brand">🎬 Manga Studio</div>
+        <div class="p-brand"><span class="brand-mark">▦</span><span><b>漫剧工坊</b><small>MANGA STUDIO</small></span></div>
         <nav class="p-nav">
-          <button class="active" id="navProjects">项目</button>
-          <button onclick="location.href='/assets'">资产</button>
-          <button onclick="location.href='/api-settings'">API 设置</button>
-          <button id="navTrash">回收站</button>
-          <button id="navAdmin" hidden>后台管理</button>
-          <button id="navLogout">退出</button>
+          <small>工作台</small>
+          <button class="active" id="navProjects"><span>▦</span>项目 <em id="sideProjectCount">0</em></button>
+          <button onclick="location.href='/assets'"><span>✦</span>资产</button>
+          <button id="importProject"><span>⇩</span>导入项目</button>
+          <i></i><small>设置</small>
+          <button onclick="location.href='/api-settings'"><span>⌘</span>API 设置</button>
+          <button id="navTrash"><span>♲</span>回收站</button>
+          <button id="navAdmin" hidden><span>♢</span>后台管理</button>
+          <i></i><button id="navLogout"><span>↪</span>退出</button>
         </nav>
+        <div class="p-user"><div class="p-avatar" id="sideAvatar">创</div><div><b id="sideUsername">创作者</b><small>漫剧创作者</small></div></div>
       </aside>
+
       <main class="p-main">
-        <header class="p-head">
-          <h1>欢迎回来</h1>
-          <button class="p-create" id="createProject">＋ 新建项目</button>
-          <button class="p-import" id="importProject">导入项目</button>
+        <header class="mobile-head"><div class="mobile-brand"><span class="brand-mark">▦</span><b>漫剧工坊</b></div><div class="p-avatar" id="mobileAvatar">创</div></header>
+        <header class="p-topbar">
+          <label class="p-search"><span>⌕</span><input id="projectSearch" type="search" placeholder="搜索项目..." autocomplete="off" /><kbd>⌘ K</kbd></label>
+          <div class="top-avatar p-avatar" id="topAvatar">创</div>
         </header>
-        <section class="p-grid" id="projectGrid"></section>
+        <div class="p-content">
+          <section class="p-welcome">
+            <div><h1 id="welcomeTitle">欢迎回来<span>👋</span></h1><p id="welcomeSubtitle">继续你的漫剧创作之旅</p></div>
+            <div class="p-actions"><button class="secondary" id="welcomeImport">⇩ 导入项目</button><button class="primary" id="createProject">＋ 新建项目</button></div>
+          </section>
+          <section class="p-stats">
+            <article><span class="stat-icon">▦</span><b id="statProjects">0</b><small>项目总数</small></article>
+            <article><span class="stat-icon">◴</span><b id="statRecent">0</b><small>本周编辑</small></article>
+            <article><span class="stat-icon">✦</span><b id="statCanvas">0</b><small>画布项目</small></article>
+            <article><span class="stat-icon">◫</span><b id="statClassic">0</b><small>经典项目</small></article>
+          </section>
+          <section class="p-projects-head"><h2 id="projectSectionTitle">我的项目 <span id="projectCount">0 个</span></h2></section>
+          <section class="p-grid" id="projectGrid" aria-live="polite"></section>
+        </div>
       </main>
     </div>
+    <nav class="mobile-nav">
+      <button class="active" id="mobileProjects"><span>▦</span>项目</button>
+      <button onclick="location.href='/assets'"><span>✦</span>资产</button>
+      <button onclick="location.href='/api-settings'"><span>⌘</span>接口</button>
+      <button id="mobileTrash"><span>♲</span>回收站</button>
+      <button id="mobileAdmin" hidden><span>♢</span>后台</button>
+    </nav>
     <script src="/static/projects.js"></script>
   </body>
 </html>
