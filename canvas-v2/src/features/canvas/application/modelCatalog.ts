@@ -88,6 +88,11 @@ interface ImageModelCatalogSnapshot {
   agnesApiKey?: string;
 }
 
+const MANGA_PLATFORM_IMAGE_MODEL_LABELS: Record<string, string> = {
+  'midjourney/text-to-image': 'Midjourney 8.2',
+  'doubao-seedream-5-0-pro-260628': 'Seedream 5.0 Pro',
+};
+
 function normalizeSupportedRatios(rawRatios: unknown, fallback: string[] = ['auto', '16:9']): string[] {
   const source = Array.isArray(rawRatios) && rawRatios.length > 0 ? rawRatios : fallback;
   const seen = new Set<string>();
@@ -229,7 +234,7 @@ export function buildMangaImageModelCatalog(
     providerId: 'manga-platform',
     providerLabel: '平台模型',
     modelId: model,
-    modelLabel: model,
+    modelLabel: MANGA_PLATFORM_IMAGE_MODEL_LABELS[model] ?? model,
     supportedRatios,
     usable: true,
     mangaRoute: { usePersonalApi: false, apiProfileId: null },

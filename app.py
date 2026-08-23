@@ -147,10 +147,16 @@ MODEL_CAPS = {
 
 # Image generation configs
 NANO_GPT_MIDJOURNEY_MODEL_ID = "midjourney/text-to-image"
+NANO_GPT_MIDJOURNEY_VERSION = "8.2"
 NANO_GPT_IMAGE_MODELS = {"gpt-image-2", "nano-banana-2", NANO_GPT_MIDJOURNEY_MODEL_ID}
 LEGACY_IMAGE_MODEL_ALIASES = {"midjourney": NANO_GPT_MIDJOURNEY_MODEL_ID}
 VOLC_IMAGE_MODEL_ID = "doubao-seedream-4-5-251128"
-ALL_IMAGE_MODELS = sorted(NANO_GPT_IMAGE_MODELS) + [AGNES_IMAGE_MODEL_ID, "volc-seedream-4-5"]
+VOLC_SEEDREAM_5_PRO_MODEL_ID = "doubao-seedream-5-0-pro-260628"
+VOLC_IMAGE_MODELS = {
+    "volc-seedream-4-5": VOLC_IMAGE_MODEL_ID,
+    VOLC_SEEDREAM_5_PRO_MODEL_ID: VOLC_SEEDREAM_5_PRO_MODEL_ID,
+}
+ALL_IMAGE_MODELS = sorted(NANO_GPT_IMAGE_MODELS) + [AGNES_IMAGE_MODEL_ID] + list(VOLC_IMAGE_MODELS)
 IMAGE_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "4:5", "5:4", "custom"]
 # Ratio → pixel size for Nano models (moderate sizes)
 RATIO_TO_SIZE_NANO = {
@@ -178,6 +184,14 @@ RATIO_TO_SIZE_VOLC = {
     "3:4": "1728x2304", "4:3": "2304x1728",
     "9:16": "1440x2560", "16:9": "2560x1440",
     "4:5": "1728x2160", "5:4": "2160x1728"
+}
+# Seedream 5.0 Pro accepts the same Ark image API, but caps output at
+# 4,624,220 pixels. Keep each preset inside that model-specific limit.
+RATIO_TO_SIZE_VOLC_SEEDREAM_5_PRO = {
+    "1:1": "2048x2048", "2:3": "1664x2496", "3:2": "2496x1664",
+    "3:4": "1792x2304", "4:3": "2304x1792",
+    "9:16": "1152x2048", "16:9": "2048x1152",
+    "4:5": "1792x2240", "5:4": "2240x1792"
 }
 DEFAULT_RATIO = "1:1"
 
@@ -985,8 +999,9 @@ def model_pricing_catalog():
     labels = {
         'doubao': '豆包', 'glm46': 'GPT-4.1 Mini', 'claude46': 'Claude 4.6',
         'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2',
-        NANO_GPT_MIDJOURNEY_MODEL_ID: 'Midjourney',
+        NANO_GPT_MIDJOURNEY_MODEL_ID: 'Midjourney 8.2',
         AGNES_IMAGE_MODEL_ID: 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5',
+        VOLC_SEEDREAM_5_PRO_MODEL_ID: 'Seedream 5.0 Pro',
         'seedance': 'Seedance（火山）', AGNES_VIDEO_MODEL_ID: 'Agnes Video v2.0',
         'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine',
         'vidu-q3': 'Vidu Q3', 'seedance-v15-pro': 'Seedance v1.5 Pro',
@@ -4127,6 +4142,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             'prompt': final_prompt,
             'resolution': supported_ratio,
             'aspect_ratio': supported_ratio,
+            'version': NANO_GPT_MIDJOURNEY_VERSION,
             'n': 4,
         }
         endpoint = f'{api_root}/images'
@@ -4183,6 +4199,8 @@ def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', a
     """Call Volc Ark Seedream for image generation."""
     if ratio == 'custom' and custom_size:
         size = custom_size
+    elif model_id == VOLC_SEEDREAM_5_PRO_MODEL_ID:
+        size = RATIO_TO_SIZE_VOLC_SEEDREAM_5_PRO.get(ratio, "2048x2048")
     else:
         size = RATIO_TO_SIZE_VOLC.get(ratio, "1920x1920")
     client = Ark(api_key=api_key or ARK_API_KEY)
@@ -4223,7 +4241,12 @@ def generate_image():
     elif selected_model in NANO_GPT_IMAGE_MODELS:
         builtin = {'provider': 'nano', 'base_url': NANO_GPT_BASE, 'api_key': NANO_GPT_API_KEY, 'model': selected_model}
     else:
-        builtin = {'provider': 'ark', 'base_url': 'https://ark.cn-beijing.volces.com/api/v3', 'api_key': ARK_API_KEY, 'model': VOLC_IMAGE_MODEL_ID}
+        builtin = {
+            'provider': 'ark',
+            'base_url': 'https://ark.cn-beijing.volces.com/api/v3',
+            'api_key': ARK_API_KEY,
+            'model': VOLC_IMAGE_MODELS[selected_model],
+        }
     ratio = body.get('ratio', DEFAULT_RATIO)
     custom_size = body.get('custom_size', '')
     mode = body.get('mode', 'storyboard')

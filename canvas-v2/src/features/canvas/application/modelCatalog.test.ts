@@ -50,4 +50,16 @@ describe('Manga Studio image catalog', () => {
       mangaRoute: { usePersonalApi: true, apiProfileId: 'image-profile' },
     });
   });
+
+  it('shows the pinned Midjourney version and Seedream 5 Pro label', () => {
+    const entries = buildMangaImageModelCatalog([
+      'midjourney/text-to-image',
+      'doubao-seedream-5-0-pro-260628',
+    ], []);
+
+    expect(entries.map(({ modelLabel }) => modelLabel)).toEqual([
+      'Midjourney 8.2',
+      'Seedream 5.0 Pro',
+    ]);
+  });
 });

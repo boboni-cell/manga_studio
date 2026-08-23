@@ -565,6 +565,7 @@ class NanoGptMidjourneyTest(unittest.TestCase):
         self.assertEqual(request.kwargs['json']['model'], 'midjourney/text-to-image')
         self.assertEqual(request.kwargs['json']['resolution'], '16:9')
         self.assertEqual(request.kwargs['json']['aspect_ratio'], '16:9')
+        self.assertEqual(request.kwargs['json']['version'], '8.2')
         self.assertEqual(request.kwargs['json']['n'], 4)
         self.assertNotIn('size', request.kwargs['json'])
         download_mock.assert_called_once_with('https://example.com/mj.png')
@@ -580,6 +581,39 @@ class NanoGptMidjourneyTest(unittest.TestCase):
                 input_images=[{'url': 'https://example.com/reference.png'}],
             )
         post_mock.assert_not_called()
+
+
+class VolcSeedream5ProTest(unittest.TestCase):
+    def test_seedream_5_pro_is_a_builtin_ark_image_model(self):
+        model_id = 'doubao-seedream-5-0-pro-260628'
+        self.assertEqual(app_module.VOLC_IMAGE_MODELS[model_id], model_id)
+        self.assertIn(model_id, app_module.ALL_IMAGE_MODELS)
+
+    @mock.patch.object(app_module, 'download_and_save_image', return_value=('/stored/seedream5.jpg', 'seedream5.jpg'))
+    @mock.patch.object(app_module, 'Ark')
+    def test_seedream_5_pro_uses_ark_image_api_with_legal_size(self, ark_mock, download_mock):
+        response = mock.Mock()
+        response.data = [mock.Mock(url='https://example.com/seedream5.jpg')]
+        ark_mock.return_value.images.generate.return_value = response
+
+        result = app_module.volc_image_generate(
+            '电影角色设定',
+            [],
+            'https://studio.example.com',
+            '2:3',
+            api_key='test-key',
+            model_id=app_module.VOLC_SEEDREAM_5_PRO_MODEL_ID,
+        )
+
+        self.assertEqual(result, ('/stored/seedream5.jpg', 'seedream5.jpg'))
+        ark_mock.assert_called_once_with(api_key='test-key')
+        ark_mock.return_value.images.generate.assert_called_once_with(
+            model='doubao-seedream-5-0-pro-260628',
+            prompt='电影角色设定',
+            size='1664x2496',
+            watermark=False,
+        )
+        download_mock.assert_called_once_with('https://example.com/seedream5.jpg')
 
 
 if __name__ == '__main__':
