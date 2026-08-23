@@ -1,9 +1,9 @@
-import os, json, uuid, time, threading, requests, functools, sys, re, secrets, tempfile
+import os, json, uuid, time, threading, requests, functools, sys, re, secrets, tempfile, copy
 import math
 import tos
 from datetime import datetime, timezone
-from urllib.parse import quote
-from flask import Flask, request, jsonify, send_from_directory, redirect, session, Response
+from urllib.parse import quote, urlparse, parse_qs
+from flask import Flask, request, jsonify, send_from_directory, redirect, session, Response, has_request_context
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from volcenginesdkarkruntime import Ark
@@ -297,6 +297,29 @@ def postgres_save(key, data, overwrite=True):
         print(f'[Postgres] write failed for {key}: {e}', flush=True)
         return False
 
+def postgres_save_many(items):
+    """Upsert several independent JSON documents in one database round trip."""
+    if not _postgres_ready or not items:
+        return False
+    conn = _pg_conn()
+    if conn is None:
+        return False
+    placeholders = ', '.join(['(%s, %s)'] * len(items))
+    params = []
+    for key, data in items:
+        params.extend((key, Jsonb(data)))
+    try:
+        with conn as c:
+            c.execute(
+                f'INSERT INTO kv_store (key, data) VALUES {placeholders} '
+                'ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()',
+                params
+            )
+        return True
+    except Exception as e:
+        print(f'[Postgres] batch write failed: {e}', flush=True)
+        return False
+
 def migrate_local_json_to_postgres():
     if not _postgres_ready:
         return {'scanned': 0, 'imported': 0}
@@ -317,8 +340,23 @@ def migrate_local_json_to_postgres():
     print(f'[Postgres] local bootstrap scanned={scanned} imported={imported}', flush=True)
     return {'scanned': scanned, 'imported': imported}
 
+_JSON_CACHE = {}
+_JSON_CACHE_LOCK = threading.Lock()
+
+def _json_cache_get(path):
+    with _JSON_CACHE_LOCK:
+        cached = _JSON_CACHE.get(os.path.abspath(path))
+        return copy.deepcopy(cached) if cached is not None else None
+
+def _json_cache_set(path, data):
+    with _JSON_CACHE_LOCK:
+        _JSON_CACHE[os.path.abspath(path)] = copy.deepcopy(data)
+
 def load_json(path, default):
     """Load from Postgres first, falling back to the local JSON copy."""
+    cached = _json_cache_get(path)
+    if cached is not None:
+        return cached
     key = os.path.relpath(path, DATA).replace(os.sep, '/').replace('.json', '')
     if _postgres_ready:
         conn = _pg_conn()
@@ -327,20 +365,37 @@ def load_json(path, default):
                 with conn as c:
                     row = c.execute('SELECT data FROM kv_store WHERE key = %s', (key,)).fetchone()
                 if row:
-                    return row[0]
+                    _json_cache_set(path, row[0])
+                    return copy.deepcopy(row[0])
             except Exception as e:
                 print(f'[Postgres] read failed for {key}, using /app/data: {e}', flush=True)
     try:
-        with open(path, 'r', encoding='utf-8') as f: return json.load(f)
-    except: return default
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        data = default
+    _json_cache_set(path, data)
+    return copy.deepcopy(data)
+
+def _save_json_local(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    _json_cache_set(path, data)
 
 def save_json(path, data):
     """Write the local recovery copy, then upsert the Postgres primary copy."""
     key = data_key(path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _save_json_local(path, data)
     postgres_save(key, data)
+
+def save_json_many(items):
+    """Write recovery copies, then persist all documents atomically in Postgres."""
+    prepared = []
+    for path, data in items:
+        _save_json_local(path, data)
+        prepared.append((data_key(path), data))
+    postgres_save_many(prepared)
 
 def current_user_id():
     return session.get('user_id')
@@ -362,7 +417,28 @@ def users_path(): return os.path.join(DATA, 'users.json')
 def invitations_path(): return os.path.join(DATA, 'invitations.json')
 def model_pricing_path(): return os.path.join(DATA, 'model_pricing.json')
 
-def insert_history(entry, limit=100, user_id=None):
+_HISTORY_CONTEXT = threading.local()
+
+def current_history_project_id():
+    contextual = getattr(_HISTORY_CONTEXT, 'project_id', None)
+    if contextual:
+        return contextual
+    if not has_request_context():
+        return None
+    project_id = request.headers.get('X-Project-ID') or request.args.get('project_id')
+    if not project_id and request.referrer:
+        try:
+            project_id = parse_qs(urlparse(request.referrer).query).get('project_id', [None])[0]
+        except (TypeError, ValueError):
+            project_id = None
+    project_id = str(project_id or '').strip()
+    return project_id if re.fullmatch(r'[A-Za-z0-9_-]{1,128}', project_id) else None
+
+def insert_history(entry, limit=100, user_id=None, project_id=None):
+    entry = dict(entry)
+    project_id = project_id or current_history_project_id()
+    if project_id:
+        entry['project_id'] = project_id
     with HISTORY_LOCK:
         path = history_path(user_id)
         hist = load_json(path, [])
@@ -960,13 +1036,17 @@ def refund_model_points(user_id, cost):
         save_json(users_path(), users)
 
 def start_metered_job(target, args, job_id, user_id, point_cost):
+    project_id = current_history_project_id()
     def runner():
+        _HISTORY_CONTEXT.project_id = project_id
         try:
             target(*args)
         except Exception as exc:
             JOBS[job_id] = {'status': 'failed', 'error': str(exc)}
-        if point_cost and JOBS.get(job_id, {}).get('status') == 'failed':
-            refund_model_points(user_id, point_cost)
+        finally:
+            if point_cost and JOBS.get(job_id, {}).get('status') == 'failed':
+                refund_model_points(user_id, point_cost)
+            _HISTORY_CONTEXT.project_id = None
     threading.Thread(target=runner, daemon=True).start()
 
 def _mock_generation_job(job_id, kind='image', delay=0.8):
@@ -1653,14 +1733,13 @@ def _projects_create():
     now = datetime.now(timezone.utc).isoformat()
     canvas_id = uuid.uuid4().hex
     canvas = {'id': canvas_id, 'title': title, 'created_at': now, 'updated_at': now, 'viewport': {'x': 0, 'y': 0, 'zoom': 0.85}, 'nodes': [], 'edges': []}
-    with CANVAS_LOCK:
-        cdata = _canvas_load(user_id)
-        cdata['canvases'][canvas_id] = canvas
-        _canvas_save(user_id, cdata)
     pid = uuid.uuid4().hex
     project = {'id': pid, 'title': title, 'canvas_id': canvas_id, 'cover_url': None, 'created_at': now, 'updated_at': now, 'last_opened_at': now, 'classic_state': {}, 'last_mode': initial_mode, 'deleted_at': None}
     data['projects'][pid] = project
-    _projects_save(user_id, data)
+    with CANVAS_LOCK:
+        cdata = _canvas_load(user_id)
+        cdata['canvases'][canvas_id] = canvas
+        save_json_many(((canvases_path(user_id), cdata), (projects_path(user_id), data)))
     return jsonify(project=project), 201
 
 def _projects_get(project_id):
@@ -2070,9 +2149,8 @@ def _project_v2_get_or_create(project_id):
               'viewport': {'x': 0, 'y': 0, 'zoom': 0.85}, 'nodes': [], 'edges': []}
     cdata = _canvas_v2_load(user_id)
     cdata['canvases'][canvas_id] = canvas
-    _canvas_v2_save(user_id, cdata)
     project['canvas_v2_id'] = canvas_id
-    _projects_save(user_id, data)
+    save_json_many(((canvas_v2_path(user_id), cdata), (projects_path(user_id), data)))
     return project, jsonify(canvas=canvas), 201
 
 @app.route('/api/projects/<project_id>/canvas-v2', methods=['GET', 'PUT'])
@@ -2885,7 +2963,11 @@ def restore_asset_item(cat, item_id):
 @app.route('/api/history', methods=['GET'])
 @login_required
 def get_history():
-    return jsonify(load_json(history_path(), []))
+    history = load_json(history_path(), [])
+    project_id = current_history_project_id()
+    if project_id:
+        history = [entry for entry in history if isinstance(entry, dict) and entry.get('project_id') in (None, '', project_id)]
+    return jsonify(history)
 
 @app.route('/api/history/media')
 @login_required

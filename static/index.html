@@ -2308,6 +2308,21 @@ function safeFetch(url, opts) {
 }
 
 // ── State ────────────────────────────────────────────────────
+const WORKSPACE_PROJECT_ID = new URLSearchParams(location.search).get('project_id') || '';
+if (WORKSPACE_PROJECT_ID) {
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function(input, options) {
+    const requestUrl = typeof input === 'string'
+      ? new URL(input, location.href)
+      : (input instanceof Request ? new URL(input.url) : null);
+    if (!requestUrl || requestUrl.origin !== location.origin || !requestUrl.pathname.startsWith('/api/')) {
+      return nativeFetch(input, options);
+    }
+    const headers = new Headers((options && options.headers) || (input instanceof Request ? input.headers : undefined));
+    headers.set('X-Project-ID', WORKSPACE_PROJECT_ID);
+    return nativeFetch(input, { ...(options || {}), headers });
+  };
+}
 let characters = {};
 let assets = { outfits: [], scenes: [], audios: [], uploads: [] };
 let history = [];

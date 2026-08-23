@@ -683,7 +683,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       void showErrorDialog(msg, t('common.error'));
       return null;
     }
-    if (!resolved.entryId.startsWith('dreamina:') && !resolved.entryId.startsWith('custom:') && !resolved.entryId.startsWith('agnes:')) {
+    if (!resolved.entryId.startsWith('dreamina:') && !resolved.entryId.startsWith('custom:') && !resolved.entryId.startsWith('agnes:') && !resolved.entryId.startsWith('manga:image:')) {
       // Fallback: no custom provider configured and no Dreamina login. Prompt
       // the user to set one up in 我的配置.
       const msg = '请先在「设置 → 我的配置」里添加至少一个服务商，或在「Dreamina」里登录 CLI 后再生成。';

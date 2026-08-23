@@ -1,6 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
-
-import { api } from '@/api';
+import { useMemo } from 'react';
 
 import {
   AGNES_PROVIDER_DEFAULTS,
@@ -11,6 +9,7 @@ import {
 } from '@/stores/customProvidersStore';
 import { hasCustomProviderCredential } from '@/features/canvas/application/providerAvailability';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useMangaCatalogResource } from './mangaCatalogApi';
 
 export interface ChatCatalogEntry {
   id: string;
@@ -221,27 +220,12 @@ export function buildMangaChatModelCatalog(
 }
 
 function useMangaChatModelCatalog(enabled: boolean): ChatCatalogEntry[] {
-  const [entries, setEntries] = useState<ChatCatalogEntry[]>([]);
-  useEffect(() => {
-    if (!enabled) return;
-    let cancelled = false;
-    Promise.all([
-      api<MangaTextModelsResponse>('/api/text-models'),
-      api<MangaSettingsResponse>('/api/settings'),
-    ]).then(([modelResponse, settingsResponse]) => {
-      if (cancelled) return;
-      setEntries(buildMangaChatModelCatalog(
-        Array.isArray(modelResponse.models) ? modelResponse.models : [],
-        Array.isArray(settingsResponse.api_profiles?.text) ? settingsResponse.api_profiles.text : [],
-      ));
-    }).catch(() => {
-      if (!cancelled) setEntries([]);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled]);
-  return entries;
+  const modelResponse = useMangaCatalogResource<MangaTextModelsResponse>('/api/text-models', enabled);
+  const settingsResponse = useMangaCatalogResource<MangaSettingsResponse>('/api/settings', enabled);
+  return useMemo(() => buildMangaChatModelCatalog(
+    Array.isArray(modelResponse?.models) ? modelResponse.models : [],
+    Array.isArray(settingsResponse?.api_profiles?.text) ? settingsResponse.api_profiles.text : [],
+  ), [modelResponse, settingsResponse]);
 }
 
 export function useChatModelCatalog(): ChatCatalogEntry[] {

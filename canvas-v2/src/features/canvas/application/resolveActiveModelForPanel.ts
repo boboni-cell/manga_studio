@@ -7,6 +7,7 @@ import {
 } from '@/features/canvas/models';
 import {
   buildImageModelCatalog,
+  getMangaImageModelCatalogSnapshot,
   type CatalogEntry,
 } from '@/features/canvas/application/modelCatalog';
 import {
@@ -205,6 +206,35 @@ function resolveAgnesModel(
   };
 }
 
+function resolveMangaModel(
+  entryId: string,
+  ratio: string,
+  extraParams: Record<string, unknown>,
+  catalog: readonly CatalogEntry[],
+  resolvedByFallback: boolean,
+): ResolvedPanelModel {
+  const entry = catalog.find((candidate) => candidate.id === entryId);
+  const route = entry?.mangaRoute;
+  return {
+    entryId,
+    modelForGateway: entry?.modelId ?? '',
+    providerId: entry?.providerId ?? 'manga-platform',
+    providerLabel: entry?.providerLabel ?? '平台模型',
+    ratio,
+    builtinModel: null,
+    apiKey: '',
+    requiresApiKey: false,
+    usable: entry?.usable ?? false,
+    resolvedByFallback,
+    extraParams: {
+      ...extraParams,
+      use_personal_api: route?.usePersonalApi === true,
+      api_profile_id: route?.apiProfileId ?? undefined,
+    },
+    supportedRatios: entry?.supportedRatios ?? ['1:1', '16:9', '9:16'],
+  };
+}
+
 function resolvePanelModelConfig(
   config: PanelModelConfigValue,
   customProviders: readonly CustomProviderConfig[],
@@ -230,6 +260,10 @@ function resolvePanelModelConfig(
 
   if (entryId.startsWith('agnes:image:')) {
     return resolveAgnesModel(entryId, ratio, extraParams, catalog, resolvedByFallback);
+  }
+
+  if (entryId.startsWith('manga:image:')) {
+    return resolveMangaModel(entryId, ratio, extraParams, catalog, resolvedByFallback);
   }
 
   if (entryId.startsWith('custom:')) {
@@ -263,11 +297,14 @@ export function resolveActiveModelForPanel(
 ): ResolvedPanelModel {
   const settings = useSettingsStore.getState();
   const customProviders = useCustomProvidersStore.getState().providers;
-  const catalog = buildImageModelCatalog({
-    customProviders,
-    dreaminaStatus: settings.dreaminaStatus,
-    agnesApiKey: settings.agnesApiKey,
-  });
+  const useMangaBackend = typeof window !== 'undefined' && window.location.pathname.startsWith('/canvas-v2');
+  const catalog = useMangaBackend
+    ? getMangaImageModelCatalogSnapshot()
+    : buildImageModelCatalog({
+      customProviders,
+      dreaminaStatus: settings.dreaminaStatus,
+      agnesApiKey: settings.agnesApiKey,
+    });
   const requested = override ?? settings.lastModelConfigByPanel?.[panelKey] ?? null;
   const requestedResolved = requested
     ? resolvePanelModelConfig(requested, customProviders, catalog, false)

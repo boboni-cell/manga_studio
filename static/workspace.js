@@ -5,37 +5,49 @@
     classic: document.getElementById('classicFrame'),
     canvas: document.getElementById('canvasFrame'),
   };
-  var framesInitialized = false;
+  var framesInitialized = { classic: false, canvas: false };
   var modeKey = projectId ? ('manga_workspace_mode:' + projectId) : 'manga_workspace_mode';
   // Canvas tab serves Canvas V2 by default; CANVAS_V2_ROLLBACK=1 on the
   // server falls back to the legacy /canvas workbench (old data untouched).
   var canvasTabMode = 'v2';
-  fetch('/api/canvas-v2/rollback', { credentials: 'same-origin' })
+  var rollbackPromise = fetch('/api/canvas-v2/rollback', { credentials: 'same-origin' })
     .then(function (r) { return r.json(); })
     .then(function (d) { if (d && d.enabled) canvasTabMode = 'legacy'; })
     .catch(function () {});
 
+  var projectPromise = null;
+  var backLink = document.getElementById('wsBack');
+  backLink.addEventListener('click', function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    window.top.location.assign('/');
+  });
   if (projectId) {
-    document.getElementById('wsBack').href = '/';
-    fetch('/api/projects/' + encodeURIComponent(projectId), { credentials: 'same-origin' })
+    backLink.href = '/';
+    projectPromise = fetch('/api/projects/' + encodeURIComponent(projectId), { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
+      .then(function (d) { return d && d.project ? d.project : null; });
+    projectPromise
       .then(function (d) {
-        if (d && d.project && d.project.title) document.getElementById('wsProjectTitle').textContent = d.project.title;
+        if (d && d.title) document.getElementById('wsProjectTitle').textContent = d.title;
       })
       .catch(function () {});
   }
 
-  function ensureFrames() {
-    if (framesInitialized) return;
-    var classicSrc = '/classic?embedded=1';
-    var canvasSrc = (canvasTabMode === 'legacy' ? '/canvas' : '/canvas-v2') + '?embedded=1';
-    if (projectId) {
-      classicSrc += '&project_id=' + encodeURIComponent(projectId);
-      canvasSrc += '&project_id=' + encodeURIComponent(projectId);
+  function ensureFrame(mode) {
+    if (framesInitialized[mode]) return;
+    framesInitialized[mode] = true;
+    if (mode === 'classic') {
+      var classicSrc = '/classic?embedded=1';
+      if (projectId) classicSrc += '&project_id=' + encodeURIComponent(projectId);
+      frames.classic.src = classicSrc;
+      return;
     }
-    frames.classic.src = classicSrc;
-    frames.canvas.src = canvasSrc;
-    framesInitialized = true;
+    rollbackPromise.finally(function () {
+      var canvasSrc = (canvasTabMode === 'legacy' ? '/canvas' : '/canvas-v2') + '?embedded=1';
+      if (projectId) canvasSrc += '&project_id=' + encodeURIComponent(projectId);
+      frames.canvas.src = canvasSrc;
+    });
   }
 
   function setSaveState(state) {
@@ -47,11 +59,11 @@
     else el.textContent = '';
   }
 
-  function activate(mode) {
+  function activate(mode, persist) {
     if (mode !== 'classic' && mode !== 'canvas') return;
     if (projectId) sessionStorage.setItem(modeKey, mode);
     document.getElementById('workspace-choice').classList.add('hidden');
-    ensureFrames();
+    ensureFrame(mode);
     Object.keys(frames).forEach(function (key) {
       var frame = frames[key];
       var active = key === mode;
@@ -62,7 +74,7 @@
     });
     document.getElementById('tabClassic').classList.toggle('active', mode === 'classic');
     document.getElementById('tabCanvas').classList.toggle('active', mode === 'canvas');
-    if (projectId) {
+    if (projectId && persist !== false) {
       fetch('/api/projects/' + encodeURIComponent(projectId), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ last_mode: mode }) }).catch(function () {});
     }
   }
@@ -118,25 +130,24 @@
 
   function boot() {
     var queryMode = new URLSearchParams(location.search).get('mode');
-    if (queryMode === 'classic' || queryMode === 'canvas') { activate(queryMode); return; }
+    if (queryMode === 'classic' || queryMode === 'canvas') { activate(queryMode, false); return; }
     if (projectId) {
-      fetch('/api/projects/' + encodeURIComponent(projectId), { credentials: 'same-origin' })
-        .then(function (r) { return r.json(); })
-        .then(function (d) {
-          var serverMode = d && d.project && d.project.last_mode;
-          if (serverMode === 'classic' || serverMode === 'canvas') { activate(serverMode); return; }
+      projectPromise
+        .then(function (project) {
+          var serverMode = project && project.last_mode;
+          if (serverMode === 'classic' || serverMode === 'canvas') { activate(serverMode, false); return; }
           var saved = sessionStorage.getItem(modeKey);
-          if (saved === 'classic' || saved === 'canvas') { activate(saved); return; }
+          if (saved === 'classic' || saved === 'canvas') { activate(saved, false); return; }
           // choice layer stays visible
         })
         .catch(function () {
           var saved = sessionStorage.getItem(modeKey);
-          if (saved === 'classic' || saved === 'canvas') activate(saved);
+          if (saved === 'classic' || saved === 'canvas') activate(saved, false);
         });
       return;
     }
     var saved = sessionStorage.getItem(modeKey);
-    if (saved === 'classic' || saved === 'canvas') activate(saved);
+    if (saved === 'classic' || saved === 'canvas') activate(saved, false);
   }
 
   boot();

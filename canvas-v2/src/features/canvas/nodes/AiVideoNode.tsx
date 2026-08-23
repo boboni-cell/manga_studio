@@ -52,7 +52,6 @@ import {
   resolveReferenceAwareDeleteRange,
 } from '@/features/canvas/application/referenceTokenEditing';
 import {
-  buildVideoModelCatalog,
   resolveVideoModelConfig,
   useVideoModelCatalog,
   type VideoCatalogEntry,
@@ -94,7 +93,6 @@ import {
 } from '@/features/canvas/ui/nodeControlStyles';
 import { UiButton, UiModal } from '@/components/ui';
 import { useCanvasStore } from '@/stores/canvasStore';
-import { useCustomProvidersStore } from '@/stores/customProvidersStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 
 type AiVideoNodeProps = NodeProps & {
@@ -693,11 +691,7 @@ export const AiVideoNode = memo(({ id, data, selected, width, height }: AiVideoN
     const latestNode = latestCanvasState.nodes.find((candidate) => candidate.id === id);
     const latestData = latestNode && isAiVideoNode(latestNode) ? latestNode.data : data;
     const latestSettings = useSettingsStore.getState();
-    const latestCatalog = buildVideoModelCatalog(
-      useCustomProvidersStore.getState().providers,
-      latestSettings.agnesApiKey,
-      latestSettings.dreaminaStatus
-    );
+    const latestCatalog = catalog;
     const latestModelConfig = resolveVideoModelConfig(latestCatalog, latestData.modelConfig ?? resolvedModelConfig);
     const latestEntry = resolveConfigEntry(latestCatalog, latestModelConfig);
     const latestReferences = collectInputReferences(id, latestCanvasState.nodes, latestCanvasState.edges);
@@ -831,7 +825,7 @@ export const AiVideoNode = memo(({ id, data, selected, width, height }: AiVideoN
       outputAspectRatio,
       gatewayPayload: {
         prompt,
-        model: latestModelConfig.entryId,
+        model: latestEntry.id.startsWith('manga:video:') ? latestEntry.modelId : latestModelConfig.entryId,
         size: latestModelConfig.resolution,
         aspectRatio: latestModelConfig.aspectRatio,
         seconds: Number(latestModelConfig.duration) || undefined,
@@ -841,7 +835,7 @@ export const AiVideoNode = memo(({ id, data, selected, width, height }: AiVideoN
         extraParams,
       },
     };
-  }, [data, flushPromptDraft, id, resolvedModelConfig, t]);
+  }, [catalog, data, flushPromptDraft, id, resolvedModelConfig, t]);
 
   const handleGenerate = useCallback(async () => {
     const releaseSubmitLock = acquireGenerationSubmitLock(

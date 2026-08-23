@@ -9,6 +9,7 @@ import {
 import { hasCustomProviderCredential } from '@/features/canvas/application/providerAvailability';
 import { useSettingsStore } from '@/stores/settingsStore';
 import {
+  DEFAULT_VIDEO_INPUT_SCHEMA,
   defaultVideoInputSchemaForProviderKind,
   resolveVideoInputSchemaFromExtraParams,
   type VideoInputSchema,
@@ -18,6 +19,7 @@ import {
   listDreaminaVideoModels,
   type DreaminaVideoModelCapability,
 } from './dreaminaCapabilities';
+import { useMangaCatalogResource } from './mangaCatalogApi';
 
 export interface VideoCatalogEntry {
   id: string;
@@ -32,6 +34,31 @@ export interface VideoCatalogEntry {
   inputSchema: VideoInputSchema;
   usable: boolean;
   notReadyReason?: string;
+}
+
+interface MangaVideoCapabilities {
+  resolutions?: string[];
+  ratios?: string[];
+  min_duration?: number;
+  max_duration?: number;
+}
+
+interface MangaApiProfile {
+  id: string;
+  name?: string;
+  provider?: string;
+  model?: string;
+  configured?: boolean;
+  capabilities?: MangaVideoCapabilities;
+}
+
+interface MangaVideoModelsResponse {
+  models?: string[];
+  caps?: Record<string, MangaVideoCapabilities>;
+}
+
+interface MangaSettingsResponse {
+  api_profiles?: Record<string, MangaApiProfile[]>;
 }
 
 export interface VideoModelConfigValue {
@@ -187,14 +214,88 @@ export function buildVideoModelCatalog(
   return entries;
 }
 
+function durationRange(capabilities?: MangaVideoCapabilities): string[] {
+  const min = Math.max(1, Math.round(capabilities?.min_duration ?? 4));
+  const max = Math.max(min, Math.round(capabilities?.max_duration ?? 12));
+  return Array.from({ length: max - min + 1 }, (_, index) => String(min + index));
+}
+
+export function buildMangaVideoModelCatalog(
+  models: readonly string[],
+  profiles: readonly MangaApiProfile[],
+  caps: Readonly<Record<string, MangaVideoCapabilities>> = {},
+): VideoCatalogEntry[] {
+  const createEntry = (
+    id: string,
+    providerId: string,
+    providerLabel: string,
+    modelId: string,
+    modelLabel: string,
+    capabilities: MangaVideoCapabilities | undefined,
+    usable: boolean,
+    route: { use_personal_api: boolean; api_profile_id?: string },
+  ): VideoCatalogEntry => ({
+    id,
+    providerId,
+    providerLabel,
+    modelId,
+    modelLabel,
+    defaultExtraParams: route,
+    supportedDurations: durationRange(capabilities),
+    supportedResolutions: uniqueStrings(capabilities?.resolutions, ['720p']),
+    supportedAspectRatios: uniqueStrings(capabilities?.ratios, DEFAULT_ASPECT_RATIOS),
+    inputSchema: DEFAULT_VIDEO_INPUT_SCHEMA,
+    usable,
+    notReadyReason: usable ? undefined : '请先在“API 设置”中填写 API Key',
+  });
+
+  const entries = models.map((model) => createEntry(
+    `manga:video:platform:${model}`,
+    'manga-platform',
+    '平台模型',
+    model,
+    model,
+    caps[model],
+    true,
+    { use_personal_api: false },
+  ));
+  for (const profile of profiles) {
+    if (!profile?.id) continue;
+    const label = profile.name || profile.model || profile.id;
+    entries.push(createEntry(
+      `manga:video:personal:${profile.id}`,
+      `manga-personal:${profile.id}`,
+      profile.provider ? `${label} · ${profile.provider}` : label,
+      'personal-api',
+      profile.model || label,
+      profile.capabilities,
+      profile.configured !== false,
+      { use_personal_api: true, api_profile_id: profile.id },
+    ));
+  }
+  return entries;
+}
+
 export function useVideoModelCatalog(): VideoCatalogEntry[] {
   const customProviders = useCustomProvidersStore((state) => state.providers);
   const agnesApiKey = useSettingsStore((state) => state.agnesApiKey);
   const dreaminaStatus = useSettingsStore((state) => state.dreaminaStatus);
-  return useMemo(
+  const upstreamEntries = useMemo(
     () => buildVideoModelCatalog(customProviders, agnesApiKey, dreaminaStatus),
     [agnesApiKey, customProviders, dreaminaStatus]
   );
+  const useMangaBackend = typeof window !== 'undefined' && window.location.pathname.startsWith('/canvas-v2');
+  const mangaModels = useMangaCatalogResource<MangaVideoModelsResponse>('/api/models', useMangaBackend);
+  const mangaSettings = useMangaCatalogResource<MangaSettingsResponse>('/api/settings', useMangaBackend);
+  const mangaEntries = useMemo(
+    () => buildMangaVideoModelCatalog(
+      Array.isArray(mangaModels?.models) ? mangaModels.models : [],
+      Array.isArray(mangaSettings?.api_profiles?.video) ? mangaSettings.api_profiles.video : [],
+      mangaModels?.caps ?? {},
+    ),
+    [mangaModels, mangaSettings]
+  );
+  return useMangaBackend ? mangaEntries : upstreamEntries;
 }
 
 export function resolveVideoModelConfig(

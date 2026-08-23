@@ -60,7 +60,12 @@
     const newCard = document.getElementById('newCard');
     if (newCard) newCard.addEventListener('click', openCreateModal);
     document.querySelectorAll('.p-card[data-id]').forEach(function (card) {
-      card.addEventListener('click', function (event) { if (event.target.closest('.p-card-menu')) return; openProject(card.getAttribute('data-id')); });
+      card.addEventListener('click', function (event) {
+        if (event.target.closest('.p-card-menu')) return;
+        var id = card.getAttribute('data-id');
+        var project = allProjects.find(function (item) { return item.id === id; });
+        openProject(id, project && project.last_mode);
+      });
     });
     document.querySelectorAll('[data-rename]').forEach(function (btn) {
       btn.addEventListener('click', function (event) { event.stopPropagation(); renameProject(btn.getAttribute('data-rename')); });
@@ -135,11 +140,16 @@
     });
   }
 
-  async function openProject(id) {
-    // Single round trip: /open returns the full project (incl. last_mode).
-    const r = await api('/api/projects/' + id + '/open', { method: 'POST' });
-    const mode = (r.project && r.project.last_mode) || 'classic';
-    location.href = '/workspace/' + id + '?mode=' + mode;
+  function openProject(id, modeHint) {
+    // The list already contains last_mode. Do not block navigation on the
+    // cross-region "last opened" metadata write.
+    var mode = modeHint === 'canvas' ? 'canvas' : 'classic';
+    fetch('/api/projects/' + encodeURIComponent(id) + '/open', {
+      method: 'POST',
+      credentials: 'same-origin',
+      keepalive: true,
+    }).catch(function () {});
+    location.href = '/workspace/' + encodeURIComponent(id) + '?mode=' + mode;
   }
 
   async function renameProject(id) {

@@ -275,6 +275,26 @@ class ProjectApiTest(unittest.TestCase):
         self.assertEqual(self.client.delete('/api/projects/' + pid).status_code, 404)
         self.assertEqual(self.client.post('/api/projects/' + pid + '/restore').status_code, 404)
 
+    def test_history_is_scoped_to_workspace_project_and_keeps_legacy_records(self):
+        user = 'project_history_user'
+        self.login(user)
+        app_module.save_json(app_module.history_path(user), [
+            {'type': 'image', 'image_url': 'https://example.com/a.png', 'project_id': 'project-a'},
+            {'type': 'video', 'video_url': 'https://example.com/b.mp4', 'project_id': 'project-b'},
+            {'type': 'image', 'image_url': 'https://example.com/legacy.png'},
+        ])
+
+        project_a = self.client.get('/api/history', headers={'X-Project-ID': 'project-a'}).get_json()
+        self.assertEqual([item.get('project_id') for item in project_a], ['project-a', None])
+
+        project_b = self.client.get('/api/history', headers={
+            'Referer': 'http://localhost/classic?embedded=1&project_id=project-b'
+        }).get_json()
+        self.assertEqual([item.get('project_id') for item in project_b], ['project-b', None])
+
+        all_history = self.client.get('/api/history').get_json()
+        self.assertEqual(len(all_history), 3)
+
 
 class SkillAndImportTest(unittest.TestCase):
     def setUp(self):

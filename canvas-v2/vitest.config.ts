@@ -11,7 +11,7 @@ export default defineConfig({
   test: {
     include: [
       'src/lib/**/*.test.ts',
-      'src/features/canvas/application/chatModelCatalog.test.ts',
+      'src/features/canvas/application/*Catalog.test.ts',
     ],
     environment: 'node',
   },

@@ -14,6 +14,10 @@ import {
   DREAMINA_UPSCALE_RESOLUTIONS,
 } from './dreaminaCapabilities';
 import { hasConfiguredCustomProvider } from './providerAvailability';
+import {
+  readMangaCatalogResource,
+  useMangaCatalogResource,
+} from './mangaCatalogApi';
 
 /**
  * Unified display-layer catalog of every image-generation target the user can
@@ -30,9 +34,9 @@ import { hasConfiguredCustomProvider } from './providerAvailability';
  * 内置 · GRSAI card on the settings page keeps working.
  */
 export interface CatalogEntry {
-  /** Compound id: `custom:<providerId>:<modelId>` | `dreamina:<sub>` | `agnes:image:<modelId>`. */
+  /** Compound id: `custom:<providerId>:<modelId>` | `dreamina:<sub>` | `agnes:image:<modelId>` | `manga:image:<route>:<modelId>`. */
   id: string;
-  kind: 'custom' | 'dreamina' | 'agnes';
+  kind: 'custom' | 'dreamina' | 'agnes' | 'manga';
   providerId: string;
   providerLabel: string;
   modelId: string;
@@ -51,6 +55,27 @@ export interface CatalogEntry {
   /** Dreamina model_version choices (3.0 / 4.0 / 5.0). For custom
    *  providers this is populated from the user-configured list. */
   supportedModelVersions?: string[];
+  mangaRoute?: {
+    usePersonalApi: boolean;
+    apiProfileId: string | null;
+  };
+}
+
+interface MangaApiProfile {
+  id: string;
+  name?: string;
+  provider?: string;
+  model?: string;
+  configured?: boolean;
+}
+
+interface MangaImageModelsResponse {
+  models?: string[];
+  ratios?: string[];
+}
+
+interface MangaSettingsResponse {
+  api_profiles?: Record<string, MangaApiProfile[]>;
 }
 
 interface DreaminaProviderStatus {
@@ -192,6 +217,54 @@ export function buildImageModelCatalog({
   return entries;
 }
 
+export function buildMangaImageModelCatalog(
+  models: readonly string[],
+  profiles: readonly MangaApiProfile[],
+  ratios: readonly string[] = ['1:1', '16:9', '9:16'],
+): CatalogEntry[] {
+  const supportedRatios = normalizeSupportedRatios(ratios, ['1:1', '16:9', '9:16']);
+  const entries: CatalogEntry[] = models.map((model) => ({
+    id: `manga:image:platform:${model}`,
+    kind: 'manga',
+    providerId: 'manga-platform',
+    providerLabel: '平台模型',
+    modelId: model,
+    modelLabel: model,
+    supportedRatios,
+    usable: true,
+    mangaRoute: { usePersonalApi: false, apiProfileId: null },
+  }));
+
+  for (const profile of profiles) {
+    if (!profile?.id) continue;
+    const label = profile.name || profile.model || profile.id;
+    const usable = profile.configured !== false;
+    entries.push({
+      id: `manga:image:personal:${profile.id}`,
+      kind: 'manga',
+      providerId: `manga-personal:${profile.id}`,
+      providerLabel: profile.provider ? `${label} · ${profile.provider}` : label,
+      modelId: 'personal-api',
+      modelLabel: profile.model || label,
+      supportedRatios,
+      usable,
+      notReadyReason: usable ? undefined : '请先在“API 设置”中填写 API Key',
+      mangaRoute: { usePersonalApi: true, apiProfileId: profile.id },
+    });
+  }
+  return entries;
+}
+
+export function getMangaImageModelCatalogSnapshot(): CatalogEntry[] {
+  const models = readMangaCatalogResource<MangaImageModelsResponse>('/api/image-models');
+  const settings = readMangaCatalogResource<MangaSettingsResponse>('/api/settings');
+  return buildMangaImageModelCatalog(
+    Array.isArray(models?.models) ? models.models : [],
+    Array.isArray(settings?.api_profiles?.image) ? settings.api_profiles.image : [],
+    Array.isArray(models?.ratios) ? models.ratios : undefined,
+  );
+}
+
 export function useImageModelCatalog(): CatalogEntry[] {
   const customProviders = useCustomProvidersStore((s) => s.providers);
   const dreaminaStatus = useSettingsStore((s) => s.dreaminaStatus);
@@ -204,10 +277,24 @@ export function useImageModelCatalog(): CatalogEntry[] {
   void listImageModels;
   void listModelProviders;
 
-  return useMemo(
+  const useMangaBackend = typeof window !== 'undefined' && window.location.pathname.startsWith('/canvas-v2');
+  const mangaModels = useMangaCatalogResource<MangaImageModelsResponse>('/api/image-models', useMangaBackend);
+  const mangaSettings = useMangaCatalogResource<MangaSettingsResponse>('/api/settings', useMangaBackend);
+
+  const upstreamEntries = useMemo(
     () => buildImageModelCatalog({ customProviders, dreaminaStatus, agnesApiKey }),
     [agnesApiKey, customProviders, dreaminaStatus]
   );
+  const mangaEntries = useMemo(
+    () => buildMangaImageModelCatalog(
+      Array.isArray(mangaModels?.models) ? mangaModels.models : [],
+      Array.isArray(mangaSettings?.api_profiles?.image) ? mangaSettings.api_profiles.image : [],
+      Array.isArray(mangaModels?.ratios) ? mangaModels.ratios : undefined,
+    ),
+    [mangaModels, mangaSettings]
+  );
+
+  return useMangaBackend ? mangaEntries : upstreamEntries;
 }
 
 /** Human-friendly label for the "智能" ratio sentinel. */

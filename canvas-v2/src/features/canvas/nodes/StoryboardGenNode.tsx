@@ -1062,7 +1062,7 @@ export const StoryboardGenNode = memo(({ id, data, selected, width, height }: St
       void showErrorDialog(errorMessage, '错误');
       return;
     }
-    if (!resolved.entryId.startsWith('dreamina:') && !resolved.entryId.startsWith('custom:') && !resolved.entryId.startsWith('agnes:')) {
+    if (!resolved.entryId.startsWith('dreamina:') && !resolved.entryId.startsWith('custom:') && !resolved.entryId.startsWith('agnes:') && !resolved.entryId.startsWith('manga:image:')) {
       const errorMessage = '请先在「设置 → 我的配置」里添加至少一个服务商，或在「Dreamina」里登录 CLI 后再生成。';
       setError(errorMessage);
       void showErrorDialog(errorMessage, '错误');

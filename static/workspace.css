@@ -6,11 +6,13 @@ body { background: #0d0d13; color: #ededf5; font: 14px system-ui, -apple-system,
 #workspace-shell { position: relative; height: 100dvh; }
 
 #workspace-switcher {
-  position: fixed; top: 8px; left: 8px; z-index: 40;
+  position: fixed; top: 8px; left: 8px; z-index: 1000; pointer-events: auto;
   display: flex; align-items: center; gap: 8px; padding: 5px 8px;
   background: rgba(23, 23, 31, 0.72); border: 1px solid #34344a; border-radius: 999px;
   backdrop-filter: blur(8px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
+.ws-back { color: #c8b8ff; text-decoration: none; cursor: pointer; white-space: nowrap; }
+.ws-back:hover { color: #fff; }
 .ws-brand { font-weight: 600; font-size: 13px; }
 .ws-tabs { display: flex; gap: 2px; padding: 2px; background: #101016; border-radius: 999px; }
 .ws-tab { border: 0; background: transparent; color: #9d9db5; padding: 4px 10px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12px; }

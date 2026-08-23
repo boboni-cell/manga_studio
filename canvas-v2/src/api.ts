@@ -2,10 +2,17 @@
 // Sessions are carried by cookies; no secret is ever stored client-side.
 
 export async function api<T = unknown>(url: string, init?: RequestInit): Promise<T> {
+  const projectId = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('project_id')
+    : null;
   const res = await fetch(url, {
     credentials: 'same-origin',
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(projectId ? { 'X-Project-ID': projectId } : {}),
+      ...(init?.headers || {}),
+    },
   });
   let body: Record<string, unknown> | null = null;
   try {
