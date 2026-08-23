@@ -40,7 +40,7 @@ describe('Agnes chat catalog', () => {
 });
 
 describe('Manga Studio text catalog', () => {
-  it('groups platform models and each saved personal API as selectable providers', () => {
+  it('groups every saved personal API under one selectable provider', () => {
     const entries = buildMangaChatModelCatalog(['doubao', 'glm46'], [{
       id: 'profile-1',
       name: '我的 MiniMax',
@@ -51,8 +51,9 @@ describe('Manga Studio text catalog', () => {
     expect(entries.map((entry) => entry.providerLabel)).toEqual([
       '平台模型',
       '平台模型',
-      '我的 MiniMax · MiniMax',
+      '个人 API',
     ]);
+    expect(entries[2]?.modelLabel).toBe('我的 MiniMax · MiniMax-H3 · MiniMax');
     expect(entries[2]?.mangaRoute).toEqual({
       scriptModel: 'personal-api',
       usePersonalApi: true,

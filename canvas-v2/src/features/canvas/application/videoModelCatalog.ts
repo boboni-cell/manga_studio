@@ -261,13 +261,15 @@ export function buildMangaVideoModelCatalog(
   ));
   for (const profile of profiles) {
     if (!profile?.id) continue;
-    const label = profile.name || profile.model || profile.id;
+    const modelLabel = Array.from(new Set(
+      [profile.name, profile.model, profile.provider].map((value) => value?.trim()).filter(Boolean),
+    )).join(' · ') || profile.id;
     entries.push(createEntry(
       `manga:video:personal:${profile.id}`,
-      `manga-personal:${profile.id}`,
-      profile.provider ? `${label} · ${profile.provider}` : label,
+      'manga-personal',
+      '个人 API',
       'personal-api',
-      profile.model || label,
+      modelLabel,
       profile.capabilities,
       profile.configured !== false,
       { use_personal_api: true, api_profile_id: profile.id },

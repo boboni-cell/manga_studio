@@ -194,13 +194,15 @@ export function buildMangaChatModelCatalog(
 
   for (const profile of profiles) {
     if (!profile || !profile.id) continue;
-    const label = profile.name || profile.model || profile.id;
+    const modelLabel = Array.from(new Set(
+      [profile.name, profile.model, profile.provider].map((value) => value?.trim()).filter(Boolean),
+    )).join(' · ') || profile.id;
     entries.push({
       id: `manga:personal:${profile.id}`,
-      providerId: `manga-personal:${profile.id}`,
-      providerLabel: profile.provider ? `${label} · ${profile.provider}` : label,
+      providerId: 'manga-personal',
+      providerLabel: '个人 API',
       modelId: profile.model || 'personal-api',
-      modelLabel: profile.model || label,
+      modelLabel,
       supportsMultimodal: false,
       supportsTools: false,
       supportsStreaming: false,

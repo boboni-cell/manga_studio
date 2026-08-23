@@ -93,7 +93,10 @@ function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    const normalized = accentColor.startsWith('#') ? accentColor : `#${accentColor}`;
+    const isMangaWebCanvas = window.location.pathname.startsWith('/canvas-v2');
+    const normalized = isMangaWebCanvas
+      ? '#A855F7'
+      : (accentColor.startsWith('#') ? accentColor : `#${accentColor}`);
     root.style.setProperty('--accent', normalized);
     root.style.setProperty('--accent-rgb', toRgbCssValue(normalized));
   }, [accentColor]);

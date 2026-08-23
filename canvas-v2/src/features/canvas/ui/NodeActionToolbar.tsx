@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { NodeToolbar as ReactFlowNodeToolbar } from '@xyflow/react';
 import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, Grid3x3, Maximize2, PenLine, RotateCcw, Scissors, Settings2, Sparkles, Sun, Trash2, X } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
+import { isTauri } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -42,6 +43,11 @@ import {
 } from '@/features/canvas/application/generationRetry';
 import { UI_POPOVER_TRANSITION_MS } from '@/components/ui/motion';
 import { UiChipButton, UiPanel } from '@/components/ui';
+import {
+  copyImageInBrowser,
+  copyTextInBrowser,
+  downloadMediaInBrowser,
+} from '@/lib/browserMedia';
 import {
   NODE_TOOLBAR_ALIGN,
   NODE_TOOLBAR_CLASS,
@@ -449,7 +455,8 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const handleCopyImage = useCallback(async () => {
     if (!rawImageSource) return;
     try {
-      await copyImageSourceToClipboard(rawImageSource);
+      if (isTauri()) await copyImageSourceToClipboard(rawImageSource);
+      else await copyImageInBrowser(rawImageSource);
       setIsCopySuccess(true);
       if (copyFeedbackTimerRef.current) {
         clearTimeout(copyFeedbackTimerRef.current);
@@ -469,7 +476,7 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const handleCopyVideoSource = useCallback(async () => {
     if (!rawVideoSource) return;
     try {
-      await navigator.clipboard.writeText(rawVideoSource);
+      await copyTextInBrowser(rawVideoSource);
       setIsCopySuccess(true);
       if (copyFeedbackTimerRef.current) {
         clearTimeout(copyFeedbackTimerRef.current);
@@ -489,6 +496,12 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const handleDownloadSaveAs = useCallback(async () => {
     if (!rawImageSource) return;
     try {
+      if (!isTauri()) {
+        await downloadMediaInBrowser(rawImageSource, suggestedImageSavePath);
+        closeDownloadMenu();
+        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        return;
+      }
       const selectedPath = await save({ defaultPath: suggestedImageSavePath });
       if (!selectedPath || Array.isArray(selectedPath)) return;
       await saveImageSourceToPath(rawImageSource, selectedPath);
@@ -503,6 +516,12 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const handleDownloadToDownloads = useCallback(async () => {
     if (!rawImageSource) return;
     try {
+      if (!isTauri()) {
+        await downloadMediaInBrowser(rawImageSource, suggestedImageStem);
+        closeDownloadMenu();
+        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        return;
+      }
       await saveImageSourceToDownloads(rawImageSource, suggestedImageStem);
       closeDownloadMenu();
       showFeedbackToast(t('nodeToolbar.downloadSuccess'));
@@ -516,6 +535,12 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
     async (targetDir: string) => {
       if (!rawImageSource) return;
       try {
+        if (!isTauri()) {
+          await downloadMediaInBrowser(rawImageSource, suggestedImageStem);
+          closeDownloadMenu();
+          showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+          return;
+        }
         await saveImageSourceToDirectory(rawImageSource, targetDir, suggestedImageStem);
         closeDownloadMenu();
         showFeedbackToast(t('nodeToolbar.downloadSuccess'));
@@ -530,6 +555,12 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const handleDownloadVideoSaveAs = useCallback(async () => {
     if (!rawVideoSource) return;
     try {
+      if (!isTauri()) {
+        await downloadMediaInBrowser(rawVideoSource, suggestedVideoSavePath);
+        closeDownloadMenu();
+        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        return;
+      }
       const selectedPath = await save({ defaultPath: suggestedVideoSavePath });
       if (!selectedPath || Array.isArray(selectedPath)) return;
       await saveVideoSourceToPath(rawVideoSource, selectedPath);
@@ -545,6 +576,12 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
     async (targetDir: string) => {
       if (!rawVideoSource) return;
       try {
+        if (!isTauri()) {
+          await downloadMediaInBrowser(rawVideoSource, suggestedVideoStem);
+          closeDownloadMenu();
+          showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+          return;
+        }
         await saveVideoSourceToDirectory(rawVideoSource, targetDir, suggestedVideoStem);
         closeDownloadMenu();
         showFeedbackToast(t('nodeToolbar.downloadSuccess'));
@@ -560,6 +597,11 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
     event?.stopPropagation();
     if (!rawAudioSource) return;
     try {
+      if (!isTauri()) {
+        await downloadMediaInBrowser(rawAudioSource, suggestedAudioSavePath);
+        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        return;
+      }
       const selectedPath = await save({ defaultPath: suggestedAudioSavePath });
       if (!selectedPath || Array.isArray(selectedPath)) return;
       await saveAudioSourceToPath(rawAudioSource, selectedPath);

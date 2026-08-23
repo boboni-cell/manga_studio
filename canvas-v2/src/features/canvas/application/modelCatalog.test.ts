@@ -42,7 +42,10 @@ describe('Manga Studio image catalog', () => {
     });
     expect(entries[1]).toMatchObject({
       id: 'manga:image:personal:image-profile',
+      providerId: 'manga-personal',
+      providerLabel: '个人 API',
       modelId: 'personal-api',
+      modelLabel: '我的图片接口 · image-model · OpenAI',
       usable: true,
       mangaRoute: { usePersonalApi: true, apiProfileId: 'image-profile' },
     });

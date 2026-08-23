@@ -2974,7 +2974,7 @@ def get_history():
 def history_media_by_url():
     media_url = request.args.get('url', '')
     history = load_json(history_path(), [])
-    item = next((entry for entry in history if entry.get('video_url') == media_url), None)
+    item = next((entry for entry in history if entry.get('video_url') == media_url or entry.get('image_url') == media_url), None)
     if not item:
         return jsonify(error='媒体记录不存在'), 404
     try:

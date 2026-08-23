@@ -30,5 +30,10 @@ describe('Manga Studio video catalog', () => {
       use_personal_api: true,
       api_profile_id: 'video-profile',
     });
+    expect(entries[1]).toMatchObject({
+      providerId: 'manga-personal',
+      providerLabel: '个人 API',
+      modelLabel: '我的视频接口 · seedance-v15-pro · Ark',
+    });
   });
 });

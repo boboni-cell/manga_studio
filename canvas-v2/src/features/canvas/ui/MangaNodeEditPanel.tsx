@@ -531,21 +531,21 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
         {tab === 'skills' && (
           <div className="space-y-2">
             <div className="rounded-lg border border-[var(--canvas-node-field-border)] bg-bg-dark/40 p-2.5">
-              <div className="mb-1.5 text-[11px] text-text-muted">文本供应商（与经典工作台一致）</div>
+              <div className="mb-1.5 text-[11px] text-text-muted">文本模型（图片技能专用，与经典工作台一致）</div>
               <select
                 aria-label="技能文本供应商与模型"
                 className="w-full rounded-md border border-[var(--canvas-node-field-border)] bg-bg-dark/70 px-2 py-1.5 text-xs text-text-dark"
                 value={skillRouteValue}
                 onChange={(e) => changeSkillRoute(e.target.value)}
               >
-                <optgroup label="平台文本模型">
+                <optgroup label="平台模型">
                   {textModels.map((m) => <option key={m} value={'platform:' + m}>{m}</option>)}
                 </optgroup>
                 {textProfileOptions.length > 0 && (
-                  <optgroup label="自己的文本 API">
+                  <optgroup label="个人 API">
                     {textProfileOptions.map((p) => (
                       <option key={p.id} value={'personal:' + p.id}>
-                        {String(p.name || p.model || p.id)}{p.provider ? ' · ' + p.provider : ''}
+                        {Array.from(new Set([p.name, p.model, p.provider].filter(Boolean))).join(' · ') || p.id}
                       </option>
                     ))}
                   </optgroup>

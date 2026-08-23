@@ -237,15 +237,17 @@ export function buildMangaImageModelCatalog(
 
   for (const profile of profiles) {
     if (!profile?.id) continue;
-    const label = profile.name || profile.model || profile.id;
+    const modelLabel = Array.from(new Set(
+      [profile.name, profile.model, profile.provider].map((value) => value?.trim()).filter(Boolean),
+    )).join(' · ') || profile.id;
     const usable = profile.configured !== false;
     entries.push({
       id: `manga:image:personal:${profile.id}`,
       kind: 'manga',
-      providerId: `manga-personal:${profile.id}`,
-      providerLabel: profile.provider ? `${label} · ${profile.provider}` : label,
+      providerId: 'manga-personal',
+      providerLabel: '个人 API',
       modelId: 'personal-api',
-      modelLabel: profile.model || label,
+      modelLabel,
       supportedRatios,
       usable,
       notReadyReason: usable ? undefined : '请先在“API 设置”中填写 API Key',
