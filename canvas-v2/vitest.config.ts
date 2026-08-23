@@ -12,6 +12,7 @@ export default defineConfig({
     include: [
       'src/lib/**/*.test.ts',
       'src/features/canvas/application/*Catalog.test.ts',
+      'src/features/canvas/application/canvasClipboard.test.ts',
     ],
     environment: 'node',
   },

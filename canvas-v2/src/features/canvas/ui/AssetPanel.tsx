@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import { Film, ImageIcon, Music, Search, X } from 'lucide-react';
+import { Film, ImageIcon, Music, Plus, Search, X } from 'lucide-react';
 
 import { MANGA_ASSET_CATEGORIES, type MangaAssetCategory } from '@/lib/mangaAssetLibrary';
 
@@ -50,6 +50,7 @@ interface AssetPanelProps {
   onClose: () => void;
   onActivate: (asset: CanvasAssetItem) => void;
   onRename?: (asset: CanvasAssetItem, title: string) => void;
+  onAdd?: (category: MangaAssetCategory) => void;
 }
 
 export const AssetPanel = memo(({
@@ -62,6 +63,7 @@ export const AssetPanel = memo(({
   onClose,
   onActivate,
   onRename,
+  onAdd,
 }: AssetPanelProps) => {
   const [query, setQuery] = useState('');
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
@@ -136,14 +138,30 @@ export const AssetPanel = memo(({
           <div className="text-sm font-semibold text-white">{title}</div>
           <div className="mt-0.5 text-[11px] text-white/45">{subtitle}</div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-white/50 hover:bg-white/10 hover:text-white"
-          title="关闭资产面板"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          {mode === 'browse' && onAdd && (
+            <button
+              type="button"
+              onClick={() => {
+                onAdd(activeCategory);
+                if (activeCategory === 'project') setActiveCategory('upload');
+              }}
+              className="inline-flex h-7 items-center gap-1 rounded-md border border-accent/35 bg-accent/15 px-2 text-[11px] text-accent-light hover:bg-accent/25"
+              title={activeCategory === 'style' || activeCategory === 'history' ? '前往完整资产库' : `添加${activeCategoryLabel}`}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              添加
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-white/50 hover:bg-white/10 hover:text-white"
+            title="关闭资产面板"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div className="ui-scrollbar flex gap-1 overflow-x-auto border-b border-white/8 px-3 py-2">

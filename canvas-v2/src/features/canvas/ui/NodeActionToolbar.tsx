@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { NodeToolbar as ReactFlowNodeToolbar } from '@xyflow/react';
-import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, Grid3x3, Maximize2, PenLine, RotateCcw, Scissors, Settings2, Sparkles, Sun, Trash2, X } from 'lucide-react';
+import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, FolderPlus, Grid3x3, Maximize2, PenLine, RotateCcw, Scissors, Settings2, Sparkles, Sun, Trash2, X } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { isTauri } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
@@ -48,6 +48,7 @@ import {
   copyTextInBrowser,
   downloadMediaInBrowser,
 } from '@/lib/browserMedia';
+import { addMangaAsset, type MangaWritableAssetCategory } from '@/lib/mangaAssetLibrary';
 import {
   NODE_TOOLBAR_ALIGN,
   NODE_TOOLBAR_CLASS,
@@ -65,6 +66,12 @@ const TOOLBAR_NEUTRAL_BUTTON_CLASS =
   'border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] text-text-dark shadow-sm hover:border-[var(--canvas-node-border-hover)] hover:bg-[var(--canvas-node-menu-hover)]';
 const PROMPT_PRESET_MENU_WIDTH = 260;
 const PROMPT_PRESET_MENU_GAP = 8;
+const ASSET_SAVE_OPTIONS: ReadonlyArray<{ id: MangaWritableAssetCategory; label: string }> = [
+  { id: 'character', label: '人物' },
+  { id: 'outfit', label: '服装' },
+  { id: 'scene', label: '场景' },
+  { id: 'upload', label: '多图参考' },
+];
 
 function normalizeDownloadPresetPaths(paths: string[]): string[] {
   return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
@@ -111,6 +118,8 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const updateNodeData = useCanvasStore((state) => state.updateNodeData);
   const openPanel = usePanelStateStore((state) => state.openPanel);
   const closePanel = usePanelStateStore((state) => state.closePanel);
+  const useBrowserMediaActions = typeof window !== 'undefined'
+    && window.location.pathname.startsWith('/canvas-v2');
 
   /** Three UX variants:
    *  - A: upload node (user's raw image) — full tool set.
@@ -155,12 +164,14 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const promptPresets = useSettingsStore((state) => state.promptPresets);
   const [downloadMenu, setDownloadMenu] = useState<{ x: number; y: number } | null>(null);
   const [promptPresetMenu, setPromptPresetMenu] = useState<{ x: number; y: number } | null>(null);
+  const [assetSaveMenu, setAssetSaveMenu] = useState<{ x: number; y: number } | null>(null);
   const [isDownloadMenuVisible, setIsDownloadMenuVisible] = useState(false);
   const [isCopySuccess, setIsCopySuccess] = useState(false);
   const [feedbackToast, setFeedbackToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
   const [videoPreviewSource, setVideoPreviewSource] = useState<string | null>(null);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
   const promptPresetMenuRef = useRef<HTMLDivElement | null>(null);
+  const assetSaveMenuRef = useRef<HTMLDivElement | null>(null);
   const promptPresetAnchorRef = useRef<HTMLButtonElement | null>(null);
   const promptPresetPanelButtonRef = useRef<HTMLButtonElement | null>(null);
   const copyFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -354,6 +365,17 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   }, [closeDownloadMenu, downloadMenu]);
 
   useEffect(() => {
+    if (!assetSaveMenu) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!assetSaveMenuRef.current?.contains(event.target as Node)) {
+        setAssetSaveMenu(null);
+      }
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, [assetSaveMenu]);
+
+  useEffect(() => {
     if (!isPromptPresetMenuOpen) {
       return;
     }
@@ -455,7 +477,8 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const handleCopyImage = useCallback(async () => {
     if (!rawImageSource) return;
     try {
-      if (isTauri()) await copyImageSourceToClipboard(rawImageSource);
+      if (useBrowserMediaActions) await copyImageInBrowser(rawImageSource);
+      else if (isTauri()) await copyImageSourceToClipboard(rawImageSource);
       else await copyImageInBrowser(rawImageSource);
       setIsCopySuccess(true);
       if (copyFeedbackTimerRef.current) {
@@ -471,7 +494,23 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
       setIsCopySuccess(false);
       showFeedbackToast(t('nodeToolbar.copyFailed'), 'error');
     }
-  }, [rawImageSource, showFeedbackToast, t]);
+  }, [rawImageSource, showFeedbackToast, t, useBrowserMediaActions]);
+
+  const handleSaveImageToAssetLibrary = useCallback(async (category: MangaWritableAssetCategory) => {
+    if (!rawImageSource) return;
+    const data = node.data as Record<string, unknown>;
+    const name = [data.displayName, data.generatedFileName, data.sourceFileName, suggestedImageStem]
+      .find((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+      ?? suggestedImageStem;
+    try {
+      await addMangaAsset(category, name.replace(/\.[^.]+$/, ''), rawImageSource);
+      setAssetSaveMenu(null);
+      const categoryLabel = ASSET_SAVE_OPTIONS.find((option) => option.id === category)?.label ?? '资产库';
+      showFeedbackToast(`已加入${categoryLabel}`);
+    } catch (error) {
+      showFeedbackToast(error instanceof Error ? error.message : '加入资产库失败', 'error');
+    }
+  }, [node.data, rawImageSource, showFeedbackToast, suggestedImageStem]);
 
   const handleCopyVideoSource = useCallback(async () => {
     if (!rawVideoSource) return;
@@ -496,10 +535,10 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const handleDownloadSaveAs = useCallback(async () => {
     if (!rawImageSource) return;
     try {
-      if (!isTauri()) {
+      if (useBrowserMediaActions || !isTauri()) {
         await downloadMediaInBrowser(rawImageSource, suggestedImageSavePath);
         closeDownloadMenu();
-        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        showFeedbackToast('已开始下载');
         return;
       }
       const selectedPath = await save({ defaultPath: suggestedImageSavePath });
@@ -511,15 +550,15 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
       console.error('Failed to save image with save-as', error);
       showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
     }
-  }, [closeDownloadMenu, rawImageSource, showFeedbackToast, suggestedImageSavePath, t]);
+  }, [closeDownloadMenu, rawImageSource, showFeedbackToast, suggestedImageSavePath, t, useBrowserMediaActions]);
 
   const handleDownloadToDownloads = useCallback(async () => {
     if (!rawImageSource) return;
     try {
-      if (!isTauri()) {
+      if (useBrowserMediaActions || !isTauri()) {
         await downloadMediaInBrowser(rawImageSource, suggestedImageStem);
         closeDownloadMenu();
-        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        showFeedbackToast('已开始下载');
         return;
       }
       await saveImageSourceToDownloads(rawImageSource, suggestedImageStem);
@@ -529,16 +568,16 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
       console.error('Failed to save image to downloads', error);
       showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
     }
-  }, [closeDownloadMenu, rawImageSource, showFeedbackToast, suggestedImageStem, t]);
+  }, [closeDownloadMenu, rawImageSource, showFeedbackToast, suggestedImageStem, t, useBrowserMediaActions]);
 
   const handleDownloadToPreset = useCallback(
     async (targetDir: string) => {
       if (!rawImageSource) return;
       try {
-        if (!isTauri()) {
+        if (useBrowserMediaActions || !isTauri()) {
           await downloadMediaInBrowser(rawImageSource, suggestedImageStem);
           closeDownloadMenu();
-          showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+          showFeedbackToast('已开始下载');
           return;
         }
         await saveImageSourceToDirectory(rawImageSource, targetDir, suggestedImageStem);
@@ -549,16 +588,16 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
         showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
       }
     },
-    [closeDownloadMenu, rawImageSource, showFeedbackToast, suggestedImageStem, t]
+    [closeDownloadMenu, rawImageSource, showFeedbackToast, suggestedImageStem, t, useBrowserMediaActions]
   );
 
   const handleDownloadVideoSaveAs = useCallback(async () => {
     if (!rawVideoSource) return;
     try {
-      if (!isTauri()) {
+      if (useBrowserMediaActions || !isTauri()) {
         await downloadMediaInBrowser(rawVideoSource, suggestedVideoSavePath);
         closeDownloadMenu();
-        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        showFeedbackToast('已开始下载');
         return;
       }
       const selectedPath = await save({ defaultPath: suggestedVideoSavePath });
@@ -570,16 +609,16 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
       console.error('Failed to save video with save-as', error);
       showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
     }
-  }, [closeDownloadMenu, rawVideoSource, showFeedbackToast, suggestedVideoSavePath, t]);
+  }, [closeDownloadMenu, rawVideoSource, showFeedbackToast, suggestedVideoSavePath, t, useBrowserMediaActions]);
 
   const handleDownloadVideoToPreset = useCallback(
     async (targetDir: string) => {
       if (!rawVideoSource) return;
       try {
-        if (!isTauri()) {
+        if (useBrowserMediaActions || !isTauri()) {
           await downloadMediaInBrowser(rawVideoSource, suggestedVideoStem);
           closeDownloadMenu();
-          showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+          showFeedbackToast('已开始下载');
           return;
         }
         await saveVideoSourceToDirectory(rawVideoSource, targetDir, suggestedVideoStem);
@@ -590,16 +629,16 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
         showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
       }
     },
-    [closeDownloadMenu, rawVideoSource, showFeedbackToast, suggestedVideoStem, t]
+    [closeDownloadMenu, rawVideoSource, showFeedbackToast, suggestedVideoStem, t, useBrowserMediaActions]
   );
 
   const handleDownloadAudio = useCallback(async (event?: MouseEvent<HTMLButtonElement>) => {
     event?.stopPropagation();
     if (!rawAudioSource) return;
     try {
-      if (!isTauri()) {
+      if (useBrowserMediaActions || !isTauri()) {
         await downloadMediaInBrowser(rawAudioSource, suggestedAudioSavePath);
-        showFeedbackToast(t('nodeToolbar.downloadSuccess'));
+        showFeedbackToast('已开始下载');
         return;
       }
       const selectedPath = await save({ defaultPath: suggestedAudioSavePath });
@@ -610,7 +649,7 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
       console.error('Failed to save audio', error);
       showFeedbackToast(t('nodeToolbar.downloadFailed'), 'error');
     }
-  }, [rawAudioSource, showFeedbackToast, suggestedAudioSavePath, t]);
+  }, [rawAudioSource, showFeedbackToast, suggestedAudioSavePath, t, useBrowserMediaActions]);
 
   const openAudioTrimMode = useCallback((event: MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -780,6 +819,31 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
             <Settings2 className="h-3.5 w-3.5" />
             {t('nodeToolbar.managePromptPresets')}
           </button>
+        </div>,
+        document.body
+      )
+    : null;
+
+  const assetSaveMenuElement = assetSaveMenu && typeof document !== 'undefined'
+    ? createPortal(
+        <div
+          ref={assetSaveMenuRef}
+          className="fixed z-[1100] w-40 rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] p-1.5 shadow-2xl"
+          style={{ left: Math.min(assetSaveMenu.x, window.innerWidth - 168), top: assetSaveMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="px-2 py-1.5 text-[11px] text-text-muted">添加到资产库</div>
+          {ASSET_SAVE_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs text-text-dark hover:bg-[var(--canvas-node-menu-hover)]"
+              onClick={() => { void handleSaveImageToAssetLibrary(option.id); }}
+            >
+              <FolderOpen className="h-3.5 w-3.5 text-accent" />
+              {option.label}
+            </button>
+          ))}
         </div>,
         document.body
       )
@@ -984,16 +1048,32 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
 
         {referenceImageSource && renderPromptPresetButton()}
 
-        {/* 复制 - Copy */}
+        {canHandleImage && (
+          <UiChipButton
+            className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              const rect = event.currentTarget.getBoundingClientRect();
+              setAssetSaveMenu({ x: rect.left, y: rect.bottom + 8 });
+            }}
+          >
+            <FolderPlus className="h-3.5 w-3.5" />
+            入库
+            <ChevronDown className="h-3 w-3 opacity-70" />
+          </UiChipButton>
+        )}
+
+        {/* 复制图片 - Copy image */}
         {canHandleImage && (
           <UiChipButton
             className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS} ${
               isCopySuccess ? '!border-emerald-400/70 !bg-emerald-500/20 !text-emerald-200' : ''
             }`}
             onClick={() => { void handleCopyImage(); }}
+            title="复制图片到系统剪贴板"
           >
             <Copy className="h-3.5 w-3.5" />
-            {t('nodeToolbar.copy')}
+            复制图片
           </UiChipButton>
         )}
 
@@ -1057,7 +1137,7 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
           }}
         >
           <Copy className="h-3.5 w-3.5" />
-          {t('nodeToolbar.copy')}
+          复制链接
         </UiChipButton>
 
         <UiChipButton
@@ -1171,6 +1251,7 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
 
     </ReactFlowNodeToolbar>
     {promptPresetMenuElement}
+    {assetSaveMenuElement}
     {feedbackToastElement}
     {videoPreviewElement}
     </>

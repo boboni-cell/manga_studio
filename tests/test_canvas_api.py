@@ -383,6 +383,18 @@ class AssetItemTest(unittest.TestCase):
         self.login('asset_crud_bob')
         self.assertEqual(self.client.delete('/api/assets/scenes/item/' + item_id).status_code, 404)
 
+    def test_canvas_character_asset_endpoint_accepts_character_alias(self):
+        self.login('asset_character_alias')
+        resp = self.client.post('/api/assets/character/item', json={
+            'name': '主角',
+            'images': ['https://example.com/hero.png'],
+        })
+        self.assertEqual(resp.status_code, 201)
+        item_id = resp.get_json()['id']
+        characters = self.client.get('/api/characters').get_json()
+        self.assertEqual(characters[item_id]['name'], '主角')
+        self.assertEqual(characters[item_id]['images'], [{'url': 'https://example.com/hero.png'}])
+
 
 class CanvasV2ApiTest(unittest.TestCase):
     def setUp(self):

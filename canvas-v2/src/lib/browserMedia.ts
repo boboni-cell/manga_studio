@@ -6,6 +6,21 @@ export function resolveHistoryMediaProxyUrl(source: string): string {
   return `/api/history/media?url=${encodeURIComponent(source)}`;
 }
 
+export function resolveBrowserDownloadUrl(source: string, requestedName: string): string {
+  const normalized = source.trim();
+  const downloadName = resolveBrowserDownloadName(requestedName, normalized);
+  if (isHttpSource(normalized)) {
+    return `/api/history/media?url=${encodeURIComponent(normalized)}&download=1&name=${encodeURIComponent(downloadName)}`;
+  }
+  if (normalized.startsWith('/api/history/media?')) {
+    const url = new URL(normalized, window.location.origin);
+    url.searchParams.set('download', '1');
+    url.searchParams.set('name', downloadName);
+    return `${url.pathname}${url.search}`;
+  }
+  return normalized;
+}
+
 async function fetchMediaBlob(source: string): Promise<Blob> {
   const normalized = source.trim();
   const candidates = isHttpSource(normalized)
@@ -63,16 +78,15 @@ export function resolveBrowserDownloadName(
 }
 
 export async function downloadMediaInBrowser(source: string, requestedName: string): Promise<void> {
-  const blob = await fetchMediaBlob(source);
-  const objectUrl = URL.createObjectURL(blob);
+  const normalized = source.trim();
+  if (!normalized) throw new Error('没有可下载的媒体');
   const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = resolveBrowserDownloadName(requestedName, source, blob.type);
+  anchor.href = resolveBrowserDownloadUrl(normalized, requestedName);
+  anchor.download = resolveBrowserDownloadName(requestedName, normalized);
   anchor.style.display = 'none';
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
 async function imageBlobToPng(blob: Blob): Promise<Blob> {
@@ -114,14 +128,9 @@ export async function copyTextInBrowser(text: string): Promise<void> {
 }
 
 export async function copyImageInBrowser(source: string): Promise<void> {
-  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-    try {
-      const blob = await imageBlobToPng(await fetchMediaBlob(source));
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      return;
-    } catch (error) {
-      console.warn('Image clipboard unavailable; copied the media address instead.', error);
-    }
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+    throw new Error('当前浏览器不支持复制图片，请使用下载');
   }
-  await copyTextInBrowser(source);
+  const png = fetchMediaBlob(source).then(imageBlobToPng);
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
 }

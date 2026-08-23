@@ -98,6 +98,9 @@ export const ModelConfigPicker = memo(({
     }
     return map;
   }, [catalog]);
+  const showPersonalApiPlaceholder = typeof window !== 'undefined'
+    && window.location.pathname.startsWith('/canvas-v2')
+    && !byProvider.has('个人 API');
 
   const modelsForCurrentProvider = useMemo(
     () => (currentEntry ? (byProvider.get(currentEntry.providerLabel) ?? []) : []),
@@ -253,6 +256,18 @@ export const ModelConfigPicker = memo(({
                 <span className="min-w-0 truncate">{label}</span>
               </button>
             ))}
+            {showPersonalApiPlaceholder && (
+              <a
+                href="/api-settings"
+                target="_top"
+                className="mt-1 flex w-full flex-col rounded border-t border-[var(--canvas-node-field-border)] px-2 py-1.5 text-left hover:bg-[var(--canvas-node-menu-hover)]"
+                title="前往 API 设置添加个人图片 API"
+                onClick={() => setProviderOpen(false)}
+              >
+                <span className="text-[11px] text-text-dark">个人 API</span>
+                <span className="text-[9px] text-text-muted">暂无配置 · 前往 API 设置</span>
+              </a>
+            )}
           </div>
         )}
       </div>

@@ -2849,7 +2849,7 @@ def create_asset_item(cat):
     if err:
         return err
     user_id = current_user_id()
-    if cat == 'characters':
+    if cat in ('character', 'characters'):
         name = body.get('name')
         images = body.get('images') or []
         if not _valid_asset_name(name):
@@ -2885,7 +2885,7 @@ def create_asset_item(cat):
 @login_required
 def update_asset_item(cat, item_id):
     user_id = current_user_id()
-    if cat == 'characters':
+    if cat in ('character', 'characters'):
         chars = load_json(characters_path(user_id), {})
         if not isinstance(chars, dict) or item_id not in chars:
             return jsonify(error='资产不存在'), 404
@@ -2940,7 +2940,7 @@ def update_asset_item(cat, item_id):
 @login_required
 def restore_asset_item(cat, item_id):
     user_id = current_user_id()
-    if cat == 'characters':
+    if cat in ('character', 'characters'):
         chars = load_json(characters_path(user_id), {})
         if not isinstance(chars, dict) or item_id not in chars:
             return jsonify(error='资产不存在'), 404
@@ -3006,7 +3006,9 @@ def history_media_by_url():
         if upstream.headers.get(key):
             headers[key] = upstream.headers[key]
     if request.args.get('download') == '1':
-        headers['Content-Disposition'] = f'attachment; filename="generation{ext}"'
+        requested_name = secure_filename(request.args.get('name', ''))
+        download_name = requested_name or f'generation{ext}'
+        headers['Content-Disposition'] = f'attachment; filename="{download_name}"'
     return Response(stream_download(), status=upstream.status_code, headers=headers)
 
 # ── models ────────────────────────────────────────────────────

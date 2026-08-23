@@ -43,6 +43,7 @@ import { CANVAS_COMMAND_VERSION, type CanvasCommand } from '@/features/canvas/do
 import { CANVAS_GENERATION_NODE_TYPES } from '@/features/canvas/domain/canvasCapabilities';
 import { useCanvasPersistence } from '@/features/canvas/hooks/useCanvasPersistence';
 import { useCanvasGenerationPolling } from '@/features/canvas/hooks/useCanvasGenerationPolling';
+import { cloneCanvasNodeContent } from '@/features/canvas/application/canvasClipboard';
 import { useCanvasShortcuts } from '@/features/canvas/hooks/useCanvasShortcuts';
 import { useCanvasWasdPan } from '@/features/canvas/hooks/useCanvasWasdPan';
 import { CanvasSideToolbar } from '@/features/canvas/CanvasSideToolbar';
@@ -98,7 +99,13 @@ import { NodeToolDialog } from './ui/NodeToolDialog';
 import { ImageViewerModal } from './ui/ImageViewerModal';
 import { AssetPanel, type CanvasAssetItem } from './ui/AssetPanel';
 import { MissingApiKeyHint } from '@/features/settings/MissingApiKeyHint';
-import { loadMangaAssetLibrary, type MangaLibraryAsset } from '@/lib/mangaAssetLibrary';
+import {
+  loadMangaAssetLibrary,
+  uploadMangaAssetFile,
+  type MangaAssetCategory,
+  type MangaLibraryAsset,
+  type MangaWritableAssetCategory,
+} from '@/lib/mangaAssetLibrary';
 
 const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
 const CANVAS_MARQUEE_MIN_DISTANCE = 4;
@@ -1013,6 +1020,8 @@ export function Canvas() {
   const [assetButtonRect, setAssetButtonRect] = useState<DOMRect | null>(null);
   const [assetPanelMode, setAssetPanelMode] = useState<'browse' | 'select'>('browse');
   const [libraryAssets, setLibraryAssets] = useState<CanvasAssetItem[]>([]);
+  const assetUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingAssetUploadCategoryRef = useRef<MangaWritableAssetCategory>('upload');
   const [assetConnectTargetNodeId, setAssetConnectTargetNodeId] = useState<string | null>(null);
   const [pendingConnectStart, setPendingConnectStart] = useState<PendingConnectStart | null>(
     null
@@ -1512,6 +1521,11 @@ export function Canvas() {
             sourceFileName: asset.title,
           });
         }
+        applyNodesChange(useCanvasStore.getState().nodes.map((item) => ({
+          id: item.id,
+          type: 'select' as const,
+          selected: item.id === createdNodeId,
+        })));
         setSelectedNode(createdNodeId);
         scheduleCanvasPersist(0);
         setIsAssetPanelOpen(false);
@@ -1563,6 +1577,32 @@ export function Canvas() {
     },
     [nodes, updateNodeData]
   );
+
+  const handleAddAsset = useCallback((category: MangaAssetCategory) => {
+    if (category === 'style' || category === 'history') {
+      window.location.assign('/assets');
+      return;
+    }
+    const writableCategory: MangaWritableAssetCategory = category === 'project' ? 'upload' : category;
+    pendingAssetUploadCategoryRef.current = writableCategory;
+    const input = assetUploadInputRef.current;
+    if (!input) return;
+    input.accept = writableCategory === 'audio' ? 'audio/*' : 'image/*';
+    input.value = '';
+    input.click();
+  }, []);
+
+  const handleAssetFileSelected = useCallback(async (file: File | null) => {
+    if (!file) return;
+    try {
+      await uploadMangaAssetFile(pendingAssetUploadCategoryRef.current, file);
+      const items = await loadMangaAssetLibrary();
+      setLibraryAssets(items.map(toLibraryAssetPanelItem));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '素材添加失败';
+      window.alert(message);
+    }
+  }, []);
 
   const closeAssetPanel = useCallback(() => {
     setIsAssetPanelOpen(false);
@@ -3032,40 +3072,7 @@ export function Canvas() {
         if (taggedSourceIds.has(sourceNode.id)) {
           continue;
         }
-        const data = cloneNodeData(sourceNode.data);
-        if ('isGenerating' in (data as Record<string, unknown>)) {
-          (data as { isGenerating?: boolean }).isGenerating = false;
-        }
-        if ('isStreaming' in (data as Record<string, unknown>)) {
-          (data as { isStreaming?: boolean }).isStreaming = false;
-        }
-        if ('generationStartedAt' in (data as Record<string, unknown>)) {
-          (data as { generationStartedAt?: number | null }).generationStartedAt = null;
-        }
-        if ('generationJobId' in (data as Record<string, unknown>)) {
-          (data as { generationJobId?: string | null }).generationJobId = null;
-        }
-        if ('generationProviderId' in (data as Record<string, unknown>)) {
-          (data as { generationProviderId?: string | null }).generationProviderId = null;
-        }
-        if ('generationClientSessionId' in (data as Record<string, unknown>)) {
-          (data as { generationClientSessionId?: string | null }).generationClientSessionId = null;
-        }
-        if ('generationStoryboardMetadata' in (data as Record<string, unknown>)) {
-          (data as { generationStoryboardMetadata?: unknown }).generationStoryboardMetadata = undefined;
-        }
-        if ('generationError' in (data as Record<string, unknown>)) {
-          (data as { generationError?: string | null }).generationError = null;
-        }
-        if ('generationErrorDetails' in (data as Record<string, unknown>)) {
-          (data as { generationErrorDetails?: string | null }).generationErrorDetails = null;
-        }
-        if ('generationDebugContext' in (data as Record<string, unknown>)) {
-          (data as { generationDebugContext?: unknown }).generationDebugContext = undefined;
-        }
-        if ('generationRetryResultUrl' in (data as Record<string, unknown>)) {
-          (data as { generationRetryResultUrl?: string | null }).generationRetryResultUrl = null;
-        }
+        const data = cloneCanvasNodeContent(sourceNode.data);
 
         const copiedParentId = sourceNode.parentId && sourceIdSet.has(sourceNode.parentId)
           ? sourceNode.parentId
@@ -4360,6 +4367,12 @@ export function Canvas() {
       )}
 
       <CanvasSideToolbar onOpenAssets={handleOpenAssetPanel} />
+      <input
+        ref={assetUploadInputRef}
+        type="file"
+        className="hidden"
+        onChange={(event) => { void handleAssetFileSelected(event.currentTarget.files?.[0] ?? null); }}
+      />
       <AssetPanel
         isOpen={isAssetPanelOpen}
         assets={assetPanelAssets}
@@ -4370,6 +4383,7 @@ export function Canvas() {
         onClose={closeAssetPanel}
         onActivate={handleActivateAsset}
         onRename={assetPanelMode === 'browse' ? handleRenameAsset : undefined}
+        onAdd={assetPanelMode === 'browse' ? handleAddAsset : undefined}
       />
 
       {nodes.length === 0 && emptyHint}

@@ -470,15 +470,17 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
                     <optgroup label="平台供应商（与经典工作台一致）">
                       {platformModels.map((m) => <option key={m} value={'platform:' + m}>{m}</option>)}
                     </optgroup>
-                    {profileOptions.length > 0 && (
-                      <optgroup label="自己的 API（来自 API 设置）">
-                        {profileOptions.map((p) => (
+                    <optgroup label="个人 API（来自 API 设置）">
+                      {profileOptions.length === 0 ? (
+                        <option value="" disabled>暂无配置，请前往 API 设置</option>
+                      ) : (
+                        profileOptions.map((p) => (
                           <option key={p.id} value={'personal:' + p.id}>
                             {String(p.name || p.model || p.id)}{p.provider ? ' · ' + p.provider : ''}
                           </option>
-                        ))}
-                      </optgroup>
-                    )}
+                        ))
+                      )}
+                    </optgroup>
                   </select>
                 </div>
                 <div className="flex items-center justify-between rounded-md border border-[var(--canvas-node-field-border)] bg-bg-dark/40 px-2 py-1.5 text-[11px] text-text-muted">
@@ -542,15 +544,17 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
                 <optgroup label="平台模型">
                   {textModels.map((m) => <option key={m} value={'platform:' + m}>{m}</option>)}
                 </optgroup>
-                {textProfileOptions.length > 0 && (
-                  <optgroup label="个人 API">
-                    {textProfileOptions.map((p) => (
+                <optgroup label="个人 API">
+                  {textProfileOptions.length === 0 ? (
+                    <option value="" disabled>暂无配置，请前往 API 设置</option>
+                  ) : (
+                    textProfileOptions.map((p) => (
                       <option key={p.id} value={'personal:' + p.id}>
                         {Array.from(new Set([p.name, p.model, p.provider].filter(Boolean))).join(' · ') || p.id}
                       </option>
-                    ))}
-                  </optgroup>
-                )}
+                    ))
+                  )}
+                </optgroup>
               </select>
               <div className="mt-1.5 flex justify-end gap-2 text-[11px]">
                 <a className="text-accent hover:underline" href="/api-settings" target="_top">API 设置</a>
