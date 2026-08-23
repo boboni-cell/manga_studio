@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import { Film, ImageIcon, Music, Plus, Search, X } from 'lucide-react';
+import { Check, Film, ImageIcon, Music, Pencil, Plus, Search, X } from 'lucide-react';
 
 import { MANGA_ASSET_CATEGORIES, type MangaAssetCategory } from '@/lib/mangaAssetLibrary';
 
@@ -49,7 +49,7 @@ interface AssetPanelProps {
   subtitle?: string;
   onClose: () => void;
   onActivate: (asset: CanvasAssetItem) => void;
-  onRename?: (asset: CanvasAssetItem, title: string) => void;
+  onRename?: (asset: CanvasAssetItem, title: string) => Promise<void> | void;
   onAdd?: (category: MangaAssetCategory) => void;
 }
 
@@ -67,6 +67,9 @@ export const AssetPanel = memo(({
 }: AssetPanelProps) => {
   const [query, setQuery] = useState('');
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
+  const [savingAssetId, setSavingAssetId] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<MangaAssetCategory>('project');
   const categoryCounts = useMemo(() => {
     const counts = new Map<MangaAssetCategory, number>();
@@ -100,16 +103,30 @@ export const AssetPanel = memo(({
     });
   }, [assets, isOpen]);
 
-  const commitAssetName = (asset: CanvasAssetItem) => {
+  const commitAssetName = async (asset: CanvasAssetItem) => {
     const draft = (nameDrafts[asset.id] ?? asset.title).trim();
     if (!draft) {
       setNameDrafts((previous) => ({ ...previous, [asset.id]: asset.title }));
+      setRenameError('资产名称不能为空');
       return;
     }
-    if (draft !== asset.title) {
-      onRename?.(asset, draft);
+    if (draft === asset.title) {
+      setEditingAssetId(null);
+      setRenameError(null);
+      return;
     }
-    setNameDrafts((previous) => ({ ...previous, [asset.id]: draft }));
+    try {
+      setSavingAssetId(asset.id);
+      setRenameError(null);
+      await onRename?.(asset, draft);
+      setNameDrafts((previous) => ({ ...previous, [asset.id]: draft }));
+      setEditingAssetId(null);
+    } catch (error) {
+      setNameDrafts((previous) => ({ ...previous, [asset.id]: asset.title }));
+      setRenameError(error instanceof Error ? error.message : '资产改名失败');
+    } finally {
+      setSavingAssetId(null);
+    }
   };
 
   if (!isOpen || !buttonRect) {
@@ -235,6 +252,11 @@ export const AssetPanel = memo(({
               <h3 className="text-xs font-medium text-white/70">{activeCategoryLabel}</h3>
               <span className="text-[10px] text-white/35">{filteredAssets.length} 个</span>
             </div>
+            {renameError && (
+              <div className="mb-2 rounded-md border border-red-400/25 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-200">
+                {renameError}
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-2">
                   {filteredAssets.map((asset) => (
                     <div
@@ -287,32 +309,63 @@ export const AssetPanel = memo(({
                         )}
                       </button>
                       <div className="space-y-0.5 px-2 py-1.5">
-                        {mode === 'browse' && asset.nodeId && onRename ? (
-                          <input
-                            value={nameDrafts[asset.id] ?? asset.title}
-                            onChange={(event) => {
-                              const nextValue = event.target.value;
-                              setNameDrafts((previous) => ({ ...previous, [asset.id]: nextValue }));
-                            }}
-                            onBlur={() => commitAssetName(asset)}
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault();
-                                event.currentTarget.blur();
-                              }
-                              if (event.key === 'Escape') {
-                                event.preventDefault();
-                                setNameDrafts((previous) => ({ ...previous, [asset.id]: asset.title }));
-                                event.currentTarget.blur();
-                              }
-                            }}
-                            className="nodrag w-full rounded border border-white/10 bg-black/25 px-1.5 py-0.5 text-[10px] font-medium text-white/80 outline-none transition-colors hover:border-white/20 hover:bg-black/35 focus:border-accent/60 focus:bg-black/40"
-                            title="双击资产定位；这里可直接改名，允许同名"
-                          />
+                        {editingAssetId === asset.id ? (
+                          <div className="flex min-w-0 items-center gap-1">
+                            <input
+                              autoFocus
+                              value={nameDrafts[asset.id] ?? asset.title}
+                              disabled={savingAssetId === asset.id}
+                              onChange={(event) => {
+                                const nextValue = event.target.value;
+                                setNameDrafts((previous) => ({ ...previous, [asset.id]: nextValue }));
+                              }}
+                              onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault();
+                                  void commitAssetName(asset);
+                                }
+                                if (event.key === 'Escape') {
+                                  event.preventDefault();
+                                  setNameDrafts((previous) => ({ ...previous, [asset.id]: asset.title }));
+                                  setEditingAssetId(null);
+                                  setRenameError(null);
+                                }
+                              }}
+                              className="nodrag min-w-0 flex-1 rounded border border-accent/60 bg-black/40 px-1.5 py-0.5 text-[10px] font-medium text-white outline-none"
+                              aria-label={`修改${asset.title}的名称`}
+                            />
+                            <button
+                              type="button"
+                              disabled={savingAssetId === asset.id}
+                              onClick={() => { void commitAssetName(asset); }}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-accent-light hover:bg-accent/20 disabled:opacity-40"
+                              title="保存名称"
+                              aria-label="保存名称"
+                            >
+                              <Check className="h-3 w-3" />
+                            </button>
+                          </div>
                         ) : (
-                          <div className="truncate rounded border border-transparent px-1.5 py-0.5 text-[10px] font-medium text-white/80">
-                            {asset.title}
+                          <div className="flex min-w-0 items-center gap-1">
+                            <div className="min-w-0 flex-1 truncate rounded border border-transparent px-1.5 py-0.5 text-[10px] font-medium text-white/80" title={asset.title}>
+                              {asset.title}
+                            </div>
+                            {mode === 'browse' && asset.category !== 'history' && onRename && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNameDrafts((previous) => ({ ...previous, [asset.id]: asset.title }));
+                                  setEditingAssetId(asset.id);
+                                  setRenameError(null);
+                                }}
+                                className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-white/40 hover:bg-accent/20 hover:text-accent-light"
+                                title="修改资产名称"
+                                aria-label={`修改${asset.title}的名称`}
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            )}
                           </div>
                         )}
                         <div className="truncate text-[9px] text-white/35">{asset.sourceLabel}</div>

@@ -101,6 +101,7 @@ import { AssetPanel, type CanvasAssetItem } from './ui/AssetPanel';
 import { MissingApiKeyHint } from '@/features/settings/MissingApiKeyHint';
 import {
   loadMangaAssetLibrary,
+  renameMangaAsset,
   uploadMangaAssetFile,
   type MangaAssetCategory,
   type MangaLibraryAsset,
@@ -1565,15 +1566,24 @@ export function Canvas() {
   );
 
   const handleRenameAsset = useCallback(
-    (asset: CanvasAssetItem, title: string) => {
-      if (!asset.nodeId) return;
-      const node = nodes.find((item) => item.id === asset.nodeId);
-      updateNodeData(asset.nodeId, {
-        displayName: title,
-        ...(node?.type === CANVAS_NODE_TYPES.exportImage || node?.type === CANVAS_NODE_TYPES.video
-          ? { generatedNamingMode: 'custom' as const }
-          : {}),
-      });
+    async (asset: CanvasAssetItem, title: string) => {
+      if (asset.nodeId) {
+        const node = nodes.find((item) => item.id === asset.nodeId);
+        updateNodeData(asset.nodeId, {
+          displayName: title,
+          ...(node?.type === CANVAS_NODE_TYPES.exportImage || node?.type === CANVAS_NODE_TYPES.video
+            ? { generatedNamingMode: 'custom' as const }
+            : {}),
+        });
+        return;
+      }
+      if (asset.category === 'project' || asset.category === 'history') {
+        throw new Error('该资产暂不支持改名');
+      }
+      await renameMangaAsset({ id: asset.id, category: asset.category }, title);
+      setLibraryAssets((current) => current.map((item) => (
+        item.id === asset.id ? { ...item, title } : item
+      )));
     },
     [nodes, updateNodeData]
   );

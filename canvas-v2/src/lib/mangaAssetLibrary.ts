@@ -100,6 +100,32 @@ export async function addMangaAsset(
   });
 }
 
+export async function renameMangaAsset(
+  asset: Pick<MangaLibraryAsset, 'id' | 'category'>,
+  name: string,
+): Promise<void> {
+  const normalizedName = name.trim();
+  if (!normalizedName) throw new Error('资产名称不能为空');
+  if (asset.category === 'history') throw new Error('历史记录暂不支持改名');
+
+  const itemId = asset.id.slice(asset.id.indexOf(':') + 1);
+  const category = asset.category === 'character'
+    ? 'characters'
+    : asset.category === 'outfit'
+      ? 'outfits'
+      : asset.category === 'scene'
+        ? 'scenes'
+        : asset.category === 'upload'
+          ? 'uploads'
+          : asset.category === 'audio'
+            ? 'audios'
+            : 'styles';
+  await api(`/api/assets/${category}/item/${encodeURIComponent(itemId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: normalizedName }),
+  });
+}
+
 export async function uploadMangaAssetFile(
   category: MangaWritableAssetCategory,
   file: File,

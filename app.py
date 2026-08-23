@@ -3969,17 +3969,41 @@ def atlas_video_generate(job_id, script, images, audio_url, video_url, first_fra
 # ── Image generation helpers ──────────────────────────────────
 def download_and_save_image(image_url):
     """Download image from URL and keep it in durable storage when configured."""
-    r = requests.get(image_url, timeout=120)
-    if r.status_code != 200:
-        raise Exception(f'下载图片失败: {r.status_code}')
-    ct = r.headers.get('Content-Type', 'image/png')
+    attempts = 3
+    response = None
+    retryable_statuses = {429, 500, 502, 503, 504}
+    for attempt in range(attempts):
+        try:
+            candidate = requests.get(
+                image_url,
+                headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'image/*,*/*;q=0.8'},
+                timeout=(20, 180),
+            )
+            if candidate.status_code == 200:
+                response = candidate
+                break
+            if candidate.status_code not in retryable_statuses:
+                raise Exception(f'下载图片失败: {candidate.status_code}')
+            failure = f'HTTP {candidate.status_code}'
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+            failure = type(exc).__name__
+        if attempt + 1 < attempts:
+            print(f'[image-cache] download retry {attempt + 1}/{attempts}: {failure}', flush=True)
+            time.sleep(2 ** attempt)
+
+    if response is None:
+        raise Exception('图片已生成，但从供应商临时存储下载失败；系统已自动重试 3 次，请稍后重试')
+
+    ct = response.headers.get('Content-Type', 'image/png')
     ext = '.png'
     if 'jpeg' in ct or 'jpg' in ct:
         ext = '.jpg'
     elif 'webp' in ct:
         ext = '.webp'
     name = uuid.uuid4().hex + ext
-    img_bytes = r.content
+    img_bytes = response.content
+    if not img_bytes:
+        raise Exception('图片已生成，但供应商返回了空图片文件')
 
     # Try durable object storage
     public_url, ok = upload_to_tos(img_bytes, name, ct)
@@ -4168,7 +4192,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             reference_urls.append(url)
     if reference_urls:
         payload['image'] = reference_urls[0] if len(reference_urls) == 1 else reference_urls
-    r = requests.post(endpoint, headers=headers, json=payload, timeout=180 if is_nano_midjourney else 120)
+    r = requests.post(endpoint, headers=headers, json=payload, timeout=360)
     if r.status_code not in (200, 201):
         raise Exception(f'图片 API 生成失败: {r.status_code} {r.text[:200]}')
     data = r.json()

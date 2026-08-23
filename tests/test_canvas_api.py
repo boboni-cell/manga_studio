@@ -380,8 +380,12 @@ class AssetItemTest(unittest.TestCase):
         scenes = self.client.get('/api/assets/scenes').get_json()
         self.assertTrue(any(isinstance(s, dict) and s.get('id') == item_id for s in scenes))
         self.assertEqual(self.client.put('/api/assets/scenes/item/' + item_id, json={'name': '咖啡厅'}).status_code, 200)
+        scenes = self.client.get('/api/assets/scenes').get_json()
+        renamed = next(s for s in scenes if isinstance(s, dict) and s.get('id') == item_id)
+        self.assertEqual(renamed['name'], '咖啡厅')
         self.assertEqual(self.client.delete('/api/assets/scenes/item/' + item_id).status_code, 200)
         self.login('asset_crud_bob')
+        self.assertEqual(self.client.put('/api/assets/scenes/item/' + item_id, json={'name': '别人的场景'}).status_code, 404)
         self.assertEqual(self.client.delete('/api/assets/scenes/item/' + item_id).status_code, 404)
 
     def test_canvas_character_asset_endpoint_accepts_character_alias(self):
@@ -567,8 +571,27 @@ class NanoGptMidjourneyTest(unittest.TestCase):
         self.assertEqual(request.kwargs['json']['aspect_ratio'], '16:9')
         self.assertEqual(request.kwargs['json']['version'], '8.2')
         self.assertEqual(request.kwargs['json']['n'], 4)
+        self.assertEqual(request.kwargs['timeout'], 360)
         self.assertNotIn('size', request.kwargs['json'])
         download_mock.assert_called_once_with('https://example.com/mj.png')
+
+    @mock.patch.object(app_module, 'upload_to_tos', return_value=('https://cdn.example.com/gpt.png', True))
+    @mock.patch.object(app_module.requests, 'post')
+    def test_nano_image_generation_waits_up_to_six_minutes(self, post_mock, upload_mock):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {'data': [{'b64_json': 'aW1hZ2U='}]}
+        post_mock.return_value = response
+
+        result = app_module.nano_image_generate(
+            '电影感人像',
+            'gpt-image-2',
+            '1:1',
+            api_key='test-key',
+        )
+
+        self.assertEqual(result, ('https://cdn.example.com/gpt.png', mock.ANY))
+        self.assertEqual(post_mock.call_args.kwargs['timeout'], 360)
+        upload_mock.assert_called_once()
 
     @mock.patch.object(app_module.requests, 'post')
     def test_midjourney_rejects_reference_images_before_paid_request(self, post_mock):
@@ -614,6 +637,37 @@ class VolcSeedream5ProTest(unittest.TestCase):
             watermark=False,
         )
         download_mock.assert_called_once_with('https://example.com/seedream5.jpg')
+
+
+class GeneratedImageDownloadTest(unittest.TestCase):
+    @mock.patch.object(app_module, 'upload_to_tos', return_value=('https://cdn.example.com/generated.jpg', True))
+    @mock.patch.object(app_module.time, 'sleep')
+    @mock.patch.object(app_module.requests, 'get')
+    def test_retries_same_generated_url_after_read_timeout(self, get_mock, sleep_mock, upload_mock):
+        response = mock.Mock(status_code=200)
+        response.headers = {'Content-Type': 'image/jpeg'}
+        response.content = b'image-bytes'
+        get_mock.side_effect = [app_module.requests.exceptions.ReadTimeout(), response]
+
+        result = app_module.download_and_save_image('https://ark-acg.example.com/result.jpg')
+
+        self.assertEqual(result, ('https://cdn.example.com/generated.jpg', mock.ANY))
+        self.assertEqual(get_mock.call_count, 2)
+        self.assertEqual(get_mock.call_args_list[0].args[0], get_mock.call_args_list[1].args[0])
+        self.assertEqual(get_mock.call_args.kwargs['timeout'], (20, 180))
+        sleep_mock.assert_called_once_with(1)
+        upload_mock.assert_called_once_with(b'image-bytes', mock.ANY, 'image/jpeg')
+
+    @mock.patch.object(app_module.time, 'sleep')
+    @mock.patch.object(app_module.requests, 'get')
+    def test_reports_generated_image_download_failure_after_three_timeouts(self, get_mock, sleep_mock):
+        get_mock.side_effect = app_module.requests.exceptions.ReadTimeout()
+
+        with self.assertRaisesRegex(Exception, '图片已生成.*自动重试 3 次'):
+            app_module.download_and_save_image('https://ark-acg.example.com/result.jpg')
+
+        self.assertEqual(get_mock.call_count, 3)
+        self.assertEqual(sleep_mock.call_count, 2)
 
 
 if __name__ == '__main__':
