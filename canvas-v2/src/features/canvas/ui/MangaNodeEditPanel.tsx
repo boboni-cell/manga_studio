@@ -334,13 +334,14 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
   const visibleAssets = assets.filter((asset) => asset.category === activeAssetCategory);
 
   const rect = nodeRect;
+  const panelWidth = Math.min(PANEL_WIDTH, Math.max(304, window.innerWidth - 16));
   const panelStyle: React.CSSProperties | undefined = rect
     ? {
-        left: Math.max(8, Math.min(rect.left, window.innerWidth - PANEL_WIDTH - 8)),
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - panelWidth - 8)),
         top: Math.min(rect.bottom + 8, window.innerHeight - 320),
-        width: PANEL_WIDTH,
+        width: panelWidth,
       }
-    : { left: 24, top: 120, width: PANEL_WIDTH };
+    : { left: 8, top: 80, width: panelWidth };
 
   const skillFilter: Record<string, string[]> = {
     aiTextNode: ['short-drama-novel-analyze', 'short-drama-write', 'short-drama-assets', 'short-drama-storyboard'],

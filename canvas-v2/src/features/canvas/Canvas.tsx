@@ -3731,7 +3731,10 @@ export function Canvas() {
       node.id,
       getCanvasMouseAction(canvasMouseBindings, 0, 'click')
     );
-  }, [canvasMouseBindings, handleConfiguredNodeClickAction]);
+    if (window.matchMedia('(max-width: 760px)').matches && reactFlowInstance.getViewport().zoom < 0.35) {
+      void reactFlowInstance.fitView({ nodes: [node], padding: 0.18, duration: 260, maxZoom: 0.72 });
+    }
+  }, [canvasMouseBindings, handleConfiguredNodeClickAction, reactFlowInstance]);
 
   const handleNodeContextMenu = useCallback((event: ReactMouseEvent, node: CanvasNode) => {
     event.preventDefault();

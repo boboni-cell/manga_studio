@@ -92,6 +92,7 @@ import {
 import { ModelConfigPicker } from '@/features/canvas/ui/ModelConfigPicker';
 import { resolveActiveModelForPanel } from '@/features/canvas/application/resolveActiveModelForPanel';
 import { CameraControlPanel } from '@/features/canvas/ui/CameraControlPanel';
+import { CanvasStylePicker } from '@/features/canvas/ui/CanvasStylePicker';
 import { buildCameraPrompt } from '@/features/canvas/application/cameraPromptLibrary';
 import {
   MULTI_FUNCTION_ITEMS,
@@ -746,6 +747,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
       ...effectiveExtraParams,
       ...resolved.extraParams,
       resolutionType: geometry.resolutionLabel,
+      style_id: latestData.styleId || latestData.style_id || undefined,
     };
     return {
       promptForRequest,
@@ -1494,6 +1496,11 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
           className="flex-1"
           value={nodeModelConfig}
           onChange={(modelConfig) => updateNodeData(id, { modelConfig })}
+        />
+
+        <CanvasStylePicker
+          value={data.styleId || data.style_id || null}
+          onChange={(styleId) => updateNodeData(id, { styleId, style_id: styleId })}
         />
 
         <UiButton

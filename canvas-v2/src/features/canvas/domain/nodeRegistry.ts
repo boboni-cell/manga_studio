@@ -119,6 +119,8 @@ const imageEditNodeDefinition: CanvasNodeDefinition<ImageEditNodeData> = {
     isGenerating: false,
     generationStartedAt: null,
     generationDurationMs: 60000,
+    styleId: null,
+    style_id: null,
     selectedFunctionChip: null,
     selectedPromptPresetId: null,
   }),
@@ -150,6 +152,8 @@ const aiVideoNodeDefinition: CanvasNodeDefinition<AiVideoNodeData> = {
     isGenerating: false,
     generationStartedAt: null,
     generationDurationMs: 15 * 60 * 1000,
+    styleId: null,
+    style_id: null,
     selectedPromptPresetId: null,
   }),
 };

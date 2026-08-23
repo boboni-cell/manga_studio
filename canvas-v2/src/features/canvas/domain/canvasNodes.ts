@@ -215,6 +215,8 @@ export interface ImageEditNodeData extends NodeImageData {
   prompt: string;
   model: string;
   size: ImageSize;
+  styleId?: string | null;
+  style_id?: string | null;
   requestAspectRatio?: string;
   modelConfig?: {
     entryId: string;
@@ -242,6 +244,8 @@ export interface ImageEditNodeData extends NodeImageData {
 
 export interface AiVideoNodeData extends NodeDisplayData {
   prompt: string;
+  styleId?: string | null;
+  style_id?: string | null;
   modelConfig?: {
     entryId: string;
     duration: string;

@@ -844,9 +844,9 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
       position={NODE_TOOLBAR_POSITION}
       align={NODE_TOOLBAR_ALIGN}
       offset={offset}
-      className={NODE_TOOLBAR_CLASS}
+      className={`${NODE_TOOLBAR_CLASS} canvas-node-action-toolbar-shell`}
     >
-      <UiPanel className="flex items-center gap-1 rounded-full p-1">
+      <UiPanel className="canvas-node-action-toolbar flex items-center gap-1 rounded-full p-1">
         {/* Case B: empty AI node — render multi-function chips only. Clicking
             a chip selects the module (blue highlight); clicking again
             clears. One at a time. The chip's prompt template is composed in

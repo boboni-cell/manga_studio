@@ -82,6 +82,7 @@ import {
 } from '@/features/canvas/application/generatedMediaNaming';
 import { CanvasNodeImage } from '@/features/canvas/ui/CanvasNodeImage';
 import { CameraControlPanel } from '@/features/canvas/ui/CameraControlPanel';
+import { CanvasStylePicker } from '@/features/canvas/ui/CanvasStylePicker';
 import { DreaminaMultiframeEditor } from '@/features/canvas/ui/DreaminaMultiframeEditor';
 import { buildCameraPrompt } from '@/features/canvas/application/cameraPromptLibrary';
 import { NodeHeader, NODE_HEADER_FLOATING_POSITION_CLASS } from '@/features/canvas/ui/NodeHeader';
@@ -790,6 +791,7 @@ export const AiVideoNode = memo(({ id, data, selected, width, height }: AiVideoN
       ?? latestModelConfig.aspectRatio
       ?? '16:9';
     const extraParams = { ...(latestModelConfig.extraParams ?? {}) };
+    extraParams.style_id = latestData.styleId || latestData.style_id || undefined;
     extraParams.videoInputSchema = latestInputSchema;
     if (latestEntry.id === 'dreamina:multi-frame-video' && latestIncomingImages.length >= 3) {
       const transitions = parseDreaminaTransitionSegments(
@@ -1692,6 +1694,11 @@ export const AiVideoNode = memo(({ id, data, selected, width, height }: AiVideoN
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
+          <CanvasStylePicker
+            value={data.styleId || data.style_id || null}
+            onChange={(styleId) => updateNodeData(id, { styleId, style_id: styleId })}
+          />
+
           <UiButton
             onClick={(event) => {
               event.stopPropagation();

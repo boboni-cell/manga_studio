@@ -1,7 +1,7 @@
 import { memo, useCallback, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
-import { ImagePlus, Globe2, LayoutGrid, Images, ListPlus, ScrollText, Video } from 'lucide-react';
+import { ImagePlus, Globe2, LayoutGrid, Images, ListPlus, Maximize2, ScrollText, Video } from 'lucide-react';
 
 import { CANVAS_NODE_TYPES, type CanvasNodeType } from '@/features/canvas/domain/canvasNodes';
 import {
@@ -185,6 +185,16 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
             </button>
           );
         })}
+        <button
+          type="button"
+          title={t('canvas.toolbar.fitView')}
+          aria-label={t('canvas.toolbar.fitView')}
+          onClick={() => void reactFlow.fitView({ padding: 0.16, duration: 300, maxZoom: 0.8 })}
+          className="canvas-side-toolbar__button flex w-16 shrink-0 flex-col items-center gap-0.5 rounded-lg border border-[var(--canvas-rail-button-border)] bg-[var(--canvas-rail-button-bg)] px-2 py-2 text-[10px] text-[var(--canvas-rail-button-text)] transition-colors hover:border-accent/60 hover:bg-accent/15 hover:text-accent"
+        >
+          <Maximize2 className="h-4 w-4" />
+          <span className="canvas-side-toolbar__label leading-tight">适配</span>
+        </button>
         <button
           type="button"
           title={t('canvasToolbar.logsTitle')}

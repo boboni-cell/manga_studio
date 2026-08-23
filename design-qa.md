@@ -2,31 +2,34 @@
 
 ## Scope
 
-- Surface: authenticated homepage and canvas workspace shell.
-- Target: align the workspace palette with the homepage and prevent the mobile workspace header from covering canvas controls.
-- State: isolated local QA account with a saved project and imported personal API profiles.
+- Surface: canvas workspace on mobile and desktop.
+- Target: make image/video generation styles selectable and keep the mobile workspace controls readable without covering the canvas.
+- State: isolated local QA account with one image node, one generated image asset, one newly created video node, personal image/video providers, and nine saved styles.
 
 ## Visual truth
 
-- User issue reference: `/var/folders/09/2l28qsrs7c581dly276t5q940000gn/T/codex-clipboard-0881dbed-3b46-4053-85dc-0402bec195a8.png` (1206×232).
-- Homepage reference capture: `/tmp/manga-qa-home-mobile.png` (390×844, device scale factor 1).
-- Implemented workspace capture: `/tmp/manga-qa-workspace-mobile-v2.png` (390×844, device scale factor 1).
-- Side-by-side comparison: `/tmp/manga-qa-theme-comparison.png` (780×844).
+- User reference: `/Users/zhanghanyue/Downloads/IMG_7110.PNG` (1320×2868 physical pixels).
+- Implemented mobile toolbar: `/tmp/manga-style-mobile-toolbar-fixed.png` (390×844 CSS pixels, device scale factor 1).
+- Implemented image style menu: `/tmp/manga-style-mobile-menu.png` (390×844 CSS pixels, device scale factor 1).
+- Implemented video style menu: `/tmp/manga-video-style-mobile-menu.png` (390×844 CSS pixels, device scale factor 1).
+- Full-view comparison: `/tmp/manga-style-mobile-comparison.png` (780×844; reference normalized to 390×844 on the left, implementation on the right).
 
 ## Findings and fixes
 
-1. P1 — The fixed mobile workspace switcher overlaid the canvas iframe and hid controls. The workspace shell now uses a column layout: the switcher occupies the first 56 px and the canvas stage begins at y=56. The switcher remains horizontally scrollable so every action stays reachable at 390 px width.
-2. P2 — Workspace, canvas, API settings, admin, login, and asset pages used disconnected gray/blue tokens. Their backgrounds, borders, accents, focus rings, and active states now use the homepage purple/black palette while preserving the existing typography, spacing, and component structure.
-3. Focused comparison — The user-flagged top header no longer covers content; the full-screen comparison confirms the workspace and homepage share the same background, border, and purple accent family.
+1. P1 — The reference mobile layout squeezed the selected-node action labels into vertical text and placed the large creation toolbar over the canvas. The node action toolbar is now a fixed, horizontally scrollable row below the workspace header; the creation toolbar is a compact, horizontally scrollable bottom dock.
+2. P1 — Image and video generation nodes had no direct style control even though the backend already accepted `style_id`. Both nodes now expose the same thumbnail style picker, send the selected `style_id` in generation payloads, and persist both `styleId` and `style_id` with the project.
+3. P2 — The workspace header was a single clipped row on mobile. It now occupies two stable rows above the iframe, so project navigation, workbench tabs, save state, API settings, and logout remain reachable without covering node actions.
+4. P2 — The minimap consumed a large part of the mobile viewport. It is hidden below 880 px, and an explicit `适配` action remains in the bottom dock.
+5. Focused comparison — At 390×844, toolbar labels remain horizontal, the style menu renders at an unscaled 280 px width with readable thumbnails, and no control overlaps the workspace header or bottom dock.
 
 ## Functional checks
 
-- Provider menus expose separate `平台模型` and `个人 API` groups; multiple imported personal image profiles appear together and remain individually selectable.
-- Image-node skill controls use platform/personal text models and keep the classic-workbench text-model route.
-- API settings and admin `返回工作台` use same-origin browser history and fall back to the homepage only when no safe previous page exists.
-- Browser media helpers cover image/video/audio download, image clipboard copy, URL-copy fallback, and authenticated history-media fallback; unit tests exercise proxy URL and download-name resolution.
-- Mobile header geometry: header top 0, bottom 56, height 56; canvas stage top 56, height 788 at 390×844.
-- Console review found no new application error after the back-navigation fix. The existing Three.js duplicate-import warning is unchanged.
+- Image node style selection: selected `真人短剧`; persisted as `styleId/style_id = style_1` in the isolated project JSON.
+- Video node creation and style selection: selected `电影写实`; persisted as `styleId/style_id = style_2` in the same project JSON.
+- Reopening at the desktop viewport restored both selected style names, proving project persistence rather than transient component state.
+- Mobile interactions tested: switch workbench tabs, fit view, select an image node, horizontally inspect node actions, open/close the style menu, choose an image style, create a video node, and choose a video style.
+- Desktop DOM check confirmed image and video style controls remain visible and the minimap remains available.
+- Console review found no new application errors. The existing Three.js duplicate-import warning is unchanged.
 
 ## Verification
 

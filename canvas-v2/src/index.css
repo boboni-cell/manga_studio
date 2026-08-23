@@ -600,9 +600,74 @@ html[data-platform='macos'] #root {
 
 @media (max-width: 880px) {
   .canvas-center-safe {
-    padding-left: 7rem;
-    padding-right: 0.75rem;
+    padding: 0.75rem 0.75rem 6.5rem;
   }
+
+  .canvas-side-toolbar {
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: max(8px, env(safe-area-inset-bottom, 0px));
+    max-height: none;
+    transform: none;
+    flex-direction: row;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 6px;
+    scrollbar-width: none;
+  }
+
+  .canvas-side-toolbar::-webkit-scrollbar,
+  .canvas-node-action-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .canvas-side-toolbar__button {
+    min-height: 50px;
+    width: 54px;
+    padding: 5px 4px;
+  }
+
+  .canvas-side-toolbar__label {
+    max-width: 48px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .canvas-minimap {
+    display: none;
+  }
+
+  .canvas-node-toolbar {
+    max-width: calc(100vw - 16px);
+  }
+
+  .canvas-node-action-toolbar-shell {
+    position: fixed !important;
+    top: 8px !important;
+    right: 8px !important;
+    left: 8px !important;
+    width: auto !important;
+    transform: none !important;
+  }
+
+  .canvas-node-action-toolbar {
+    width: 100%;
+    max-width: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-radius: 12px;
+    scrollbar-width: none;
+  }
+
+  .canvas-node-action-toolbar > * {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .canvas-style-picker-menu { width: min(280px, calc(100vw - 24px)); }
 }
 
 @media (max-height: 520px) {
