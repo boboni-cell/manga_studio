@@ -146,7 +146,9 @@ MODEL_CAPS = {
 }
 
 # Image generation configs
-NANO_GPT_IMAGE_MODELS = {"gpt-image-2", "nano-banana-2", "midjourney"}
+NANO_GPT_MIDJOURNEY_MODEL_ID = "midjourney/text-to-image"
+NANO_GPT_IMAGE_MODELS = {"gpt-image-2", "nano-banana-2", NANO_GPT_MIDJOURNEY_MODEL_ID}
+LEGACY_IMAGE_MODEL_ALIASES = {"midjourney": NANO_GPT_MIDJOURNEY_MODEL_ID}
 VOLC_IMAGE_MODEL_ID = "doubao-seedream-4-5-251128"
 ALL_IMAGE_MODELS = sorted(NANO_GPT_IMAGE_MODELS) + [AGNES_IMAGE_MODEL_ID, "volc-seedream-4-5"]
 IMAGE_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "4:5", "5:4", "custom"]
@@ -982,7 +984,8 @@ def is_admin(user_id=None):
 def model_pricing_catalog():
     labels = {
         'doubao': '豆包', 'glm46': 'GPT-4.1 Mini', 'claude46': 'Claude 4.6',
-        'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2', 'midjourney': 'Midjourney',
+        'gpt-image-2': 'GPT Image 2', 'nano-banana-2': 'Banana 2',
+        NANO_GPT_MIDJOURNEY_MODEL_ID: 'Midjourney',
         AGNES_IMAGE_MODEL_ID: 'Agnes Image 2.1 Flash', 'volc-seedream-4-5': 'Seedream 4.5',
         'seedance': 'Seedance（火山）', AGNES_VIDEO_MODEL_ID: 'Agnes Video v2.0',
         'kling-v30-std': 'Kling v3.0 Std', 'grok-imagine-video': 'Grok Imagine',
@@ -1006,7 +1009,9 @@ def load_model_pricing():
 
 def model_point_cost(kind, model, quantity=1):
     pricing = load_model_pricing()
-    unit_price = max(0, int((pricing.get(kind) or {}).get(model) or 0))
+    kind_pricing = pricing.get(kind) or {}
+    legacy_model = next((old for old, current in LEGACY_IMAGE_MODEL_ALIASES.items() if current == model), None)
+    unit_price = max(0, int(kind_pricing.get(model) or (kind_pricing.get(legacy_model) if legacy_model else 0) or 0))
     multiplier = max(1, int(quantity or 1)) if kind == 'video' else 1
     return unit_price * multiplier
 
@@ -4108,17 +4113,36 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
         'x-api-key': api_key or NANO_GPT_API_KEY,
         'Authorization': f'Bearer {api_key or NANO_GPT_API_KEY}'
     }
-    payload = {
-        'model': model_id,
-        'prompt': final_prompt,
-        'size': size,
-        'dimensions': size
-    }
-    if ratio != 'custom':
-        payload['aspect_ratio'] = ratio
-    if width and height:
-        payload['width'] = width
-        payload['height'] = height
+    api_root = (base_url or NANO_GPT_BASE).rstrip('/')
+    is_nano_midjourney = (
+        model_id == NANO_GPT_MIDJOURNEY_MODEL_ID
+        and 'nano-gpt.com' in api_root.lower()
+    )
+    if is_nano_midjourney:
+        if input_images:
+            raise Exception('Nano-GPT Midjourney 目前仅支持文生图，请移除参考图后重试')
+        supported_ratio = ratio if ratio in {'1:1', '16:9', '9:16', '21:9', '9:21', '4:3', '3:4', '3:2', '2:3'} else '1:1'
+        payload = {
+            'model': model_id,
+            'prompt': final_prompt,
+            'resolution': supported_ratio,
+            'aspect_ratio': supported_ratio,
+            'n': 4,
+        }
+        endpoint = f'{api_root}/images'
+    else:
+        payload = {
+            'model': model_id,
+            'prompt': final_prompt,
+            'size': size,
+            'dimensions': size
+        }
+        if ratio != 'custom':
+            payload['aspect_ratio'] = ratio
+        if width and height:
+            payload['width'] = width
+            payload['height'] = height
+        endpoint = f'{api_root}/images/generations'
     reference_urls = []
     for img in (input_images or []):
         url = img.get('url', '')
@@ -4128,7 +4152,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             reference_urls.append(url)
     if reference_urls:
         payload['image'] = reference_urls[0] if len(reference_urls) == 1 else reference_urls
-    r = requests.post(f'{(base_url or NANO_GPT_BASE).rstrip("/")}/images/generations', headers=headers, json=payload, timeout=120)
+    r = requests.post(endpoint, headers=headers, json=payload, timeout=180 if is_nano_midjourney else 120)
     if r.status_code not in (200, 201):
         raise Exception(f'图片 API 生成失败: {r.status_code} {r.text[:200]}')
     data = r.json()
@@ -4187,7 +4211,10 @@ def volc_image_generate(prompt, input_images, host_url, ratio, custom_size='', a
 def generate_image():
     body = request.json or {}
     prompt = body.get('prompt', '').strip()
-    selected_model = body.get('image_model', 'gpt-image-2')
+    selected_model = LEGACY_IMAGE_MODEL_ALIASES.get(
+        body.get('image_model', 'gpt-image-2'),
+        body.get('image_model', 'gpt-image-2')
+    )
     force_personal = bool(body.get('use_personal_api')) or selected_model == 'personal-api'
     if not force_personal and selected_model not in ALL_IMAGE_MODELS:
         return jsonify(error='无效的图片模型'), 400

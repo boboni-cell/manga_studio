@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REAL_DATA = os.path.join(REPO, 'data')
@@ -532,6 +533,53 @@ class CanvasV2ApiTest(unittest.TestCase):
         scenes = self.client.get('/api/assets/scenes').get_json()
         item = next(s for s in scenes if s.get('id') == item_id)
         self.assertIsNone(item.get('deleted_at'))
+
+
+class NanoGptMidjourneyTest(unittest.TestCase):
+    def test_legacy_midjourney_model_id_maps_to_current_nano_id(self):
+        self.assertEqual(
+            app_module.LEGACY_IMAGE_MODEL_ALIASES['midjourney'],
+            'midjourney/text-to-image',
+        )
+        self.assertIn('midjourney/text-to-image', app_module.ALL_IMAGE_MODELS)
+        self.assertNotIn('midjourney', app_module.ALL_IMAGE_MODELS)
+
+    @mock.patch.object(app_module, 'download_and_save_image', return_value=('/stored/mj.png', 'mj.png'))
+    @mock.patch.object(app_module.requests, 'post')
+    def test_midjourney_uses_normalized_image_api(self, post_mock, download_mock):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {'data': [{'url': 'https://example.com/mj.png'}]}
+        post_mock.return_value = response
+
+        result = app_module.nano_image_generate(
+            '电影感海边日落',
+            app_module.NANO_GPT_MIDJOURNEY_MODEL_ID,
+            '16:9',
+            api_key='test-key',
+            input_images=[],
+        )
+
+        self.assertEqual(result, ('/stored/mj.png', 'mj.png'))
+        request = post_mock.call_args
+        self.assertEqual(request.args[0], 'https://nano-gpt.com/api/v1/images')
+        self.assertEqual(request.kwargs['json']['model'], 'midjourney/text-to-image')
+        self.assertEqual(request.kwargs['json']['resolution'], '16:9')
+        self.assertEqual(request.kwargs['json']['aspect_ratio'], '16:9')
+        self.assertEqual(request.kwargs['json']['n'], 4)
+        self.assertNotIn('size', request.kwargs['json'])
+        download_mock.assert_called_once_with('https://example.com/mj.png')
+
+    @mock.patch.object(app_module.requests, 'post')
+    def test_midjourney_rejects_reference_images_before_paid_request(self, post_mock):
+        with self.assertRaisesRegex(Exception, '仅支持文生图'):
+            app_module.nano_image_generate(
+                '角色设定',
+                app_module.NANO_GPT_MIDJOURNEY_MODEL_ID,
+                '1:1',
+                api_key='test-key',
+                input_images=[{'url': 'https://example.com/reference.png'}],
+            )
+        post_mock.assert_not_called()
 
 
 if __name__ == '__main__':
