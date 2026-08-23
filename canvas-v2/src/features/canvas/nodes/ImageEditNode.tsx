@@ -42,7 +42,7 @@ import {
   buildReferenceContextPrompt,
   collapseTagGroupReferenceOptions,
   collectInputReferences,
-  normalizeReferenceTokensForSubmission,
+  resolvePromptImageReferences,
 } from '@/features/canvas/application/graphReferenceResolver';
 import { resolveErrorContent, showErrorDialog } from '@/features/canvas/application/errorDialog';
 import {
@@ -595,10 +595,10 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
     const latestSettings = useSettingsStore.getState();
     const latestReferences = collectInputReferences(id, latestCanvasState.nodes, latestCanvasState.edges);
     const referenceContextPrompt = buildReferenceContextPrompt(latestReferences);
-    const latestIncomingImages = latestReferences
-      .filter((reference) => reference.kind === 'image' && reference.imageUrl)
+    const promptImageSelection = resolvePromptImageReferences(currentPromptDraft, latestReferences);
+    const latestIncomingImages = promptImageSelection.references
       .map((reference) => reference.imageUrl as string);
-    let basePrompt = normalizeReferenceTokensForSubmission(currentPromptDraft, latestReferences);
+    let basePrompt = promptImageSelection.prompt;
 
     const selectedPresetId = latestData.selectedPromptPresetId ?? null;
     const selectedFunctionChip = selectedPresetId ? null : latestData.selectedFunctionChip ?? null;

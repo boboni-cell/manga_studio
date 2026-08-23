@@ -13,6 +13,7 @@ export default defineConfig({
       'src/lib/**/*.test.ts',
       'src/features/canvas/application/*Catalog.test.ts',
       'src/features/canvas/application/canvasClipboard.test.ts',
+      'src/features/canvas/application/graphReferenceResolver.test.ts',
     ],
     environment: 'node',
   },

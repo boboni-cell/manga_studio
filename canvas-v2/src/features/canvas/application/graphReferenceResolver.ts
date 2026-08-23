@@ -466,6 +466,76 @@ export function normalizeReferenceTokensForSubmission(
     .trim();
 }
 
+export interface PromptImageReferenceSelection {
+  prompt: string;
+  references: GraphReferenceItem[];
+  explicit: boolean;
+}
+
+/**
+ * When the prompt names image references, send only those images and remap
+ * their labels to the compact request order. Without an explicit image token,
+ * preserve the legacy behavior of sending every connected image.
+ */
+export function resolvePromptImageReferences(
+  prompt: string,
+  references: GraphReferenceItem[],
+): PromptImageReferenceSelection {
+  const expandedPrompt = expandTagGroupTokensInPrompt(prompt, references);
+  const imageReferences = references.filter(
+    (reference) => reference.kind === 'image' && Boolean(reference.imageUrl),
+  );
+  const imageReferencesByToken = new Map(
+    imageReferences.map((reference) => [reference.token, reference] as const),
+  );
+  const tokens = Array.from(imageReferencesByToken.keys())
+    .sort((left, right) => right.length - left.length);
+  if (tokens.length === 0) {
+    return {
+      prompt: normalizeReferenceTokensForSubmission(expandedPrompt, references),
+      references: [],
+      explicit: false,
+    };
+  }
+
+  const matcher = new RegExp(
+    `(${tokens.map(escapeRegExp).join('|')})(?![\\p{L}\\p{N}_])`,
+    'gu',
+  );
+  const selectedTokens: string[] = [];
+  const selectedTokenSet = new Set<string>();
+  for (const match of expandedPrompt.matchAll(matcher)) {
+    const token = match[0];
+    if (!selectedTokenSet.has(token)) {
+      selectedTokenSet.add(token);
+      selectedTokens.push(token);
+    }
+  }
+
+  if (selectedTokens.length === 0) {
+    return {
+      prompt: normalizeReferenceTokensForSubmission(expandedPrompt, references),
+      references: imageReferences,
+      explicit: false,
+    };
+  }
+
+  const requestIndexByToken = new Map(
+    selectedTokens.map((token, index) => [token, index + 1] as const),
+  );
+  const remappedPrompt = expandedPrompt.replace(
+    matcher,
+    (token) => `参考图${requestIndexByToken.get(token)}`,
+  );
+  return {
+    prompt: normalizeReferenceTokensForSubmission(remappedPrompt, references),
+    references: selectedTokens
+      .map((token) => imageReferencesByToken.get(token))
+      .filter((reference): reference is GraphReferenceItem => Boolean(reference)),
+    explicit: true,
+  };
+}
+
 export function collectInputReferenceGroups(
   nodeId: string,
   nodes: CanvasNode[],
