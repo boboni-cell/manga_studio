@@ -158,29 +158,34 @@ export const AssetPanel = memo(({
     return null;
   }
 
-  const panelWidth = 360;
+  const mobileViewport = window.innerWidth <= 880;
+  const panelWidth = Math.min(720, window.innerWidth - 16);
+  const panelMaxHeight = Math.max(
+    240,
+    Math.min(mobileViewport ? window.innerHeight - 112 : 680, window.innerHeight - 16)
+  );
   const panelLeft = Math.min(
-    Math.max(8, buttonRect.right + 8),
+    Math.max(8, mobileViewport ? 8 : buttonRect.right + 12),
     Math.max(8, window.innerWidth - panelWidth - 8)
   );
   const panelTop = Math.min(
-    Math.max(8, buttonRect.top - 120),
-    Math.max(8, window.innerHeight - 560)
+    Math.max(8, mobileViewport ? 64 : buttonRect.top - 120),
+    Math.max(8, window.innerHeight - panelMaxHeight - (mobileViewport ? 72 : 8))
   );
 
   return (
     <div
-      className="fixed z-[220] flex max-h-[540px] flex-col rounded-xl border border-white/12 bg-[#202020] shadow-2xl"
-      style={{ left: panelLeft, top: panelTop, width: panelWidth }}
+      className="canvas-asset-panel fixed z-[220] flex flex-col overflow-hidden rounded-2xl border border-[var(--canvas-node-border)] bg-[var(--canvas-node-menu-bg)] shadow-2xl backdrop-blur-xl"
+      style={{ left: panelLeft, top: panelTop, width: panelWidth, maxHeight: panelMaxHeight }}
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
-        <div>
-          <div className="text-sm font-semibold text-white">{title}</div>
-          <div className="mt-0.5 text-[11px] text-white/45">{subtitle}</div>
+      <div className="flex items-start justify-between gap-4 border-b border-[var(--canvas-node-divider)] px-5 py-4">
+        <div className="min-w-0">
+          <div className="text-base font-semibold text-text-dark">{title}</div>
+          <div className="mt-1 text-xs leading-5 text-text-muted">{subtitle}</div>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-2">
           {mode === 'browse' && onAdd && (
             <button
               type="button"
@@ -192,17 +197,17 @@ export const AssetPanel = memo(({
                 onAdd(activeCategory);
                 if (activeCategory === 'project') setActiveCategory('upload');
               }}
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-accent/35 bg-accent/15 px-2 text-[11px] text-accent-light hover:bg-accent/25"
+              className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-accent/70 bg-accent px-3 text-xs font-medium text-white shadow-sm transition-colors hover:bg-accent/85"
               title={activeCategory === 'history' ? '前往完整资产库' : `添加${activeCategoryLabel}`}
             >
               <Plus className="h-3.5 w-3.5" />
-              添加
+              添加{activeCategory === 'history' ? '' : activeCategoryLabel}
             </button>
           )}
           <button
             type="button"
             onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-white/50 hover:bg-white/10 hover:text-white"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-[var(--canvas-node-menu-hover)] hover:text-text-dark"
             title="关闭资产面板"
           >
             <X className="h-4 w-4" />
@@ -210,16 +215,16 @@ export const AssetPanel = memo(({
         </div>
       </div>
 
-      <div className="ui-scrollbar flex gap-1 overflow-x-auto border-b border-white/8 px-3 py-2">
+      <div className="ui-scrollbar flex flex-wrap gap-1.5 border-b border-[var(--canvas-node-divider)] bg-black/10 px-4 py-3">
         {MANGA_ASSET_CATEGORIES.map((category) => (
           <button
             key={category.id}
             type="button"
             onClick={() => setActiveCategory(category.id)}
-            className={`inline-flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-xs transition-colors ${
+            className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg border px-3 text-xs transition-colors ${
               activeCategory === category.id
-                ? 'bg-accent/85 text-white'
-                : 'bg-white/[0.04] text-white/60 hover:bg-white/10 hover:text-white/85'
+                ? 'border-accent/70 bg-accent/20 text-accent'
+                : 'border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-button-bg)] text-text-muted hover:border-accent/35 hover:bg-[var(--canvas-node-menu-hover)] hover:text-text-dark'
             }`}
           >
             {category.label}
@@ -278,14 +283,14 @@ export const AssetPanel = memo(({
         </div>
       )}
 
-      <div className="border-b border-white/8 px-3 py-2">
-        <label className="flex h-8 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-2 text-white/70 focus-within:border-accent/50">
+      <div className="border-b border-[var(--canvas-node-divider)] px-4 py-3">
+        <label className="flex h-10 items-center gap-2 rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-field-bg)] px-3 text-text-muted focus-within:border-accent/60">
           <Search className="h-3.5 w-3.5 shrink-0 text-white/35" />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={`搜索${activeCategoryLabel}名称`}
-            className="min-w-0 flex-1 bg-transparent text-xs text-white/85 outline-none placeholder:text-white/30"
+            className="min-w-0 flex-1 bg-transparent text-sm text-text-dark outline-none placeholder:text-text-muted/60"
           />
           {query && (
             <button
@@ -300,7 +305,7 @@ export const AssetPanel = memo(({
         </label>
       </div>
 
-      <div className="ui-scrollbar flex-1 overflow-y-auto p-3">
+      <div className="ui-scrollbar flex-1 overflow-y-auto p-4">
         {assets.length === 0 ? (
           <div className="flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-white/12 bg-white/[0.03] px-6 text-center">
             <ImageIcon className="mb-3 h-8 w-8 text-white/25" />
@@ -336,7 +341,7 @@ export const AssetPanel = memo(({
                 {renameError}
               </div>
             )}
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                   {filteredAssets.map((asset) => (
                     <div
                       key={asset.id}

@@ -1032,6 +1032,7 @@ export function Canvas() {
   const [previewConnectionVisual, setPreviewConnectionVisual] =
     useState<PreviewConnectionVisual | null>(null);
   const [marqueeRect, setMarqueeRect] = useState<CanvasMarqueeRect | null>(null);
+  const [mobileMultiSelectMode, setMobileMultiSelectMode] = useState(false);
   const [selectionBoundsRect, setSelectionBoundsRect] = useState<CanvasMarqueeRect | null>(null);
   const [batchToolbarPosition, setBatchToolbarPosition] =
     useState<{ left: number; top: number } | null>(null);
@@ -1902,6 +1903,23 @@ export function Canvas() {
     setSelectedNode(nodeId);
   }, [applyNodesChange, setSelectedNode]);
 
+  const toggleNodeSelection = useCallback((nodeId: string) => {
+    const selectedIds = new Set(
+      nodesRef.current.filter((node) => Boolean(node.selected)).map((node) => node.id)
+    );
+    if (selectedIds.has(nodeId)) selectedIds.delete(nodeId);
+    else selectedIds.add(nodeId);
+    applyNodesChange(
+      nodesRef.current.map((node) => ({
+        id: node.id,
+        type: 'select',
+        selected: selectedIds.has(node.id),
+      }))
+    );
+    const nextSelectedIds = Array.from(selectedIds);
+    setSelectedNode(nextSelectedIds.length === 1 ? nextSelectedIds[0] : null);
+  }, [applyNodesChange, setSelectedNode]);
+
   const openContextMenuAtClientPosition = useCallback((
     nodeId: string | null,
     clientX: number,
@@ -1993,9 +2011,10 @@ export function Canvas() {
     };
 
     const handlePointerDown = (event: PointerEvent) => {
+      const isMobileMarquee = mobileMultiSelectMode && event.pointerType === 'touch' && event.button === 0;
       if (
         !isCanvasMouseButton(event.button) ||
-        getCanvasMouseAction(canvasMouseBindings, event.button, 'drag') !== 'selectionBox' ||
+        (!isMobileMarquee && getCanvasMouseAction(canvasMouseBindings, event.button, 'drag') !== 'selectionBox') ||
         shouldIgnoreCanvasMarqueeTarget(event.target)
       ) {
         return;
@@ -2006,7 +2025,7 @@ export function Canvas() {
         return;
       }
 
-      if (event.button !== 0) {
+      if (event.button !== 0 || isMobileMarquee) {
         event.preventDefault();
         event.stopPropagation();
         try {
@@ -2137,7 +2156,7 @@ export function Canvas() {
       window.removeEventListener('mouseup', handleMouseUp, true);
       window.removeEventListener('pointercancel', handlePointerCancel, true);
     };
-  }, [canvasMouseBindings, openNodeContextMenuAtClientPosition, selectNodesInMarquee]);
+  }, [canvasMouseBindings, mobileMultiSelectMode, openNodeContextMenuAtClientPosition, selectNodesInMarquee]);
 
   const createUploadImageNodeAtFlowPosition = useCallback(
     async (file: File, flowPosition: { x: number; y: number }) => {
@@ -3753,15 +3772,23 @@ export function Canvas() {
   }, [openNodeContextMenuAtClientPosition, selectSingleNode]);
 
   const handleNodeClick = useCallback((event: ReactMouseEvent, node: CanvasNode) => {
-    handleConfiguredNodeClickAction(
-      event,
-      node.id,
-      getCanvasMouseAction(canvasMouseBindings, 0, 'click')
-    );
+    const isMobileViewport = window.matchMedia('(max-width: 880px)').matches;
+    if (isMobileViewport) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (mobileMultiSelectMode) toggleNodeSelection(node.id);
+      else selectSingleNode(node.id);
+    } else {
+      handleConfiguredNodeClickAction(
+        event,
+        node.id,
+        getCanvasMouseAction(canvasMouseBindings, 0, 'click')
+      );
+    }
     if (window.matchMedia('(max-width: 760px)').matches && reactFlowInstance.getViewport().zoom < 0.35) {
       void reactFlowInstance.fitView({ nodes: [node], padding: 0.18, duration: 260, maxZoom: 0.72 });
     }
-  }, [canvasMouseBindings, handleConfiguredNodeClickAction, reactFlowInstance]);
+  }, [canvasMouseBindings, handleConfiguredNodeClickAction, mobileMultiSelectMode, reactFlowInstance, selectSingleNode, toggleNodeSelection]);
 
   const handleNodeContextMenu = useCallback((event: ReactMouseEvent, node: CanvasNode) => {
     event.preventDefault();
@@ -4247,11 +4274,13 @@ export function Canvas() {
         defaultViewport={DEFAULT_VIEWPORT}
         minZoom={0.1}
         maxZoom={5}
-        panOnDrag={panOnDragButtons.length > 0 ? panOnDragButtons : false}
+        panOnDrag={!mobileMultiSelectMode && panOnDragButtons.length > 0 ? panOnDragButtons : false}
         selectionOnDrag={false}
         selectionMode={SelectionMode.Partial}
         multiSelectionKeyCode={['Control', 'Meta']}
         selectionKeyCode={['Control', 'Meta']}
+        elementsSelectable={!mobileMultiSelectMode}
+        nodesDraggable={!mobileMultiSelectMode}
         deleteKeyCode={null}
         onlyRenderVisibleElements={!activeDirectorStudioNodeId}
         zoomOnDoubleClick={false}
@@ -4303,7 +4332,7 @@ export function Canvas() {
       {batchToolbarPosition && (selectedNodeIds.length > 1 || isSingleSelectedGroup) && (
         <div
           data-canvas-no-marquee="true"
-          className="absolute z-[12020] flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--canvas-node-border)] bg-[var(--canvas-node-menu-bg)] px-2 py-1.5 text-xs text-text-dark shadow-2xl"
+          className="canvas-batch-toolbar absolute z-[12020] flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--canvas-node-border)] bg-[var(--canvas-node-menu-bg)] px-2 py-1.5 text-xs text-text-dark shadow-2xl"
           style={{
             left: batchToolbarPosition.left,
             top: batchToolbarPosition.top,
@@ -4386,7 +4415,14 @@ export function Canvas() {
         </div>
       )}
 
-      <CanvasSideToolbar onOpenAssets={handleOpenAssetPanel} />
+      <CanvasSideToolbar
+        onOpenAssets={handleOpenAssetPanel}
+        mobileMultiSelectMode={mobileMultiSelectMode}
+        onToggleMobileMultiSelect={() => {
+          selectSingleNode(null);
+          setMobileMultiSelectMode((active) => !active);
+        }}
+      />
       <input
         ref={assetUploadInputRef}
         type="file"

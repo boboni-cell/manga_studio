@@ -105,7 +105,7 @@ export const PromptPresetPanel = memo(({
 
   return (
     <div
-      className="fixed z-[100] w-[390px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[rgba(255,255,255,0.18)] bg-surface-dark/95 shadow-2xl backdrop-blur-sm"
+      className="canvas-floating-tool-panel fixed z-[100] w-[390px] max-w-[calc(100vw-16px)] overflow-hidden rounded-xl border border-[rgba(255,255,255,0.18)] bg-surface-dark/95 shadow-2xl backdrop-blur-sm"
       style={{ left: `${panelLeft}px`, top: `${panelTop}px` }}
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}

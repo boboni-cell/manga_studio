@@ -1,7 +1,7 @@
 import { memo, useCallback, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
-import { ImagePlus, Globe2, LayoutGrid, Images, ListPlus, Maximize2, ScrollText, Video } from 'lucide-react';
+import { Boxes, ImagePlus, Globe2, LayoutGrid, Images, ListPlus, Maximize2, ScrollText, Video } from 'lucide-react';
 
 import { CANVAS_NODE_TYPES, type CanvasNodeType } from '@/features/canvas/domain/canvasNodes';
 import {
@@ -66,13 +66,19 @@ const TOOLBAR_ITEMS: SideToolbarItem[] = [
 
 interface CanvasSideToolbarProps {
   onOpenAssets?: (buttonRect: DOMRect) => void;
+  mobileMultiSelectMode?: boolean;
+  onToggleMobileMultiSelect?: () => void;
 }
 
 /**
  * Fixed left-side canvas toolbar for assets, batch import, and primary node
  * creation at the current viewport center.
  */
-export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps) => {
+export const CanvasSideToolbar = memo(({
+  onOpenAssets,
+  mobileMultiSelectMode = false,
+  onToggleMobileMultiSelect,
+}: CanvasSideToolbarProps) => {
   const { t } = useTranslation();
   const reactFlow = useReactFlow();
   const addNodesBatch = useCanvasStore((s) => s.addNodesBatch);
@@ -168,6 +174,21 @@ export const CanvasSideToolbar = memo(({ onOpenAssets }: CanvasSideToolbarProps)
         >
           <Images className="h-4 w-4" />
           <span className="canvas-side-toolbar__label leading-tight">{t('canvasToolbar.assets')}</span>
+        </button>
+        <button
+          type="button"
+          title={mobileMultiSelectMode ? '退出多选' : '框选多个节点'}
+          aria-label={mobileMultiSelectMode ? '退出多选' : '框选多个节点'}
+          aria-pressed={mobileMultiSelectMode}
+          onClick={onToggleMobileMultiSelect}
+          className={`canvas-mobile-multi-select canvas-side-toolbar__button w-16 shrink-0 flex-col items-center gap-0.5 rounded-lg border px-2 py-2 text-[10px] transition-colors ${
+            mobileMultiSelectMode
+              ? 'border-accent/70 bg-accent/25 text-accent'
+              : 'border-[var(--canvas-rail-button-border)] bg-[var(--canvas-rail-button-bg)] text-[var(--canvas-rail-button-text)]'
+          }`}
+        >
+          <Boxes className="h-4 w-4" />
+          <span className="canvas-side-toolbar__label leading-tight">多选</span>
         </button>
         {TOOLBAR_ITEMS.map((item) => {
           const Icon = item.icon;

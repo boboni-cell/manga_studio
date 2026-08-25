@@ -42,6 +42,7 @@ import { LightingControlPanel } from './LightingControlPanel';
 import { MultiFunctionPanel } from './MultiFunctionPanel';
 import { PromptPresetPanel } from './PromptPresetPanel';
 import type { ModelConfigValue } from './ModelConfigPicker';
+import { EditPanel } from './EditPanel';
 import { MangaNodeEditPanel } from './MangaNodeEditPanel';
 import { GridSplitPanel } from './GridSplitPanel';
 import type { PanoramaGenerateConfig } from './PanoramaPanel';
@@ -911,11 +912,20 @@ export const SelectedNodeOverlay = memo(() => {
             />
           )}
           {panelState.type === 'edit' && selectedNode && (
-            <MangaNodeEditPanel
-              node={selectedNode}
-              isOpen={true}
-              onClose={() => panelState.closePanel()}
-            />
+            selectedNodeSupportsCollapsibleToolbar ? (
+              <EditPanel
+                node={selectedNode}
+                isOpen={true}
+                onClose={() => panelState.closePanel()}
+                buttonRect={liveButtonRect}
+              />
+            ) : (
+              <MangaNodeEditPanel
+                node={selectedNode}
+                isOpen={true}
+                onClose={() => panelState.closePanel()}
+              />
+            )
           )}
           {panelState.type === 'gridSplit' && (
             <GridSplitPanel

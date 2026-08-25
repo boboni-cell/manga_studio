@@ -1485,7 +1485,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
         )}
       </div>
 
-      <div className="mt-2 flex min-w-0 shrink-0 flex-nowrap items-center gap-1">
+      <div className="mt-2 grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-1.5">
         {/*
          * AI 图片节点现在走「自主服务商时代」：只显示用户在「我的配置」里
          * 添加的供应商 + 已登录的即梦 CLI。内置 KIE / FAL / GRSAI 不再直接
@@ -1493,7 +1493,7 @@ export const ImageEditNode = memo(({ id, data, selected, width, height }: ImageE
          */}
         <ModelConfigPicker
           panelKey="aiImageNode"
-          className="flex-1"
+          className="col-span-full min-w-0"
           value={nodeModelConfig}
           onChange={(modelConfig) => updateNodeData(id, { modelConfig })}
         />

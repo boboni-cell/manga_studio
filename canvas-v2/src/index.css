@@ -598,6 +598,10 @@ html[data-platform='macos'] #root {
   }
 }
 
+.canvas-mobile-multi-select {
+  display: none;
+}
+
 @media (max-width: 880px) {
   .canvas-center-safe {
     padding: 0.75rem 0.75rem 6.5rem;
@@ -621,6 +625,10 @@ html[data-platform='macos'] #root {
   .canvas-side-toolbar::-webkit-scrollbar,
   .canvas-node-action-toolbar::-webkit-scrollbar {
     display: none;
+  }
+
+  .canvas-mobile-multi-select {
+    display: flex;
   }
 
   .canvas-side-toolbar__button {
@@ -662,6 +670,9 @@ html[data-platform='macos'] #root {
     overflow-y: hidden;
     border-radius: 12px;
     scrollbar-width: none;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
   }
 
   .canvas-node-action-toolbar > * {
@@ -670,6 +681,42 @@ html[data-platform='macos'] #root {
   }
 
   .canvas-style-picker-menu { width: min(280px, calc(100vw - 24px)); }
+
+  .canvas-floating-tool-panel {
+    left: 8px !important;
+    right: 8px !important;
+    top: auto !important;
+    bottom: max(82px, calc(74px + env(safe-area-inset-bottom, 0px))) !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    max-height: calc(100dvh - 170px) !important;
+    overflow-x: auto !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .canvas-batch-toolbar {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: auto !important;
+    bottom: max(82px, calc(74px + env(safe-area-inset-bottom, 0px))) !important;
+    max-width: none;
+    transform: none !important;
+    overflow-x: auto;
+    border-radius: 12px;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .canvas-batch-toolbar > * {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
 }
 
 @media (max-height: 520px) {

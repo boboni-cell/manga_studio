@@ -369,7 +369,7 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
 
   return (
     <div
-      className="fixed z-[130] rounded-xl border border-[rgba(255,255,255,0.16)] bg-surface-dark/97 shadow-2xl backdrop-blur"
+      className="canvas-floating-tool-panel fixed z-[130] rounded-xl border border-[rgba(255,255,255,0.16)] bg-surface-dark/97 shadow-2xl backdrop-blur"
       style={panelStyle}
       onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}

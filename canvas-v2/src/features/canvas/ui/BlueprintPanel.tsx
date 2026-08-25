@@ -403,7 +403,7 @@ export const BlueprintPanel = memo(({ isOpen, onClose, onGenerate, onCopyPrompt,
 
   return (
     <div
-      className="fixed z-[200] rounded-xl border border-white/12 bg-[#202020] shadow-2xl"
+      className="canvas-floating-tool-panel fixed z-[200] rounded-xl border border-white/12 bg-[#202020] shadow-2xl"
       style={{ left: panelLeft, top: panelTop, width: panelWidth }}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}

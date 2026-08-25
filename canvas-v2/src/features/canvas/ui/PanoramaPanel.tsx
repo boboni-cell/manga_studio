@@ -42,7 +42,7 @@ export const PanoramaPanel = memo(({ isOpen, onClose, onGenerate, onCopyPrompt, 
 
   return (
     <div
-      className="fixed z-[200] rounded-xl border border-white/12 bg-[#202020] shadow-2xl overflow-hidden"
+      className="canvas-floating-tool-panel fixed z-[200] rounded-xl border border-white/12 bg-[#202020] shadow-2xl overflow-hidden"
       style={{ left: panelLeft, top: panelTop, width: panelWidth }}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
