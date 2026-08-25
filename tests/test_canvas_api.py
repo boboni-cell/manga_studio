@@ -400,6 +400,113 @@ class AssetItemTest(unittest.TestCase):
         self.assertEqual(characters[item_id]['name'], '主角')
         self.assertEqual(characters[item_id]['images'], [{'url': 'https://example.com/hero.png'}])
 
+    def test_append_image_to_existing_character(self):
+        self.login('asset_character_append')
+        created = self.client.post('/api/assets/character/item', json={
+            'name': '主角',
+            'images': ['https://example.com/hero.png'],
+        })
+        item_id = created.get_json()['id']
+
+        response = self.client.post('/api/assets/characters/item/' + item_id + '/media', json={
+            'url': 'https://example.com/hero-side.png',
+            'kind': 'image',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        character = self.client.get('/api/characters').get_json()[item_id]
+        self.assertEqual(character['images'], [
+            {'url': 'https://example.com/hero.png'},
+            {'url': 'https://example.com/hero-side.png'},
+        ])
+
+    def test_create_character_with_video_media(self):
+        self.login('asset_character_video')
+        response = self.client.post('/api/assets/characters/item', json={
+            'name': '动作人物',
+            'images': [],
+            'media': [{'url': 'https://example.com/action.mp4', 'kind': 'video'}],
+        })
+
+        self.assertEqual(response.status_code, 201)
+        item_id = response.get_json()['id']
+        character = self.client.get('/api/characters').get_json()[item_id]
+        self.assertEqual(character['media'], [
+            {'url': 'https://example.com/action.mp4', 'kind': 'video'},
+        ])
+
+    def test_append_video_to_existing_reference_group(self):
+        self.login('asset_reference_append')
+        created = self.client.post('/api/assets/uploads/item', json={
+            'name': '动作参考',
+            'url': 'https://example.com/action.png',
+            'kind': 'image',
+        })
+        parent_id = created.get_json()['id']
+
+        response = self.client.post('/api/assets/uploads/item/' + parent_id + '/media', json={
+            'url': 'https://example.com/action.mp4',
+            'kind': 'video',
+        })
+
+        self.assertEqual(response.status_code, 201)
+        items = self.client.get('/api/assets/uploads').get_json()
+        video = next(item for item in items if item.get('url') == 'https://example.com/action.mp4')
+        self.assertEqual(video['parent_id'], parent_id)
+        self.assertEqual(video['kind'], 'video')
+
+
+class StyleGenerationTest(unittest.TestCase):
+    def setUp(self):
+        self.client = app_module.app.test_client()
+
+    def login_with_image_access(self, user_id):
+        users = app_module.load_json(app_module.users_path(), {})
+        users[user_id] = {'model_permissions': ['image'], 'points': 100}
+        app_module.save_json(app_module.users_path(), users)
+        with self.client.session_transaction() as sess:
+            sess['user_id'] = user_id
+
+    def test_style_thumbnail_is_preview_only_not_generation_reference(self):
+        self.login_with_image_access('style_thumbnail_preview_only')
+        created = self.client.post('/api/assets/styles/item', json={
+            'name': '电影写实',
+            'url': 'https://example.com/style-grid.png',
+            'prompt': '电影级写实光影',
+        })
+        style_id = created.get_json()['id']
+
+        def run_immediately(target, args, *_rest):
+            target(*args)
+
+        with mock.patch.object(app_module, 'resolve_api', return_value={
+            'provider': 'agnes',
+            'base_url': 'https://example.com',
+            'api_key': 'test-key',
+            'model': app_module.AGNES_IMAGE_MODEL_ID,
+        }), mock.patch.object(app_module, 'reserve_model_points', return_value=1), \
+             mock.patch.object(app_module, 'start_metered_job', side_effect=run_immediately), \
+             mock.patch.object(app_module, 'nano_image_generate', return_value=('/static/generated.png', 'generated.png')) as generate_mock:
+            response = self.client.post('/api/generate-image', json={
+                'prompt': '单人半身肖像',
+                'image_model': app_module.AGNES_IMAGE_MODEL_ID,
+                'ratio': '3:4',
+                'style_id': style_id,
+                'input_images': [{
+                    'url': 'https://example.com/person.png',
+                    'role_label': '人物参考',
+                }],
+            })
+
+        self.assertEqual(response.status_code, 200)
+        generated_prompt = generate_mock.call_args.args[0]
+        generation_references = generate_mock.call_args.args[6]
+        self.assertIn('电影级写实光影', generated_prompt)
+        self.assertEqual(generation_references, [{
+            'url': 'https://example.com/person.png',
+            'role_label': '人物参考',
+        }])
+
 
 class CanvasV2ApiTest(unittest.TestCase):
     def setUp(self):

@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { NodeToolbar as ReactFlowNodeToolbar } from '@xyflow/react';
-import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, FolderPlus, Grid3x3, Maximize2, PenLine, RotateCcw, Scissors, Settings2, Sparkles, Sun, Trash2, X } from 'lucide-react';
+import { AlertCircle, Camera, Check, ChevronDown, Copy, Download, FolderOpen, FolderPlus, Grid3x3, Loader2, Maximize2, PenLine, RotateCcw, Scissors, Settings2, Sparkles, Sun, Trash2, X } from 'lucide-react';
 import { save } from '@tauri-apps/plugin-dialog';
 import { isTauri } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
@@ -48,7 +48,13 @@ import {
   copyTextInBrowser,
   downloadMediaInBrowser,
 } from '@/lib/browserMedia';
-import { addMangaAsset, type MangaWritableAssetCategory } from '@/lib/mangaAssetLibrary';
+import {
+  addMangaAsset,
+  addMediaToMangaAsset,
+  loadMangaAssetDestinations,
+  type MangaAssetDestination,
+  type MangaMediaDestinationCategory,
+} from '@/lib/mangaAssetLibrary';
 import {
   NODE_TOOLBAR_ALIGN,
   NODE_TOOLBAR_CLASS,
@@ -66,11 +72,15 @@ const TOOLBAR_NEUTRAL_BUTTON_CLASS =
   'border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] text-text-dark shadow-sm hover:border-[var(--canvas-node-border-hover)] hover:bg-[var(--canvas-node-menu-hover)]';
 const PROMPT_PRESET_MENU_WIDTH = 260;
 const PROMPT_PRESET_MENU_GAP = 8;
-const ASSET_SAVE_OPTIONS: ReadonlyArray<{ id: MangaWritableAssetCategory; label: string }> = [
-  { id: 'character', label: '人物' },
-  { id: 'outfit', label: '服装' },
-  { id: 'scene', label: '场景' },
-  { id: 'upload', label: '多图参考' },
+const ASSET_SAVE_OPTIONS: ReadonlyArray<{
+  id: MangaMediaDestinationCategory;
+  label: string;
+  mediaKinds: ReadonlyArray<'image' | 'video'>;
+}> = [
+  { id: 'character', label: '人物', mediaKinds: ['image', 'video'] },
+  { id: 'outfit', label: '服装', mediaKinds: ['image', 'video'] },
+  { id: 'scene', label: '场景', mediaKinds: ['image', 'video'] },
+  { id: 'upload', label: '多图 / 视频参考', mediaKinds: ['image', 'video'] },
 ];
 
 function normalizeDownloadPresetPaths(paths: string[]): string[] {
@@ -164,7 +174,13 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   const promptPresets = useSettingsStore((state) => state.promptPresets);
   const [downloadMenu, setDownloadMenu] = useState<{ x: number; y: number } | null>(null);
   const [promptPresetMenu, setPromptPresetMenu] = useState<{ x: number; y: number } | null>(null);
-  const [assetSaveMenu, setAssetSaveMenu] = useState<{ x: number; y: number } | null>(null);
+  const [assetSaveMenu, setAssetSaveMenu] = useState<{ mediaKind: 'image' | 'video' } | null>(null);
+  const [assetSaveCategory, setAssetSaveCategory] = useState<MangaMediaDestinationCategory | null>(null);
+  const [assetSaveTargetId, setAssetSaveTargetId] = useState<string | 'new' | null>(null);
+  const [assetSaveName, setAssetSaveName] = useState('');
+  const [assetSaveDestinations, setAssetSaveDestinations] = useState<MangaAssetDestination[]>([]);
+  const [isAssetSaveLoading, setIsAssetSaveLoading] = useState(false);
+  const [isAssetSaving, setIsAssetSaving] = useState(false);
   const [isDownloadMenuVisible, setIsDownloadMenuVisible] = useState(false);
   const [isCopySuccess, setIsCopySuccess] = useState(false);
   const [feedbackToast, setFeedbackToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
@@ -376,6 +392,25 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
   }, [assetSaveMenu]);
 
   useEffect(() => {
+    if (!assetSaveMenu) return;
+    let cancelled = false;
+    setIsAssetSaveLoading(true);
+    void loadMangaAssetDestinations()
+      .then((destinations) => {
+        if (!cancelled) setAssetSaveDestinations(destinations);
+      })
+      .catch(() => {
+        if (!cancelled) setAssetSaveDestinations([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsAssetSaveLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assetSaveMenu]);
+
+  useEffect(() => {
     if (!isPromptPresetMenuOpen) {
       return;
     }
@@ -496,21 +531,52 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
     }
   }, [rawImageSource, showFeedbackToast, t, useBrowserMediaActions]);
 
-  const handleSaveImageToAssetLibrary = useCallback(async (category: MangaWritableAssetCategory) => {
-    if (!rawImageSource) return;
+  const handleSaveToAssetLibrary = useCallback(async () => {
+    if (!assetSaveMenu || !assetSaveCategory || !assetSaveTargetId) return;
+    const source = assetSaveMenu.mediaKind === 'video' ? rawVideoSource : rawImageSource;
+    if (!source) return;
     const data = node.data as Record<string, unknown>;
-    const name = [data.displayName, data.generatedFileName, data.sourceFileName, suggestedImageStem]
+    const suggestedStem = assetSaveMenu.mediaKind === 'video' ? suggestedVideoStem : suggestedImageStem;
+    const name = [assetSaveName, data.displayName, data.generatedFileName, data.sourceFileName, suggestedStem]
       .find((value): value is string => typeof value === 'string' && Boolean(value.trim()))
-      ?? suggestedImageStem;
+      ?? suggestedStem;
     try {
-      await addMangaAsset(category, name.replace(/\.[^.]+$/, ''), rawImageSource);
+      setIsAssetSaving(true);
+      if (assetSaveTargetId === 'new') {
+        await addMangaAsset(
+          assetSaveCategory,
+          name.replace(/\.[^.]+$/, ''),
+          source,
+          assetSaveMenu.mediaKind,
+        );
+      } else {
+        const destination = assetSaveDestinations.find((item) => (
+          item.category === assetSaveCategory && item.id === assetSaveTargetId
+        ));
+        if (!destination) throw new Error('选择的资产不存在，请重新选择');
+        await addMediaToMangaAsset(destination, source, assetSaveMenu.mediaKind);
+      }
       setAssetSaveMenu(null);
-      const categoryLabel = ASSET_SAVE_OPTIONS.find((option) => option.id === category)?.label ?? '资产库';
+      const categoryLabel = ASSET_SAVE_OPTIONS.find((option) => option.id === assetSaveCategory)?.label ?? '资产库';
       showFeedbackToast(`已加入${categoryLabel}`);
     } catch (error) {
       showFeedbackToast(error instanceof Error ? error.message : '加入资产库失败', 'error');
+    } finally {
+      setIsAssetSaving(false);
     }
-  }, [node.data, rawImageSource, showFeedbackToast, suggestedImageStem]);
+  }, [
+    assetSaveCategory,
+    assetSaveDestinations,
+    assetSaveMenu,
+    assetSaveName,
+    assetSaveTargetId,
+    node.data,
+    rawImageSource,
+    rawVideoSource,
+    showFeedbackToast,
+    suggestedImageStem,
+    suggestedVideoStem,
+  ]);
 
   const handleCopyVideoSource = useCallback(async () => {
     if (!rawVideoSource) return;
@@ -826,24 +892,138 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
 
   const assetSaveMenuElement = assetSaveMenu && typeof document !== 'undefined'
     ? createPortal(
-        <div
-          ref={assetSaveMenuRef}
-          className="fixed z-[1100] w-40 rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] p-1.5 shadow-2xl"
-          style={{ left: Math.min(assetSaveMenu.x, window.innerWidth - 168), top: assetSaveMenu.y }}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <div className="px-2 py-1.5 text-[11px] text-text-muted">添加到资产库</div>
-          {ASSET_SAVE_OPTIONS.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-xs text-text-dark hover:bg-[var(--canvas-node-menu-hover)]"
-              onClick={() => { void handleSaveImageToAssetLibrary(option.id); }}
-            >
-              <FolderOpen className="h-3.5 w-3.5 text-accent" />
-              {option.label}
-            </button>
-          ))}
+        <div className="fixed inset-0 z-[1400] flex items-end justify-center bg-black/65 p-0 backdrop-blur-sm sm:items-center sm:p-4">
+          <div
+            ref={assetSaveMenuRef}
+            className="flex max-h-[min(680px,88dvh)] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-menu-bg)] shadow-2xl sm:rounded-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between border-b border-[var(--canvas-node-field-border)] px-4 py-3">
+              <div>
+                <div className="text-sm font-semibold text-text-dark">加入资产库</div>
+                <div className="mt-1 text-xs text-text-muted">
+                  先选择保存位置，再加入已有资产或新建一个
+                </div>
+              </div>
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-text-muted hover:bg-[var(--canvas-node-menu-hover)] hover:text-text-dark"
+                onClick={() => setAssetSaveMenu(null)}
+                aria-label="关闭"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="ui-scrollbar flex-1 overflow-y-auto p-4">
+              <div className="mb-2 text-xs font-medium text-text-muted">1. 保存到哪里</div>
+              <div className="grid grid-cols-2 gap-2">
+                {ASSET_SAVE_OPTIONS
+                  .filter((option) => option.mediaKinds.includes(assetSaveMenu.mediaKind))
+                  .map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`flex min-h-11 items-center gap-2 rounded-xl border px-3 text-left text-sm transition-colors ${
+                        assetSaveCategory === option.id
+                          ? 'border-accent bg-accent/15 text-text-dark'
+                          : 'border-[var(--canvas-node-field-border)] text-text-muted hover:bg-[var(--canvas-node-menu-hover)] hover:text-text-dark'
+                      }`}
+                      onClick={() => {
+                        setAssetSaveCategory(option.id);
+                        setAssetSaveTargetId(null);
+                      }}
+                    >
+                      <FolderOpen className="h-4 w-4 shrink-0 text-accent" />
+                      {option.label}
+                    </button>
+                  ))}
+              </div>
+
+              {assetSaveCategory && (
+                <div className="mt-5">
+                  <div className="mb-2 text-xs font-medium text-text-muted">2. 选择已有资产或新建</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {isAssetSaveLoading ? (
+                      <div className="col-span-2 flex min-h-20 items-center justify-center gap-2 text-xs text-text-muted">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        正在加载资产…
+                      </div>
+                    ) : (
+                      <>
+                        {assetSaveDestinations
+                          .filter((item) => item.category === assetSaveCategory)
+                          .map((destination) => (
+                            <button
+                              key={`${destination.category}:${destination.id}`}
+                              type="button"
+                              className={`min-h-11 truncate rounded-xl border px-3 text-left text-sm transition-colors ${
+                                assetSaveTargetId === destination.id
+                                  ? 'border-accent bg-accent/15 text-text-dark'
+                                  : 'border-[var(--canvas-node-field-border)] text-text-muted hover:bg-[var(--canvas-node-menu-hover)] hover:text-text-dark'
+                              }`}
+                              onClick={() => setAssetSaveTargetId(destination.id)}
+                              title={destination.name}
+                            >
+                              {destination.name}
+                            </button>
+                          ))}
+                        <button
+                          type="button"
+                          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl border border-dashed px-3 text-sm transition-colors ${
+                            assetSaveTargetId === 'new'
+                              ? 'border-accent bg-accent/15 text-text-dark'
+                              : 'border-[var(--canvas-node-border)] text-accent hover:bg-accent/10'
+                          }`}
+                          onClick={() => setAssetSaveTargetId('new')}
+                        >
+                          <FolderPlus className="h-4 w-4" />
+                          新建
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {assetSaveTargetId === 'new' && (
+                    <label className="mt-3 block text-xs text-text-muted">
+                      资产名称
+                      <input
+                        value={assetSaveName}
+                        onChange={(event) => setAssetSaveName(event.target.value)}
+                        className="mt-1.5 h-10 w-full rounded-xl border border-[var(--canvas-node-field-border)] bg-[var(--canvas-node-field-bg)] px-3 text-sm text-text-dark outline-none focus:border-accent"
+                        placeholder="输入名称"
+                        autoFocus
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 border-t border-[var(--canvas-node-field-border)] p-3 pb-[max(0.75rem,env(safe-area-inset-bottom,0px))]">
+              <button
+                type="button"
+                className="h-10 flex-1 rounded-xl border border-[var(--canvas-node-field-border)] text-sm text-text-muted hover:bg-[var(--canvas-node-menu-hover)]"
+                onClick={() => setAssetSaveMenu(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="flex h-10 flex-[1.4] items-center justify-center gap-2 rounded-xl bg-accent text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={
+                  isAssetSaving
+                  || !assetSaveCategory
+                  || !assetSaveTargetId
+                  || (assetSaveTargetId === 'new' && !assetSaveName.trim())
+                }
+                onClick={() => { void handleSaveToAssetLibrary(); }}
+              >
+                {isAssetSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                {assetSaveTargetId === 'new' ? '新建并加入' : '加入所选资产'}
+              </button>
+            </div>
+          </div>
         </div>,
         document.body
       )
@@ -1053,8 +1233,10 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
             className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
             onClick={(event) => {
               event.stopPropagation();
-              const rect = event.currentTarget.getBoundingClientRect();
-              setAssetSaveMenu({ x: rect.left, y: rect.bottom + 8 });
+              setAssetSaveCategory(null);
+              setAssetSaveTargetId(null);
+              setAssetSaveName(suggestedImageStem);
+              setAssetSaveMenu({ mediaKind: 'image' });
             }}
           >
             <FolderPlus className="h-3.5 w-3.5" />
@@ -1116,6 +1298,20 @@ export const NodeActionToolbar = memo(({ node, offset = NODE_TOOLBAR_OFFSET }: N
         </>)}{/* end case A/C */}
 
         {caseKind === 'V' && canHandleVideo && videoSource && (<>
+        <UiChipButton
+          className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            setAssetSaveCategory(null);
+            setAssetSaveTargetId(null);
+            setAssetSaveName(suggestedVideoStem);
+            setAssetSaveMenu({ mediaKind: 'video' });
+          }}
+        >
+          <FolderPlus className="h-3.5 w-3.5" />
+          入库
+        </UiChipButton>
+
         <UiChipButton
           className={`h-8 ${TOOLBAR_BUTTON_RADIUS_CLASS} px-2.5 text-xs ${TOOLBAR_NEUTRAL_BUTTON_CLASS}`}
           onClick={(event) => {

@@ -47,22 +47,23 @@ body { background: var(--bg); color: var(--text); font: 14px system-ui, -apple-s
 .ws-choice-card h2 { margin: 0 0 10px; font-size: 19px; }
 .ws-choice-card p { margin: 0; color: var(--muted); line-height: 1.7; }
 
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-height: 520px) {
   #workspace-shell { display: flex; flex-direction: column; }
   #workspace-switcher {
     position: relative; top: auto; left: auto; z-index: 1000;
-    width: 100%; min-height: 92px; flex: none; overflow: visible; flex-wrap: wrap;
-    align-content: center; justify-content: flex-start; padding: 8px 10px; border-width: 0 0 1px; border-radius: 0;
+    width: 100%; min-height: 48px; flex: none; overflow-x: auto; overflow-y: hidden; flex-wrap: nowrap;
+    justify-content: flex-start; gap: 4px; padding: max(6px, env(safe-area-inset-top, 0px)) 8px 6px;
+    border-width: 0 0 1px; border-radius: 0; scrollbar-width: none;
     box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
   }
-  #workspace-switcher::after { content: ''; order: 5; flex-basis: 100%; height: 0; }
+  #workspace-switcher::-webkit-scrollbar { display: none; }
+  #workspace-switcher::after { display: none; }
   #workspace-stage { position: relative; inset: auto; flex: 1; min-height: 0; }
   .ws-back { order: 1; }
-  .ws-project-title { order: 2; max-width: 120px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ws-brand { order: 3; }
-  .ws-save-state { order: 4; margin-left: auto; }
-  .ws-tabs { order: 6; }
-  .ws-logout { order: 7; }
+  .ws-project-title, .ws-brand { display: none; }
+  .ws-tabs { order: 2; }
+  .ws-save-state { order: 3; }
+  .ws-logout { order: 4; }
   .ws-back, .ws-tabs, .ws-tab, .ws-logout, .ws-save-state, .ws-brand { flex: none; }
   .ws-tab, .ws-logout { min-height: 34px; padding: 6px 9px; }
 }

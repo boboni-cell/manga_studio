@@ -51,11 +51,19 @@ export const CanvasStylePicker = memo(({ value, onChange }: CanvasStylePickerPro
 
   useEffect(() => {
     let active = true;
+    const refresh = () => {
+      cachedStyles = null;
+      void loadStyles().then((items) => {
+        if (active) setStyles(items);
+      });
+    };
     void loadStyles().then((items) => {
       if (active) setStyles(items);
     });
+    window.addEventListener('manga:styles-updated', refresh);
     return () => {
       active = false;
+      window.removeEventListener('manga:styles-updated', refresh);
     };
   }, []);
 

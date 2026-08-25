@@ -11,7 +11,8 @@ export type MangaAssetCategory =
   | 'history';
 
 export type MangaAssetMediaKind = 'image' | 'video' | 'audio' | 'style';
-export type MangaWritableAssetCategory = 'character' | 'outfit' | 'scene' | 'upload' | 'audio';
+export type MangaWritableAssetCategory = 'character' | 'outfit' | 'scene' | 'upload' | 'audio' | 'style';
+export type MangaMediaDestinationCategory = 'character' | 'outfit' | 'scene' | 'upload';
 
 export interface MangaLibraryAsset {
   id: string;
@@ -23,6 +24,12 @@ export interface MangaLibraryAsset {
   sourceLabel: string;
   order: number;
   styleId?: string | null;
+}
+
+export interface MangaAssetDestination {
+  id: string;
+  category: MangaMediaDestinationCategory;
+  name: string;
 }
 
 export const MANGA_ASSET_CATEGORIES: ReadonlyArray<{
@@ -45,6 +52,8 @@ interface GenericAssetRecord {
   url?: unknown;
   thumbnail_url?: unknown;
   deleted_at?: unknown;
+  kind?: unknown;
+  parent_id?: unknown;
 }
 
 interface CharacterRecord {
@@ -87,17 +96,78 @@ export async function addMangaAsset(
   category: MangaWritableAssetCategory,
   name: string,
   url: string,
+  kind: 'image' | 'video' = 'image',
 ): Promise<{ id: string }> {
   const normalizedName = name.trim() || '未命名素材';
   const endpoint = category === 'character'
     ? '/api/assets/characters/item'
-    : `/api/assets/${category === 'outfit' ? 'outfits' : category === 'scene' ? 'scenes' : category === 'upload' ? 'uploads' : 'audios'}/item`;
+    : `/api/assets/${category === 'outfit' ? 'outfits' : category === 'scene' ? 'scenes' : category === 'upload' ? 'uploads' : category === 'style' ? 'styles' : 'audios'}/item`;
   return api<{ id: string }>(endpoint, {
     method: 'POST',
     body: JSON.stringify(category === 'character'
-      ? { name: normalizedName, images: [url] }
-      : { name: normalizedName, url }),
+      ? kind === 'image'
+        ? { name: normalizedName, images: [url] }
+        : { name: normalizedName, images: [], media: [{ url, kind }] }
+      : { name: normalizedName, url, kind }),
   });
+}
+
+export async function addMangaStyle(name: string, url: string, prompt: string): Promise<{ id: string }> {
+  return api<{ id: string }>('/api/assets/styles/item', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: name.trim() || '自定义风格',
+      url,
+      prompt: prompt.trim(),
+      kind: 'image',
+    }),
+  });
+}
+
+export async function addMediaToMangaAsset(
+  destination: MangaAssetDestination,
+  url: string,
+  kind: 'image' | 'video',
+): Promise<{ id: string }> {
+  const category = destination.category === 'character'
+    ? 'characters'
+    : destination.category === 'outfit'
+      ? 'outfits'
+      : destination.category === 'scene'
+        ? 'scenes'
+        : 'uploads';
+  return api<{ id: string }>(`/api/assets/${category}/item/${encodeURIComponent(destination.id)}/media`, {
+    method: 'POST',
+    body: JSON.stringify({ url, kind }),
+  });
+}
+
+export async function loadMangaAssetDestinations(): Promise<MangaAssetDestination[]> {
+  const [characters, outfits, scenes, uploads] = await Promise.all([
+    api<Record<string, CharacterRecord>>('/api/characters').catch(() => ({})),
+    api<unknown>('/api/assets/outfits').catch(() => []),
+    api<unknown>('/api/assets/scenes').catch(() => []),
+    api<unknown>('/api/assets/uploads').catch(() => []),
+  ]);
+  const result: MangaAssetDestination[] = [];
+  for (const [id, character] of Object.entries(characters as Record<string, CharacterRecord>)) {
+    if (!character || character.deleted_at) continue;
+    result.push({ id, category: 'character', name: stringValue(character.name) || id });
+  }
+  const appendList = (category: 'outfit' | 'scene' | 'upload', records: unknown) => {
+    const seen = new Set<string>();
+    for (const record of listValue(records)) {
+      if (record.deleted_at) continue;
+      const id = stringValue(record.parent_id) || stringValue(record.id);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      result.push({ id, category, name: stringValue(record.name) || '未命名素材' });
+    }
+  };
+  appendList('outfit', outfits);
+  appendList('scene', scenes);
+  appendList('upload', uploads);
+  return result;
 }
 
 export async function renameMangaAsset(
@@ -130,6 +200,13 @@ export async function uploadMangaAssetFile(
   category: MangaWritableAssetCategory,
   file: File,
 ): Promise<{ id: string; url: string }> {
+  const uploaded = await uploadMangaMediaFile(file);
+  const name = file.name.replace(/\.[^.]+$/, '').trim() || '未命名素材';
+  const saved = await addMangaAsset(category, name, uploaded.url);
+  return { id: saved.id, url: uploaded.url };
+}
+
+export async function uploadMangaMediaFile(file: File): Promise<{ url: string }> {
   const formData = new FormData();
   formData.append('file', file);
   const response = await fetch('/api/upload', {
@@ -141,9 +218,7 @@ export async function uploadMangaAssetFile(
   if (!response.ok || !payload?.url) {
     throw new Error(payload?.error || `上传失败 ${response.status}`);
   }
-  const name = file.name.replace(/\.[^.]+$/, '').trim() || '未命名素材';
-  const saved = await addMangaAsset(category, name, payload.url);
-  return { id: saved.id, url: payload.url };
+  return { url: payload.url };
 }
 
 function mapListAssets(
@@ -158,10 +233,18 @@ function mapListAssets(
       ? stringValue(record.thumbnail_url) || stringValue(record.url)
       : stringValue(record.url) || stringValue(record.thumbnail_url);
     if (!id || !url) return [];
+    const explicitKind = stringValue(record.kind);
+    const kind: MangaAssetMediaKind = category === 'audio'
+      ? 'audio'
+      : category === 'style'
+        ? 'style'
+        : explicitKind === 'video' || /\.(?:mp4|mov|webm)(?:[?#].*)?$/i.test(url)
+          ? 'video'
+          : 'image';
     return [{
       id: `${category}:${id}`,
       category,
-      kind: category === 'audio' ? 'audio' : category === 'style' ? 'style' : 'image',
+      kind,
       name: stringValue(record.name) || '未命名',
       url,
       previewUrl: url,

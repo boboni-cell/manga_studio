@@ -51,6 +51,7 @@ interface AssetPanelProps {
   onActivate: (asset: CanvasAssetItem) => void;
   onRename?: (asset: CanvasAssetItem, title: string) => Promise<void> | void;
   onAdd?: (category: MangaAssetCategory) => void;
+  onCreateStyle?: (file: File, name: string, prompt: string) => Promise<void>;
 }
 
 export const AssetPanel = memo(({
@@ -64,6 +65,7 @@ export const AssetPanel = memo(({
   onActivate,
   onRename,
   onAdd,
+  onCreateStyle,
 }: AssetPanelProps) => {
   const [query, setQuery] = useState('');
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
@@ -71,6 +73,12 @@ export const AssetPanel = memo(({
   const [savingAssetId, setSavingAssetId] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<MangaAssetCategory>('project');
+  const [showStyleForm, setShowStyleForm] = useState(false);
+  const [styleFile, setStyleFile] = useState<File | null>(null);
+  const [styleName, setStyleName] = useState('');
+  const [stylePrompt, setStylePrompt] = useState('');
+  const [styleSaveError, setStyleSaveError] = useState<string | null>(null);
+  const [isStyleSaving, setIsStyleSaving] = useState(false);
   const categoryCounts = useMemo(() => {
     const counts = new Map<MangaAssetCategory, number>();
     for (const asset of assets) counts.set(asset.category, (counts.get(asset.category) || 0) + 1);
@@ -129,6 +137,23 @@ export const AssetPanel = memo(({
     }
   };
 
+  const createStyle = async () => {
+    if (!styleFile || !styleName.trim() || !onCreateStyle) return;
+    try {
+      setIsStyleSaving(true);
+      setStyleSaveError(null);
+      await onCreateStyle(styleFile, styleName.trim(), stylePrompt.trim());
+      setShowStyleForm(false);
+      setStyleFile(null);
+      setStyleName('');
+      setStylePrompt('');
+    } catch (error) {
+      setStyleSaveError(error instanceof Error ? error.message : '风格添加失败');
+    } finally {
+      setIsStyleSaving(false);
+    }
+  };
+
   if (!isOpen || !buttonRect) {
     return null;
   }
@@ -160,11 +185,15 @@ export const AssetPanel = memo(({
             <button
               type="button"
               onClick={() => {
+                if (activeCategory === 'style' && onCreateStyle) {
+                  setShowStyleForm(true);
+                  return;
+                }
                 onAdd(activeCategory);
                 if (activeCategory === 'project') setActiveCategory('upload');
               }}
               className="inline-flex h-7 items-center gap-1 rounded-md border border-accent/35 bg-accent/15 px-2 text-[11px] text-accent-light hover:bg-accent/25"
-              title={activeCategory === 'style' || activeCategory === 'history' ? '前往完整资产库' : `添加${activeCategoryLabel}`}
+              title={activeCategory === 'history' ? '前往完整资产库' : `添加${activeCategoryLabel}`}
             >
               <Plus className="h-3.5 w-3.5" />
               添加
@@ -198,6 +227,56 @@ export const AssetPanel = memo(({
           </button>
         ))}
       </div>
+
+      {showStyleForm && activeCategory === 'style' && (
+        <div className="border-b border-white/8 bg-white/[0.03] p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-xs font-medium text-white/80">添加自定义风格</span>
+            <button
+              type="button"
+              className="rounded p-1 text-white/40 hover:bg-white/10 hover:text-white/80"
+              onClick={() => setShowStyleForm(false)}
+              aria-label="关闭风格表单"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="space-y-2">
+            <input
+              type="file"
+              accept="image/*"
+              className="block w-full text-[11px] text-white/55 file:mr-2 file:rounded-md file:border-0 file:bg-accent/20 file:px-2 file:py-1.5 file:text-accent-light"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0] ?? null;
+                setStyleFile(file);
+                if (file && !styleName) setStyleName(file.name.replace(/\.[^.]+$/, ''));
+              }}
+            />
+            <input
+              value={styleName}
+              onChange={(event) => setStyleName(event.target.value)}
+              placeholder="风格名称"
+              className="h-8 w-full rounded-lg border border-white/10 bg-black/20 px-2 text-xs text-white/85 outline-none placeholder:text-white/30 focus:border-accent/50"
+            />
+            <textarea
+              value={stylePrompt}
+              onChange={(event) => setStylePrompt(event.target.value)}
+              placeholder="风格提示词（可选）"
+              rows={2}
+              className="w-full resize-none rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-xs text-white/85 outline-none placeholder:text-white/30 focus:border-accent/50"
+            />
+            {styleSaveError && <div className="text-[11px] text-red-300">{styleSaveError}</div>}
+            <button
+              type="button"
+              disabled={!styleFile || !styleName.trim() || isStyleSaving}
+              className="h-8 w-full rounded-lg bg-accent text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={() => { void createStyle(); }}
+            >
+              {isStyleSaving ? '正在添加…' : '添加到风格库'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="border-b border-white/8 px-3 py-2">
         <label className="flex h-8 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-2 text-white/70 focus-within:border-accent/50">

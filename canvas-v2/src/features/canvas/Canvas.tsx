@@ -100,9 +100,11 @@ import { ImageViewerModal } from './ui/ImageViewerModal';
 import { AssetPanel, type CanvasAssetItem } from './ui/AssetPanel';
 import { MissingApiKeyHint } from '@/features/settings/MissingApiKeyHint';
 import {
+  addMangaStyle,
   loadMangaAssetLibrary,
   renameMangaAsset,
   uploadMangaAssetFile,
+  uploadMangaMediaFile,
   type MangaAssetCategory,
   type MangaLibraryAsset,
   type MangaWritableAssetCategory,
@@ -1589,7 +1591,7 @@ export function Canvas() {
   );
 
   const handleAddAsset = useCallback((category: MangaAssetCategory) => {
-    if (category === 'style' || category === 'history') {
+    if (category === 'history') {
       window.location.assign('/assets');
       return;
     }
@@ -1612,6 +1614,14 @@ export function Canvas() {
       const message = error instanceof Error ? error.message : '素材添加失败';
       window.alert(message);
     }
+  }, []);
+
+  const handleCreateStyleAsset = useCallback(async (file: File, name: string, prompt: string) => {
+    const uploaded = await uploadMangaMediaFile(file);
+    await addMangaStyle(name, uploaded.url, prompt);
+    const items = await loadMangaAssetLibrary();
+    setLibraryAssets(items.map(toLibraryAssetPanelItem));
+    window.dispatchEvent(new Event('manga:styles-updated'));
   }, []);
 
   const closeAssetPanel = useCallback(() => {
@@ -4394,6 +4404,7 @@ export function Canvas() {
         onActivate={handleActivateAsset}
         onRename={assetPanelMode === 'browse' ? handleRenameAsset : undefined}
         onAdd={assetPanelMode === 'browse' ? handleAddAsset : undefined}
+        onCreateStyle={assetPanelMode === 'browse' ? handleCreateStyleAsset : undefined}
       />
 
       {nodes.length === 0 && emptyHint}

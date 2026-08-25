@@ -39,7 +39,8 @@
       });
     } else {
       (Array.isArray(data) ? data : []).forEach(function (it) {
-        items.push({ id: it.id, name: it.name || '', url: String(it.url || ''), meta: c.label, deleted: Boolean(it.deleted_at) });
+        var isVideo = it.kind === 'video' || /\.(mp4|mov|webm)(?:[?#].*)?$/i.test(String(it.url || ''));
+        items.push({ id: it.id, name: it.name || '', url: String(it.url || ''), meta: isVideo ? '视频参考' : c.label, video: isVideo, deleted: Boolean(it.deleted_at) });
       });
     }
     render();

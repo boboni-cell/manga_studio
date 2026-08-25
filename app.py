@@ -2872,15 +2872,28 @@ def create_asset_item(cat):
     if cat in ('character', 'characters'):
         name = body.get('name')
         images = body.get('images') or []
+        media = body.get('media') or []
         if not _valid_asset_name(name):
             return jsonify(error='名称不合法'), 400
         if not isinstance(images, list) or not all(_valid_asset_url(u) for u in images):
             return jsonify(error='图片 URL 不合法'), 400
+        if not isinstance(media, list) or not all(
+            isinstance(item, dict)
+            and item.get('kind') in ('video', 'audio')
+            and _valid_asset_url(item.get('url'))
+            for item in media
+        ):
+            return jsonify(error='媒体 URL 不合法'), 400
         chars = load_json(characters_path(user_id), {})
         if not isinstance(chars, dict):
             chars = {}
         item_id = uuid.uuid4().hex
         chars[item_id] = {'name': name.strip(), 'images': [{'url': u} for u in images]}
+        if media:
+            chars[item_id]['media'] = [
+                {'url': item['url'], 'kind': item['kind']}
+                for item in media
+            ]
         save_json(characters_path(user_id), chars)
         return jsonify(ok=True, id=item_id), 201
     if cat not in ASSET_CATS:
@@ -2894,12 +2907,62 @@ def create_asset_item(cat):
     items = load_json(assets_path(cat, user_id), [])
     if not isinstance(items, list):
         items = []
-    item = {'id': uuid.uuid4().hex, 'name': name.strip(), 'url': url}
+    media_kind = body.get('kind') if body.get('kind') in ('image', 'video', 'audio') else 'image'
+    item = {'id': uuid.uuid4().hex, 'name': name.strip(), 'url': url, 'kind': media_kind}
     if cat == 'styles':
         item = {'id': uuid.uuid4().hex, 'name': name.strip(), 'thumbnail_url': url, 'prompt': str(body.get('prompt') or '')[:5000], 'negative_prompt': str(body.get('negative_prompt') or '')[:5000], 'use_for_image': bool(body.get('use_for_image', True)), 'use_for_video': bool(body.get('use_for_video', True))}
     items.append(item)
     save_json(assets_path(cat, user_id), items)
     return jsonify(ok=True, id=item['id']), 201
+
+@app.route('/api/assets/<cat>/item/<item_id>/media', methods=['POST'])
+@login_required
+def append_asset_item_media(cat, item_id):
+    body, err = _assets_request_body()
+    if err:
+        return err
+    url = body.get('url') or ''
+    media_kind = body.get('kind') if body.get('kind') in ('image', 'video', 'audio') else 'image'
+    if not _valid_asset_url(url):
+        return jsonify(error='URL 不合法'), 400
+
+    user_id = current_user_id()
+    if cat in ('character', 'characters'):
+        chars = load_json(characters_path(user_id), {})
+        if not isinstance(chars, dict) or item_id not in chars or chars[item_id].get('deleted_at'):
+            return jsonify(error='资产不存在'), 404
+        character = chars[item_id]
+        if media_kind == 'image':
+            images = character.get('images') if isinstance(character.get('images'), list) else []
+            if not any(isinstance(item, dict) and item.get('url') == url for item in images):
+                images.append({'url': url})
+            character['images'] = images
+        else:
+            media = character.get('media') if isinstance(character.get('media'), list) else []
+            if not any(isinstance(item, dict) and item.get('url') == url for item in media):
+                media.append({'url': url, 'kind': media_kind})
+            character['media'] = media
+        save_json(characters_path(user_id), chars)
+        return jsonify(ok=True, id=item_id)
+
+    if cat not in ASSET_CATS:
+        return jsonify(error='不支持的分类'), 400
+    items = load_json(assets_path(cat, user_id), [])
+    if not isinstance(items, list):
+        items = []
+    parent = next((item for item in items if isinstance(item, dict) and item.get('id') == item_id and not item.get('deleted_at')), None)
+    if not parent:
+        return jsonify(error='资产不存在'), 404
+    child = {
+        'id': uuid.uuid4().hex,
+        'parent_id': parent.get('parent_id') or parent.get('id'),
+        'name': str(parent.get('name') or '未命名素材')[:200],
+        'url': url,
+        'kind': media_kind,
+    }
+    items.append(child)
+    save_json(assets_path(cat, user_id), items)
+    return jsonify(ok=True, id=child['id']), 201
 
 @app.route('/api/assets/<cat>/item/<item_id>', methods=['PUT', 'DELETE'])
 @login_required
@@ -4293,16 +4356,11 @@ def generate_image():
 
     # Inject style
     if style_id:
-        styles, changed = ensure_default_styles(load_json(styles_path(), []))
-        if changed:
-            save_json(styles_path(), styles)
-        style = next((s for s in styles if s.get('id') == style_id), None)
+        style = load_prompt_style(style_id, user_id)
         if style:
             prompt = style.get('prompt', '') + '\n' + prompt
             if style.get('negative_prompt'):
                 prompt += '\n\n避免：' + style.get('negative_prompt', '')
-            if style.get('thumbnail_url'):
-                input_images.append({'url': style['thumbnail_url'], 'role_label': '风格参考'})
 
     try:
         point_cost = reserve_model_points('image', selected_model, user_id, personal=force_personal)
@@ -4453,9 +4511,6 @@ def generate():
     if style_id:
         style = load_prompt_style(style_id, user_id)
         if style:
-            # add thumbnail as reference
-            if style.get('thumbnail_url'):
-                images.append({'url': style['thumbnail_url'], 'role_label': '风格参考'})
             # A storyboard prompt may already contain the complete live-action block.
             if LIVE_ACTION_GLOBAL_MARKER not in script:
                 if style.get('prompt'):
@@ -4463,10 +4518,6 @@ def generate():
                     script = prefix + style.get('prompt', '') + '\n' + script
                 if style.get('negative_prompt'):
                     script += '\n【风格约束】避免：' + style.get('negative_prompt', '')
-            # add style reference instruction
-            style_instruction = '\n【风格参考】已提供风格参考图，该图仅用于约束画面风格、色彩倾向、光影质感、材质表现和视觉语言。不要把风格参考当作角色身份、服装设计或具体场景结构。角色以角色参考为准，场景以场景参考为准。'
-            if '【风格参考】' not in script:
-                script = script.rstrip() + style_instruction + '\n'
 
     original_script = script
     if optimize and script.strip():
