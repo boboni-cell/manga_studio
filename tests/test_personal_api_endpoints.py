@@ -138,7 +138,9 @@ class PersonalApiEndpointTest(unittest.TestCase):
         )
 
         self.assertEqual(post.call_args.args[0], 'https://provider.example/v9/create-video')
+        self.assertEqual(post.call_args.kwargs['timeout'], 360)
         self.assertEqual(get.call_args.args[0], 'https://provider.example/v9/tasks/task-1')
+        self.assertEqual(get.call_args.kwargs['timeout'], 360)
         self.assertEqual(app_module.JOBS['exact-endpoint-job']['status'], 'succeeded')
 
     @mock.patch.object(app_module, 'save_video_history')
@@ -165,6 +167,7 @@ class PersonalApiEndpointTest(unittest.TestCase):
         )
 
         self.assertEqual(post.call_args.args[0], endpoint)
+        self.assertEqual(post.call_args.kwargs['timeout'], 360)
         self.assertEqual(post.call_args.kwargs['headers']['X-DashScope-Async'], 'enable')
         self.assertEqual(post.call_args.kwargs['json'], {
             'model': 'wan2.6-t2v',
@@ -180,6 +183,7 @@ class PersonalApiEndpointTest(unittest.TestCase):
             get.call_args.args[0],
             'https://dashscope-intl.aliyuncs.com/api/v1/tasks/dash-task-1',
         )
+        self.assertEqual(get.call_args.kwargs['timeout'], 360)
         self.assertEqual(app_module.JOBS['dashscope-job']['status'], 'succeeded')
 
 

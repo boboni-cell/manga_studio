@@ -3373,7 +3373,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, f
         print(f'[nano-start] model={model_key}', flush=True)
 
         # Submit generation task
-        r = requests.post(f'{api_root}/generate-video', headers=headers, json=payload, timeout=30)
+        r = requests.post(f'{api_root}/generate-video', headers=headers, json=payload, timeout=360)
         print(f'[nano-submit] status={r.status_code} body={r.text[:200]}', flush=True)
         if r.status_code not in (200, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'Nano-GPT 提交失败: {r.status_code} {r.text[:200]}'}
@@ -3426,7 +3426,7 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, f
             last_http_error = None
             for status_url, params in status_endpoints:
                 try:
-                    pr = requests.get(status_url, headers=headers, params=params, timeout=30)
+                    pr = requests.get(status_url, headers=headers, params=params, timeout=360)
                 except requests.RequestException as e:
                     print(f'[nano-poll] request error: {e}', flush=True)
                     last_http_error = {'request_error': str(e), 'url': status_url, 'params': params}
@@ -3635,7 +3635,7 @@ def agnes_video_generate(job_id, script, ratio, duration, resolution='720p', ori
             raise Exception(f'Agnes 返回中没有任务 ID: {json.dumps(created, ensure_ascii=False)[:500]}')
 
         for _ in range(240):
-            poll = requests.get(f'{api_base}/videos/{task_id}', headers=headers, timeout=30)
+            poll = requests.get(f'{api_base}/videos/{task_id}', headers=headers, timeout=360)
             if poll.status_code not in (200, 202):
                 raise Exception(f'Agnes 视频查询失败: HTTP {poll.status_code} {poll.text[:300]}')
             result = poll.json()
@@ -3715,7 +3715,7 @@ def minimax_video_generate(job_id, script, images, audio_url, video_url, first_f
             raise Exception(f'MiniMax 返回中没有 task_id: {json.dumps(created, ensure_ascii=False)[:400]}')
 
         for _ in range(240):
-            poll = requests.get(f'{api_root}/v2/query/video_generation/{task_id}', headers=headers, timeout=30)
+            poll = requests.get(f'{api_root}/v2/query/video_generation/{task_id}', headers=headers, timeout=360)
             if poll.status_code not in (200, 202):
                 raise Exception(f'MiniMax 视频查询失败: HTTP {poll.status_code} {poll.text[:300]}')
             result = poll.json()
@@ -3845,13 +3845,13 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
                 headers['X-DashScope-Async'] = 'enable'
             else:
                 request_payload = openai_payload if urlparse(exact_submit_url).path.rstrip('/').endswith('/videos') else payload
-            r = requests.post(exact_submit_url, headers=headers, json=request_payload, timeout=30)
+            r = requests.post(exact_submit_url, headers=headers, json=request_payload, timeout=360)
             resolved_status_url = exact_status_url or (dashscope_video_status_url(exact_submit_url) if dashscope_endpoint else None)
         else:
-            r = requests.post(f'{api_base}/videos', headers=headers, json=openai_payload, timeout=30)
+            r = requests.post(f'{api_base}/videos', headers=headers, json=openai_payload, timeout=360)
             resolved_status_url = None
         if not exact_submit_url and r.status_code in (404, 405):
-            r = requests.post(f'{api_base}/video/generate', headers=headers, json=payload, timeout=30)
+            r = requests.post(f'{api_base}/video/generate', headers=headers, json=payload, timeout=360)
             resolved_status_url = f'{api_base}/video/status/{{task_id}}'
         if r.status_code not in (200, 201, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方提交失败: {r.status_code} {r.text[:200]}'}
@@ -3875,7 +3875,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
 
         # Poll
         for _ in range(240):
-            pr = requests.get(resolved_status_url.format(task_id=task_id), headers=headers, timeout=30)
+            pr = requests.get(resolved_status_url.format(task_id=task_id), headers=headers, timeout=360)
             if pr.status_code not in (200, 202):
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方查询失败: {pr.status_code}'}
                 return
@@ -3957,7 +3957,7 @@ def atlas_generate_media(kind, payload, api_key, api_base=None):
     for _ in range(attempts):
         result = None
         for status_path in status_paths:
-            poll = requests.get(f'{api_root}/model/{status_path}/{task_id}', headers=headers, timeout=30)
+            poll = requests.get(f'{api_root}/model/{status_path}/{task_id}', headers=headers, timeout=360)
             if poll.status_code in (404, 405):
                 continue
             if poll.status_code not in (200, 202):
@@ -4228,7 +4228,7 @@ def migrate_tos_history_videos_to_r2():
         ))
         for old_url in tos_urls:
             try:
-                probe = requests.head(old_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30, allow_redirects=True)
+                probe = requests.head(old_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=360, allow_redirects=True)
                 if probe.status_code >= 400 or int(probe.headers.get('Content-Length') or 0) <= 0:
                     raise Exception('源视频为空或不可读取，保留原历史地址')
                 new_url, _ = download_and_save_video(old_url)
