@@ -722,10 +722,25 @@ def minimax_api_root(api_base):
             return base_url[:-len(suffix)]
     return base_url
 
+def normalize_full_api_url(value):
+    url = str(value or '').strip()
+    if not url:
+        return ''
+    parsed = urlparse(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+        raise ValueError('完整接口必须是以 http:// 或 https:// 开头的 URL')
+    return url
+
 def normalize_api_profile(profile):
     profile = dict(profile or {})
     base_url = (profile.get('base_url') or '').rstrip('/')
     provider = profile.get('provider', '')
+    submit_url = normalize_full_api_url(profile.get('submit_url'))
+    status_url = normalize_full_api_url(profile.get('status_url')).replace('{taskId}', '{task_id}')
+    endpoint_mode = profile.get('endpoint_mode') if profile.get('endpoint_mode') == 'full' else ''
+    if not base_url and submit_url:
+        parsed_submit = urlparse(submit_url)
+        base_url = f'{parsed_submit.scheme}://{parsed_submit.netloc}'
     if 'api.atlascloud.ai' in base_url.lower():
         provider = 'atlas'
         base_url = ATLAS_API_BASE
@@ -737,6 +752,8 @@ def normalize_api_profile(profile):
         'name': (profile.get('name') or '').strip(),
         'provider': provider, 'base_url': base_url,
         'api_key': profile.get('api_key', ''), 'model': profile.get('model', ''),
+        'submit_url': submit_url, 'status_url': status_url,
+        'endpoint_mode': endpoint_mode,
         'last_test': profile.get('last_test'),
         'created_at': profile.get('created_at') or datetime.now(timezone.utc).isoformat()
     }
@@ -774,6 +791,8 @@ def public_api_profile(profile, kind=None):
         'id': profile.get('id'), 'name': profile.get('name', ''),
         'provider': profile.get('provider', ''), 'base_url': profile.get('base_url', ''),
         'model': profile.get('model', ''), 'configured': bool(profile.get('api_key')),
+        'submit_url': profile.get('submit_url', ''), 'status_url': profile.get('status_url', ''),
+        'endpoint_mode': profile.get('endpoint_mode', ''),
         'last_test': profile.get('last_test')
     }
     model_name = str(profile.get('model') or '').lower()
@@ -979,7 +998,7 @@ def use_personal_api(user_id=None):
 def resolve_api(kind, builtin, user_id=None, force_personal=False, profile_id=None, strict_builtin=False):
     if not force_personal: return builtin
     personal = get_personal_api(kind, user_id, profile_id)
-    if personal.get('api_key') and personal.get('base_url') and personal.get('model'): return personal
+    if personal.get('api_key') and (personal.get('base_url') or personal.get('submit_url')) and personal.get('model'): return personal
     if force_personal:
         raise QuotaError('请选择一个已保存且配置完整的个人 API')
     return builtin
@@ -2470,6 +2489,7 @@ def api_settings():
         profiles, _ = get_api_profiles(kind)
         settings = load_json(settings_path(), {})
         profile_id = str(body.get('profile_id') or '').strip()
+        is_new_profile = not profile_id
         if profile_id:
             cfg = next((item for item in profiles if item['id'] == profile_id), None)
             if not cfg: return jsonify(error='接口配置不存在'), 404
@@ -2479,10 +2499,24 @@ def api_settings():
             profile_id = cfg['id']
         if 'name' in body:
             cfg['name'] = str(body.get('name') or '').strip()
-        for key in ('provider', 'base_url', 'model'):
+        for key in ('provider', 'base_url', 'model', 'submit_url', 'status_url'):
             if key in body: cfg[key] = str(body.get(key) or '').strip().rstrip('/') if key == 'base_url' else str(body.get(key) or '').strip()
         if body.get('api_key'): cfg['api_key'] = str(body['api_key']).strip()
-        cfg = normalize_api_profile(cfg)
+        custom_full_endpoint = cfg.get('provider') == 'custom' and (
+            is_new_profile or cfg.get('endpoint_mode') == 'full' or bool(cfg.get('submit_url'))
+        )
+        if custom_full_endpoint:
+            if not cfg.get('submit_url'):
+                return jsonify(error='新建 Custom API 必须填写完整提交接口 URL'), 400
+            if kind == 'video' and not cfg.get('status_url'):
+                return jsonify(error='新建视频 Custom API 必须填写完整查询接口 URL，并用 {task_id} 标记任务 ID'), 400
+            if kind == 'video' and '{task_id}' not in str(cfg.get('status_url')).replace('{taskId}', '{task_id}'):
+                return jsonify(error='视频查询接口必须包含 {task_id} 占位符'), 400
+            cfg['endpoint_mode'] = 'full'
+        try:
+            cfg = normalize_api_profile(cfg)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
         profiles = [cfg if item['id'] == profile_id else item for item in profiles]
         settings.setdefault('api_profiles', {})[kind] = profiles
         settings.setdefault('selected_api_profiles', {})[kind] = profile_id
@@ -2544,8 +2578,21 @@ def test_personal_api(kind, profile_id=None):
     target_id = profile_id or selected
     cfg = next((item for item in profiles if item['id'] == target_id), None)
     if not cfg: return jsonify(error='接口配置不存在'), 404
-    if not cfg.get('api_key') or not cfg.get('base_url') or not cfg.get('model'): return jsonify(error='请先保存完整接口配置'), 400
+    if not cfg.get('api_key') or not (cfg.get('base_url') or cfg.get('submit_url')) or not cfg.get('model'): return jsonify(error='请先保存完整接口配置'), 400
     try:
+        if cfg.get('endpoint_mode') == 'full':
+            if not cfg.get('submit_url'):
+                return jsonify(error='缺少完整提交接口 URL'), 400
+            if kind == 'video' and (not cfg.get('status_url') or '{task_id}' not in cfg.get('status_url')):
+                return jsonify(error='视频查询接口必须包含 {task_id} 占位符'), 400
+            tested_at = datetime.now(timezone.utc).isoformat()
+            cfg['last_test'] = tested_at
+            settings = load_json(settings_path(), {})
+            settings.setdefault('api_profiles', {})[kind] = [cfg if item['id'] == target_id else item for item in profiles]
+            if selected == target_id:
+                settings.setdefault('apis', {})[kind] = dict(cfg)
+            save_json(settings_path(), settings)
+            return jsonify(ok=True, message='完整接口格式有效；为避免计费，测试不会提交生成请求', last_test=tested_at)
         headers = {'Authorization': f"Bearer {cfg['api_key']}", 'x-api-key': cfg['api_key']}
         if cfg.get('provider') == 'anthropic':
             headers['anthropic-version'] = '2023-06-01'
@@ -3187,7 +3234,8 @@ def call_platform_text(system_prompt, user_content, temperature=0.7, max_tokens=
     if cfg.get('provider') == 'anthropic':
         headers['anthropic-version'] = '2023-06-01'
     payload = {'model': cfg['model'], 'messages': messages, 'temperature': temperature, 'max_tokens': max_tokens}
-    r = requests.post(f"{cfg['base_url']}/chat/completions", headers=headers, json=payload, timeout=120)
+    endpoint = cfg.get('submit_url') or f"{cfg['base_url']}/chat/completions"
+    r = requests.post(endpoint, headers=headers, json=payload, timeout=120)
     if r.status_code != 200: raise Exception(f'文本 API 调用失败: {r.status_code} {r.text[:300]}')
     return r.json()['choices'][0]['message']['content'].strip()
 
@@ -3711,7 +3759,8 @@ def minimax_video_generate(job_id, script, images, audio_url, video_url, first_f
 
 def third_party_video_adapter(job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, host_url,
                               model_key=THIRD_PARTY_MODEL_ID, resolution='720p',
-                              original_script=None, optimize=False, api_base=None, api_key=None, user_id=None):
+                              original_script=None, optimize=False, api_base=None, api_key=None, user_id=None,
+                              submit_url=None, status_url=None):
     """Generic adapter for any third-party video generation API.
     Reads api_base and api_key from env vars. Sends prompt + refs, polls for result."""
     try:
@@ -3764,11 +3813,18 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
 
         JOBS[job_id]['status'] = 'running'
 
-        r = requests.post(f'{api_base}/videos', headers=headers, json=openai_payload, timeout=30)
-        status_url = None
-        if r.status_code in (404, 405):
+        exact_submit_url = str(submit_url or '').strip()
+        exact_status_url = str(status_url or '').strip()
+        if exact_submit_url:
+            request_payload = openai_payload if urlparse(exact_submit_url).path.rstrip('/').endswith('/videos') else payload
+            r = requests.post(exact_submit_url, headers=headers, json=request_payload, timeout=30)
+            resolved_status_url = exact_status_url
+        else:
+            r = requests.post(f'{api_base}/videos', headers=headers, json=openai_payload, timeout=30)
+            resolved_status_url = None
+        if not exact_submit_url and r.status_code in (404, 405):
             r = requests.post(f'{api_base}/video/generate', headers=headers, json=payload, timeout=30)
-            status_url = f'{api_base}/video/status/{{task_id}}'
+            resolved_status_url = f'{api_base}/video/status/{{task_id}}'
         if r.status_code not in (200, 201, 202):
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方提交失败: {r.status_code} {r.text[:200]}'}
             return
@@ -3787,11 +3843,11 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
         if not task_id:
             JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方返回无 task_id: {data}'}
             return
-        status_url = status_url or f'{api_base}/videos/{{task_id}}'
+        resolved_status_url = resolved_status_url or f'{api_base}/videos/{{task_id}}'
 
         # Poll
         for _ in range(240):
-            pr = requests.get(status_url.format(task_id=task_id), headers=headers, timeout=30)
+            pr = requests.get(resolved_status_url.format(task_id=task_id), headers=headers, timeout=30)
             if pr.status_code not in (200, 202):
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方查询失败: {pr.status_code}'}
                 return
@@ -4127,7 +4183,7 @@ def download_and_save_video(video_url):
         print(f'[video-cache] failed: {e}', flush=True)
 
     if persistent_storage_configured():
-        raise Exception('视频生成成功，但文件存储失败，请稍后重试')
+        print('[video-cache] durable storage unavailable; preserving provider result URL', flush=True)
     return video_url, None
 
 def migrate_tos_history_videos_to_r2():
@@ -4205,7 +4261,7 @@ def image_ratio_instruction(ratio, size):
 
 # ── Nano image generation ─────────────────────────────────────
 def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, base_url=None,
-                        input_images=None, host_url=''):
+                        input_images=None, host_url='', submit_url=None):
     """Call Nano-GPT images/generations API."""
     size = image_size_for_nano(model_id, ratio, custom_size)
     width, height = parse_image_size(size)
@@ -4232,7 +4288,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             'version': NANO_GPT_MIDJOURNEY_VERSION,
             'n': 4,
         }
-        endpoint = f'{api_root}/images'
+        endpoint = submit_url or f'{api_root}/images'
     else:
         payload = {
             'model': model_id,
@@ -4245,7 +4301,7 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
         if width and height:
             payload['width'] = width
             payload['height'] = height
-        endpoint = f'{api_root}/images/generations'
+        endpoint = submit_url or f'{api_root}/images/generations'
     reference_urls = []
     for img in (input_images or []):
         url = img.get('url', '')
@@ -4386,7 +4442,8 @@ def generate_image():
             elif image_cfg.get('provider') != 'ark':
                 local_url, filename = nano_image_generate(
                     prompt, image_model, ratio, custom_size,
-                    image_cfg['api_key'], image_cfg['base_url'], input_images, host_url
+                    image_cfg['api_key'], image_cfg['base_url'], input_images, host_url,
+                    submit_url=image_cfg.get('submit_url')
                 )
             elif image_cfg.get('provider') == 'ark':
                 local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size, image_cfg['api_key'], image_model)
@@ -4584,7 +4641,8 @@ def generate():
         start_metered_job(third_party_video_adapter, (
             job_id, script, reference_images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, host_url,
             video_model, resolution, original_script, optimize,
-            video_cfg['base_url'], video_cfg['api_key'], user_id
+            video_cfg['base_url'], video_cfg['api_key'], user_id,
+            video_cfg.get('submit_url'), video_cfg.get('status_url')
         ), job_id, user_id, point_cost)
         return jsonify(job_id=job_id)
 
