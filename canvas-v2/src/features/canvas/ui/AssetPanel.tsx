@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { Check, Film, ImageIcon, Music, Pencil, Plus, Search, X } from 'lucide-react';
 
+import { NATIVE_MEDIA_NODRAG_CLASSNAME } from '@/features/canvas/application/nativeMediaInteraction';
 import { MANGA_ASSET_CATEGORIES, type MangaAssetCategory } from '@/lib/mangaAssetLibrary';
 
 export type CanvasAssetKind = 'image' | 'video' | 'audio';
@@ -367,7 +368,8 @@ export const AssetPanel = memo(({
                             onActivate(asset);
                           }
                         }}
-                        className="block aspect-square w-full overflow-hidden bg-black/30"
+                        className={`${NATIVE_MEDIA_NODRAG_CLASSNAME} block aspect-square w-full overflow-hidden bg-black/30`}
+                        data-browser-media-actions={asset.kind === 'audio' ? undefined : 'true'}
                         title={mode === 'select' ? `${asset.title} · 选择并连接` : asset.nodeId ? `${asset.title} · 双击定位` : `${asset.title} · 添加到画布`}
                       >
                         {asset.kind === 'image' ? (
@@ -375,7 +377,7 @@ export const AssetPanel = memo(({
                             src={asset.previewImageUrl}
                             alt={asset.title}
                             className="h-full w-full object-cover transition-transform group-hover:scale-105"
-                            draggable={false}
+                            data-browser-media-actions="true"
                           />
                         ) : asset.kind === 'video' ? (
                           <div className="relative h-full w-full bg-black">
@@ -383,6 +385,7 @@ export const AssetPanel = memo(({
                               src={asset.videoUrl}
                               poster={asset.thumbnailUrl ?? undefined}
                               className="h-full w-full object-cover opacity-90 transition-transform group-hover:scale-105"
+                              data-browser-media-actions="true"
                               muted
                               playsInline
                               preload="metadata"

@@ -66,7 +66,7 @@ import {
   resolveImageDisplayUrl,
 } from '@/features/canvas/application/imageData';
 import { clearBrowserTextSelection } from '@/features/canvas/application/textSelection';
-import { isNativeMediaInteractionTarget } from '@/features/canvas/application/nativeMediaInteraction';
+import { isNativeMediaInteractionEvent } from '@/features/canvas/application/nativeMediaInteraction';
 import { copyImageSourceToClipboard, readSystemClipboard } from '@/commands/image';
 import {
   dataTransferHasExternalFilePayload,
@@ -2609,7 +2609,7 @@ export function Canvas() {
   }, [pendingConnectStart]);
 
   const handleCanvasContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (isNativeMediaInteractionTarget(event.target)) {
+    if (isNativeMediaInteractionEvent(event)) {
       blankCanvasRightClickRef.current = null;
       setNodeContextMenu(null);
       return;
@@ -3812,7 +3812,7 @@ export function Canvas() {
   }, [canvasMouseBindings, handleConfiguredNodeClickAction, mobileMultiSelectMode, reactFlowInstance, selectSingleNode, toggleNodeSelection]);
 
   const handleNodeContextMenu = useCallback((event: ReactMouseEvent, node: CanvasNode) => {
-    if (isNativeMediaInteractionTarget(event.target)) {
+    if (isNativeMediaInteractionEvent(event)) {
       blankCanvasRightClickRef.current = null;
       setNodeContextMenu(null);
       return;

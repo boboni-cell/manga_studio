@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  isNativeMediaInteractionEvent,
   isNativeMediaInteractionTarget,
   NATIVE_MEDIA_NODRAG_CLASSNAME,
   NATIVE_MEDIA_SELECTOR,
@@ -29,5 +30,41 @@ describe('isNativeMediaInteractionTarget', () => {
   it('keeps custom canvas menus for non-media targets', () => {
     expect(isNativeMediaInteractionTarget({ closest: () => null } as unknown as EventTarget)).toBe(false);
     expect(isNativeMediaInteractionTarget(null)).toBe(false);
+  });
+});
+
+describe('isNativeMediaInteractionEvent', () => {
+  it('recognizes media wrappers from an extension-composed event path', () => {
+    const mediaWrapper = { closest: () => ({}) } as unknown as EventTarget;
+
+    expect(isNativeMediaInteractionEvent({
+      target: { closest: () => null } as unknown as EventTarget,
+      clientX: 10,
+      clientY: 20,
+      nativeEvent: { composedPath: () => [mediaWrapper] },
+    }, null)).toBe(true);
+  });
+
+  it('recognizes native media underneath an extension overlay', () => {
+    const overlay = { closest: () => null } as unknown as EventTarget;
+    const image = { closest: () => ({}) } as unknown as Element;
+    const elementsFromPoint = vi.fn().mockReturnValue([overlay, image]);
+
+    expect(isNativeMediaInteractionEvent({
+      target: overlay,
+      clientX: 30,
+      clientY: 40,
+    }, { elementsFromPoint })).toBe(true);
+    expect(elementsFromPoint).toHaveBeenCalledWith(30, 40);
+  });
+
+  it('keeps custom canvas handling when no media is involved', () => {
+    const target = { closest: () => null } as unknown as EventTarget;
+
+    expect(isNativeMediaInteractionEvent({
+      target,
+      clientX: 0,
+      clientY: 0,
+    }, { elementsFromPoint: () => [] })).toBe(false);
   });
 });
