@@ -9,6 +9,49 @@ import type {
 } from '../application/ports';
 import { buildImageRequest, buildVideoRequest } from '@/lib/mangaGatewayPayload';
 
+interface VideoHistoryRecord {
+  type?: unknown;
+  video_url?: unknown;
+  original_script?: unknown;
+  refined_script?: unknown;
+  source_job_id?: unknown;
+}
+
+function nonEmptyString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export async function findCompletedVideoInHistory(input: {
+  jobId: string;
+  prompt: string;
+  excludedUrls?: readonly string[];
+}): Promise<string | null> {
+  const history = await api<unknown>('/api/history');
+  if (!Array.isArray(history)) return null;
+  const jobId = input.jobId.trim();
+  const prompt = input.prompt.trim();
+  const excluded = new Set((input.excludedUrls ?? []).map((url) => url.trim()).filter(Boolean));
+  const records = history.filter((item): item is VideoHistoryRecord => Boolean(item && typeof item === 'object'));
+
+  const exactJob = records.find((item) => (
+    item.type === 'video'
+    && nonEmptyString(item.source_job_id) === jobId
+    && !excluded.has(nonEmptyString(item.video_url))
+  ));
+  if (exactJob) return nonEmptyString(exactJob.video_url) || null;
+  if (!prompt) return null;
+
+  const legacyMatch = records.find((item) => {
+    const videoUrl = nonEmptyString(item.video_url);
+    if (item.type !== 'video' || !videoUrl || excluded.has(videoUrl) || nonEmptyString(item.source_job_id)) {
+      return false;
+    }
+    return nonEmptyString(item.original_script) === prompt
+      || nonEmptyString(item.refined_script) === prompt;
+  });
+  return legacyMatch ? nonEmptyString(legacyMatch.video_url) || null : null;
+}
+
 function mapImageStatus(status: string | undefined): GenerationJobPollStatus['status'] {
   switch (status) {
     case 'succeeded': return 'succeeded';

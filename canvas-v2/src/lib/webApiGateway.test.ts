@@ -13,7 +13,10 @@ import {
   buildImageRequest,
   buildVideoRequest,
 } from './mangaGatewayPayload';
-import { webApiGateway } from '@/features/canvas/infrastructure/webApiGateway';
+import {
+  findCompletedVideoInHistory,
+  webApiGateway,
+} from '@/features/canvas/infrastructure/webApiGateway';
 
 beforeEach(() => {
   apiMock.mockReset();
@@ -110,5 +113,46 @@ describe('Manga Studio Flask gateway polling', () => {
       error: null,
     });
     expect(apiMock).toHaveBeenCalledWith('/api/status/video-job-1');
+  });
+
+  it('recovers a legacy completed video only when the full prompt matches', async () => {
+    apiMock.mockResolvedValueOnce([
+      {
+        type: 'video',
+        video_url: 'https://example.com/older.mp4',
+        original_script: 'different prompt',
+      },
+      {
+        type: 'video',
+        video_url: 'https://example.com/recovered.mp4',
+        original_script: 'exact prompt',
+      },
+    ]);
+
+    await expect(findCompletedVideoInHistory({
+      jobId: 'lost-after-restart',
+      prompt: 'exact prompt',
+    })).resolves.toBe('https://example.com/recovered.mp4');
+  });
+
+  it('prefers source job id and does not reuse a video already on the canvas', async () => {
+    apiMock.mockResolvedValueOnce([
+      {
+        type: 'video',
+        video_url: 'https://example.com/used.mp4',
+        source_job_id: 'job-2',
+      },
+      {
+        type: 'video',
+        video_url: 'https://example.com/right.mp4',
+        source_job_id: 'job-2',
+      },
+    ]);
+
+    await expect(findCompletedVideoInHistory({
+      jobId: 'job-2',
+      prompt: '',
+      excludedUrls: ['https://example.com/used.mp4'],
+    })).resolves.toBe('https://example.com/right.mp4');
   });
 });

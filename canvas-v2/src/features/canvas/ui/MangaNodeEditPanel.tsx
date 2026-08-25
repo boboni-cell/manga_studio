@@ -25,6 +25,7 @@ import { CANVAS_NODE_TYPES, type CanvasNode } from '../domain/canvasNodes';
 const IMAGE_RATIOS = ['1:1', '16:9', '9:16', '4:3', '3:4', '21:9'];
 const VIDEO_RATIOS = ['9:16', '16:9', '1:1'];
 const VIDEO_RESOLUTIONS = ['720p', '1080p'];
+const VIDEO_DURATIONS = ['4', '5', '6', '8', '10', '12'];
 const PANEL_WIDTH = 380;
 
 interface StyleItem {
@@ -100,7 +101,23 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
   const data = node.data as Record<string, unknown>;
   const prompt = String(data.prompt || '');
   const content = String(data.content || '');
-  const ratio = String(data.ratio || data.requestAspectRatio || '1:1');
+  const rawVideoModelConfig = data.modelConfig;
+  const videoModelConfig = node.type === CANVAS_NODE_TYPES.aiVideo
+    && rawVideoModelConfig && typeof rawVideoModelConfig === 'object' && !Array.isArray(rawVideoModelConfig)
+    ? rawVideoModelConfig as Record<string, unknown>
+    : null;
+  const videoEntryId = String(videoModelConfig?.entryId || '');
+  const personalEntryPrefix = 'manga:video:personal:';
+  const platformEntryPrefix = 'manga:video:platform:';
+  const modelConfigProfileId = videoEntryId.startsWith(personalEntryPrefix)
+    ? videoEntryId.slice(personalEntryPrefix.length)
+    : '';
+  const modelConfigPlatformModel = videoEntryId.startsWith(platformEntryPrefix)
+    ? videoEntryId.slice(platformEntryPrefix.length)
+    : '';
+  const ratio = String(videoModelConfig?.aspectRatio || data.ratio || data.requestAspectRatio || '1:1');
+  const resolution = String(videoModelConfig?.resolution || data.resolution || '720p');
+  const duration = String(videoModelConfig?.duration || data.duration || '5');
   const styleId = String(data.styleId || data.style_id || '');
 
   useEffect(() => {
@@ -131,9 +148,11 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
   const modelField = node.type === CANVAS_NODE_TYPES.aiVideo ? 'video_model' : 'image_model';
   const platformModels = node.type === CANVAS_NODE_TYPES.aiVideo ? videoModels : imageModels;
   const defaultPlatformModel = node.type === CANVAS_NODE_TYPES.aiVideo ? 'seedance' : 'gpt-image-2';
-  const storedModel = String(data[modelField] || data.model || defaultPlatformModel);
-  const storedProfile = String(data.api_profile_id || selectedProfiles[apiProfileKind] || '');
-  const usePersonalApi = data.use_personal_api === true || storedModel === 'personal-api';
+  const storedModel = modelConfigPlatformModel
+    || (modelConfigProfileId ? 'personal-api' : String(data[modelField] || data.model || defaultPlatformModel));
+  const storedProfile = modelConfigProfileId
+    || String(data.api_profile_id || selectedProfiles[apiProfileKind] || '');
+  const usePersonalApi = Boolean(modelConfigProfileId) || data.use_personal_api === true || storedModel === 'personal-api';
   const selectedProfile = usePersonalApi ? storedProfile : '';
   const routeValue = usePersonalApi && selectedProfile
     ? 'personal:' + selectedProfile
@@ -147,15 +166,48 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
         ...(node.type === CANVAS_NODE_TYPES.aiVideo ? {} : { model: 'personal-api' }),
         use_personal_api: true,
         api_profile_id: profileId,
+        ...(node.type === CANVAS_NODE_TYPES.aiVideo ? {
+          modelConfig: {
+            ...(videoModelConfig ?? {}),
+            entryId: `${personalEntryPrefix}${profileId}`,
+            duration,
+            resolution,
+            aspectRatio: ratio,
+            extraParams: {
+              ...((videoModelConfig?.extraParams && typeof videoModelConfig.extraParams === 'object')
+                ? videoModelConfig.extraParams as Record<string, unknown>
+                : {}),
+              use_personal_api: true,
+              api_profile_id: profileId,
+            },
+          },
+        } : {}),
       });
       return;
     }
     const model = value.slice('platform:'.length) || defaultPlatformModel;
+    const platformExtraParams = videoModelConfig?.extraParams && typeof videoModelConfig.extraParams === 'object'
+      ? { ...videoModelConfig.extraParams as Record<string, unknown> }
+      : {};
+    delete platformExtraParams.api_profile_id;
     update({
       [modelField]: model,
       ...(node.type === CANVAS_NODE_TYPES.aiVideo ? {} : { model }),
       use_personal_api: false,
       api_profile_id: null,
+      ...(node.type === CANVAS_NODE_TYPES.aiVideo ? {
+        modelConfig: {
+          ...(videoModelConfig ?? {}),
+          entryId: `${platformEntryPrefix}${model}`,
+          duration,
+          resolution,
+          aspectRatio: ratio,
+          extraParams: {
+            ...platformExtraParams,
+            use_personal_api: false,
+          },
+        },
+      } : {}),
     });
   };
 
@@ -216,9 +268,9 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
         const jobId = await webApiGateway.submitGenerateVideoJob({
           prompt,
           model: usePersonalApi ? 'personal-api' : storedModel,
-          size: String(data.resolution || '720p'),
+          size: resolution,
           aspectRatio: ratio,
-          seconds: Number(data.duration) || 5,
+          seconds: Number(duration) || 5,
           extraParams: { ...common, optimize_prompt: data.optimize_prompt !== false },
         });
         const newNodeId = store.addNode(CANVAS_NODE_TYPES.video, pos, {
@@ -228,6 +280,7 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
           generationStartedAt: Date.now(),
           generationDurationMs: 15 * 60 * 1000,
           generationJobId: jobId,
+          sourcePrompt: prompt,
           ...common,
         });
         store.addEdge(node.id, newNodeId);
@@ -452,14 +505,46 @@ function MangaNodeEditPanelInner({ node, onClose }: { node: CanvasNode; onClose:
                 <div className="flex flex-wrap gap-2">
                   <label className="text-xs text-text-muted">比例</label>
                   <select className="rounded-md border border-[var(--canvas-node-field-border)] bg-bg-dark/70 px-1.5 py-1 text-xs text-text-dark" value={ratio}
-                    onChange={(e) => update({ ratio: e.target.value, requestAspectRatio: e.target.value })}>
+                    onChange={(e) => {
+                      const nextRatio = e.target.value;
+                      update({
+                        ratio: nextRatio,
+                        requestAspectRatio: nextRatio,
+                        ...(node.type === CANVAS_NODE_TYPES.aiVideo ? {
+                          modelConfig: {
+                            ...(videoModelConfig ?? {}),
+                            aspectRatio: nextRatio,
+                          },
+                        } : {}),
+                      });
+                    }}>
                     {(node.type === CANVAS_NODE_TYPES.aiVideo ? VIDEO_RATIOS : IMAGE_RATIOS).map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                   {node.type === CANVAS_NODE_TYPES.aiVideo && (
-                    <select className="rounded-md border border-[var(--canvas-node-field-border)] bg-bg-dark/70 px-1.5 py-1 text-xs text-text-dark" value={String(data.resolution || '720p')}
-                      onChange={(e) => update({ resolution: e.target.value })}>
-                      {VIDEO_RESOLUTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-                    </select>
+                    <>
+                      <select className="rounded-md border border-[var(--canvas-node-field-border)] bg-bg-dark/70 px-1.5 py-1 text-xs text-text-dark" value={resolution}
+                        onChange={(e) => update({
+                          resolution: e.target.value,
+                          modelConfig: {
+                            ...(videoModelConfig ?? {}),
+                            resolution: e.target.value,
+                          },
+                        })}>
+                        {VIDEO_RESOLUTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                      <select className="rounded-md border border-[var(--canvas-node-field-border)] bg-bg-dark/70 px-1.5 py-1 text-xs text-text-dark" value={duration}
+                        onChange={(e) => update({
+                          duration: Number(e.target.value),
+                          modelConfig: {
+                            ...(videoModelConfig ?? {}),
+                            duration: e.target.value,
+                          },
+                        })}>
+                        {Array.from(new Set([...VIDEO_DURATIONS, duration])).map((seconds) => (
+                          <option key={seconds} value={seconds}>{seconds}秒</option>
+                        ))}
+                      </select>
+                    </>
                   )}
                   <select
                     aria-label="供应商与模型"

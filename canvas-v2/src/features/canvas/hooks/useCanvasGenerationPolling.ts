@@ -8,6 +8,7 @@ import {
   canvasVideoGateway,
   materializeProviderAwareImageResult,
 } from '@/features/canvas/application/canvasServices';
+import { findCompletedVideoInHistory } from '@/features/canvas/infrastructure/webApiGateway';
 import { prepareNodeImage } from '@/features/canvas/application/imageData';
 import {
   buildGenerationErrorReport,
@@ -833,6 +834,37 @@ async function pollSingleJob(ctx: PollContext): Promise<void> {
           );
         }
         return;
+      }
+
+      if (status.status === 'not_found' && isVideoNode) {
+        const excludedUrls = useCanvasStore.getState().nodes.flatMap((node) => {
+          if (node.id === nodeId || node.type !== CANVAS_NODE_TYPES.video) return [];
+          const data = node.data as Record<string, unknown>;
+          return [data.videoUrl, data.localVideoUrl]
+            .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+        });
+        const recoveredUrl = await findCompletedVideoInHistory({
+          jobId,
+          prompt: resolveGeneratedSourcePrompt(currentData),
+          excludedUrls,
+        }).catch((error) => {
+          console.warn('[GenerationJob] history recovery failed', {
+            nodeId,
+            jobId,
+            error: formatGenerationErrorForLog(error),
+          });
+          return null;
+        });
+        if (recoveredUrl) {
+          await prepareCompletedVideoResult(
+            nodeId,
+            recoveredUrl,
+            currentData,
+            updateNodeData,
+            translateError,
+          );
+          return;
+        }
       }
 
       // Failure / not_found / canceled / unknown.

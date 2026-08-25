@@ -296,6 +296,27 @@ class ProjectApiTest(unittest.TestCase):
         all_history = self.client.get('/api/history').get_json()
         self.assertEqual(len(all_history), 3)
 
+    def test_video_status_recovers_completed_job_from_history_after_restart(self):
+        user = 'video_history_recovery_user'
+        self.login(user)
+        app_module.save_video_history(
+            'https://example.com/generated.mp4',
+            '同一个提示词',
+            user_id=user,
+            source_job_id='completed-job-1',
+        )
+        app_module.JOBS.pop('completed-job-1', None)
+        app_module.JOB_OWNERS.pop('completed-job-1', None)
+
+        recovered = self.client.get('/api/status/completed-job-1')
+        self.assertEqual(recovered.status_code, 200)
+        self.assertEqual(recovered.get_json()['status'], 'succeeded')
+        self.assertEqual(recovered.get_json()['video_url'], 'https://example.com/generated.mp4')
+
+        missing = self.client.get('/api/status/missing-job')
+        self.assertEqual(missing.status_code, 200)
+        self.assertEqual(missing.get_json()['status'], 'not_found')
+
 
 class SkillAndImportTest(unittest.TestCase):
     def setUp(self):

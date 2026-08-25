@@ -463,7 +463,7 @@ def insert_history(entry, limit=100, user_id=None, project_id=None):
 
 def save_video_history(video_url, script, original_script=None, refined_script=None,
                        model=None, ratio=None, duration=None, resolution=None,
-                       ref_count=None, user_id=None):
+                       ref_count=None, user_id=None, source_job_id=None):
     entry = {
         'time': datetime.now().strftime('%Y-%m-%d %H:%M'),
         'type': 'video',
@@ -477,6 +477,7 @@ def save_video_history(video_url, script, original_script=None, refined_script=N
     if duration: entry['duration'] = duration
     if resolution: entry['resolution'] = resolution
     if ref_count is not None: entry['ref_count'] = ref_count
+    if source_job_id: entry['source_job_id'] = source_job_id
     insert_history(entry, user_id=user_id)
     return entry
 
@@ -3495,7 +3496,8 @@ def nano_gpt_generate(job_id, model_key, script, images, audio_url, video_url, f
                         original_script=original_script or script,
                         refined_script=script if optimize else (original_script or script),
                         model=model_key, ratio=ratio, duration=duration,
-                        resolution=resolution, ref_count=len(images), user_id=user_id)
+                        resolution=resolution, ref_count=len(images), user_id=user_id,
+                        source_job_id=job_id)
                     JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_vurl, 'source_video_url': vurl, 'error': None}
                     return
                 else:
@@ -3626,7 +3628,7 @@ def agnes_video_generate(job_id, script, ratio, duration, resolution='720p', ori
             save_video_history(stored_url, script, original_script=original_script or script,
                                refined_script=script if optimize else (original_script or script),
                                model=model_id, ratio=actual['ratio'], duration=actual['duration'], resolution=actual['resolution'],
-                               ref_count=0, user_id=user_id)
+                               ref_count=0, user_id=user_id, source_job_id=job_id)
             JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': direct_url,
                             'ratio': actual['ratio'], 'duration': actual['duration'],
                             'resolution': actual['resolution'], 'size': actual['size'], 'error': None}
@@ -3648,7 +3650,7 @@ def agnes_video_generate(job_id, script, ratio, duration, resolution='720p', ori
                 save_video_history(stored_url, script, original_script=original_script or script,
                                    refined_script=script if optimize else (original_script or script),
                                    model=model_id, ratio=actual['ratio'], duration=actual['duration'], resolution=actual['resolution'],
-                                   ref_count=0, user_id=user_id)
+                                   ref_count=0, user_id=user_id, source_job_id=job_id)
                 JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': video_url,
                                 'ratio': actual['ratio'], 'duration': actual['duration'],
                                 'resolution': actual['resolution'], 'size': actual['size'], 'error': None}
@@ -3732,7 +3734,7 @@ def minimax_video_generate(job_id, script, images, audio_url, video_url, first_f
                     model=model_id or 'MiniMax-H3', ratio=task.get('ratio') or minimax_ratio,
                     duration=task.get('duration') or minimax_duration,
                     resolution=task.get('resolution') or minimax_resolution,
-                    ref_count=len(seen_urls), user_id=user_id
+                    ref_count=len(seen_urls), user_id=user_id, source_job_id=job_id
                 )
                 JOBS[job_id] = {
                     'status': 'succeeded', 'video_url': stored_url, 'source_video_url': output_url,
@@ -3865,7 +3867,8 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
             stored_url, _ = download_and_save_video(direct_url)
             save_video_history(stored_url, script, original_script=original_script or script,
                                refined_script=script if optimize else (original_script or script), model=model_key,
-                               ratio=ratio, duration=duration, resolution=resolution, ref_count=len(images), user_id=user_id)
+                               ratio=ratio, duration=duration, resolution=resolution, ref_count=len(images),
+                               user_id=user_id, source_job_id=job_id)
             JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': direct_url, 'error': None}
             return
         if not task_id:
@@ -3898,7 +3901,8 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
                     duration=duration,
                     resolution=resolution,
                     ref_count=len(images),
-                    user_id=user_id
+                    user_id=user_id,
+                    source_job_id=job_id
                 )
                 JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': vurl, 'error': None}
                 return
@@ -4102,7 +4106,8 @@ def atlas_video_generate(job_id, script, images, audio_url, video_url, first_fra
             stored_url, script, original_script=original_script or script,
             refined_script=script if optimize else (original_script or script),
             model=model, ratio=atlas_ratio, duration=atlas_duration, resolution=atlas_resolution,
-            ref_count=len(reference_images) + int(bool(first_frame)) + int(bool(last_frame)), user_id=user_id
+            ref_count=len(reference_images) + int(bool(first_frame)) + int(bool(last_frame)),
+            user_id=user_id, source_job_id=job_id
         )
         JOBS[job_id] = {
             'status': 'succeeded', 'video_url': stored_url, 'source_video_url': output_url,
@@ -4770,7 +4775,8 @@ def generate():
                         duration=duration,
                         resolution=resolution,
                         ref_count=len(reference_images),
-                        user_id=user_id
+                        user_id=user_id,
+                        source_job_id=job_id
                     )
                     JOBS[job_id] = {'status':'succeeded','video_url':stored_vurl,'source_video_url':vurl,'error':None}
                     break
@@ -4789,7 +4795,17 @@ def generate():
 @login_required
 def status(job_id):
     if JOB_OWNERS.get(job_id) != current_user_id():
-        return jsonify(status='not_found'), 404
+        history = load_json(history_path(), [])
+        recovered = next((
+            entry for entry in history
+            if isinstance(entry, dict)
+            and entry.get('type') == 'video'
+            and entry.get('source_job_id') == job_id
+            and entry.get('video_url')
+        ), None)
+        if recovered:
+            return jsonify(status='succeeded', video_url=recovered['video_url'], recovered_from_history=True)
+        return jsonify(status='not_found')
     job = JOBS.get(job_id, {'status': 'not_found'})
     return jsonify(job)
 
