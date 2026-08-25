@@ -1,1 +1,0 @@
-import{K as r}from"./index-D2XJo2TZ.js";import"./reactflow-PnMyFmHp.js";import"./three-xPz2FEy-.js";import"./markdown-D_DchGZD.js";import"./pano-BOfRluvX.js";async function a(){try{return await r("get_runtime_system_info")}catch(t){return console.warn("failed to get runtime system info from tauri",t),null}}export{a as getRuntimeSystemInfo};

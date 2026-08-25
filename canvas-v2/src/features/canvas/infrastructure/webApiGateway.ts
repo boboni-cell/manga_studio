@@ -24,7 +24,9 @@ function mapVideoStatus(status: string | undefined): GenerationJobPollStatus['st
     case 'succeeded': return 'succeeded';
     case 'failed': return 'failed';
     case 'not_found': return 'not_found';
-    case 'pending': return 'running';
+    case 'pending':
+    case 'running':
+      return 'running';
     default: return 'unknown';
   }
 }

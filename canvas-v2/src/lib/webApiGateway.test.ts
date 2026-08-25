@@ -1,9 +1,23 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { apiMock } = vi.hoisted(() => ({
+  apiMock: vi.fn(),
+}));
+
+vi.mock('@/api', () => ({
+  api: apiMock,
+  pollImageJob: vi.fn(),
+}));
 
 import {
   buildImageRequest,
   buildVideoRequest,
 } from './mangaGatewayPayload';
+import { webApiGateway } from '@/features/canvas/infrastructure/webApiGateway';
+
+beforeEach(() => {
+  apiMock.mockReset();
+});
 
 describe('Manga Studio Flask gateway payloads', () => {
   it('routes an image personal API through the classic workbench fields', () => {
@@ -82,5 +96,19 @@ describe('Manga Studio Flask gateway payloads', () => {
 
     expect(request.use_personal_api).toBe(false);
     expect(request.api_profile_id).toBeUndefined();
+  });
+});
+
+describe('Manga Studio Flask gateway polling', () => {
+  it('keeps polling while a video job is running upstream', async () => {
+    apiMock.mockResolvedValueOnce({ status: 'running', video_url: null, error: null });
+
+    await expect(webApiGateway.getGenerateVideoJob('video-job-1')).resolves.toMatchObject({
+      job_id: 'video-job-1',
+      status: 'running',
+      result: null,
+      error: null,
+    });
+    expect(apiMock).toHaveBeenCalledWith('/api/status/video-job-1');
   });
 });
