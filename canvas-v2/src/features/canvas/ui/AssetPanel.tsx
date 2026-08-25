@@ -44,6 +44,7 @@ interface AssetPanelProps {
   isOpen: boolean;
   assets: CanvasAssetItem[];
   buttonRect: DOMRect | null;
+  initialCategory?: MangaAssetCategory;
   mode?: 'browse' | 'select';
   title?: string;
   subtitle?: string;
@@ -58,6 +59,7 @@ export const AssetPanel = memo(({
   isOpen,
   assets,
   buttonRect,
+  initialCategory = 'project',
   mode = 'browse',
   title = '资产',
   subtitle = '与经典工作台资产库同步 · 双击项目资产定位，单击素材添加到画布',
@@ -97,6 +99,11 @@ export const AssetPanel = memo(({
     });
   }, [activeCategory, assets, query]);
   const activeCategoryLabel = MANGA_ASSET_CATEGORIES.find((category) => category.id === activeCategory)?.label || '资产';
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setActiveCategory(initialCategory);
+  }, [initialCategory, isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -186,7 +193,7 @@ export const AssetPanel = memo(({
           <div className="mt-1 text-xs leading-5 text-text-muted">{subtitle}</div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {mode === 'browse' && onAdd && (
+          {mode === 'browse' && onAdd && activeCategory !== 'history' && (
             <button
               type="button"
               onClick={() => {
@@ -198,10 +205,10 @@ export const AssetPanel = memo(({
                 if (activeCategory === 'project') setActiveCategory('upload');
               }}
               className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-accent/70 bg-accent px-3 text-xs font-medium text-white shadow-sm transition-colors hover:bg-accent/85"
-              title={activeCategory === 'history' ? '前往完整资产库' : `添加${activeCategoryLabel}`}
+              title={`添加${activeCategoryLabel}`}
             >
               <Plus className="h-3.5 w-3.5" />
-              添加{activeCategory === 'history' ? '' : activeCategoryLabel}
+              添加{activeCategoryLabel}
             </button>
           )}
           <button

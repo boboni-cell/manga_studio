@@ -1022,6 +1022,7 @@ export function Canvas() {
   const [isAssetPanelOpen, setIsAssetPanelOpen] = useState(false);
   const [assetButtonRect, setAssetButtonRect] = useState<DOMRect | null>(null);
   const [assetPanelMode, setAssetPanelMode] = useState<'browse' | 'select'>('browse');
+  const [assetPanelInitialCategory, setAssetPanelInitialCategory] = useState<MangaAssetCategory>('project');
   const [libraryAssets, setLibraryAssets] = useState<CanvasAssetItem[]>([]);
   const assetUploadInputRef = useRef<HTMLInputElement | null>(null);
   const pendingAssetUploadCategoryRef = useRef<MangaWritableAssetCategory>('upload');
@@ -1436,8 +1437,22 @@ export function Canvas() {
   const handleOpenAssetPanel = useCallback((buttonRect: DOMRect) => {
     setAssetButtonRect(buttonRect);
     setAssetPanelMode('browse');
+    setAssetPanelInitialCategory('project');
     setAssetConnectTargetNodeId(null);
     setIsAssetPanelOpen((open) => !open);
+    setShowNodeMenu(false);
+    setNodeContextMenu(null);
+    setMenuAllowedTypes(undefined);
+    setPendingConnectStart(null);
+    setPreviewConnectionVisual(null);
+  }, []);
+
+  const handleOpenHistoryPanel = useCallback((buttonRect: DOMRect) => {
+    setAssetButtonRect(buttonRect);
+    setAssetPanelMode('browse');
+    setAssetPanelInitialCategory('history');
+    setAssetConnectTargetNodeId(null);
+    setIsAssetPanelOpen(true);
     setShowNodeMenu(false);
     setNodeContextMenu(null);
     setMenuAllowedTypes(undefined);
@@ -4417,6 +4432,7 @@ export function Canvas() {
 
       <CanvasSideToolbar
         onOpenAssets={handleOpenAssetPanel}
+        onOpenHistory={handleOpenHistoryPanel}
         mobileMultiSelectMode={mobileMultiSelectMode}
         onToggleMobileMultiSelect={() => {
           selectSingleNode(null);
@@ -4433,9 +4449,14 @@ export function Canvas() {
         isOpen={isAssetPanelOpen}
         assets={assetPanelAssets}
         buttonRect={assetButtonRect}
+        initialCategory={assetPanelInitialCategory}
         mode={assetPanelMode}
-        title={assetPanelMode === 'select' ? '资产' : undefined}
-        subtitle={assetPanelMode === 'select' ? '选择一张现有图片连接到 AI 图片节点' : undefined}
+        title={assetPanelMode === 'select' ? '资产' : assetPanelInitialCategory === 'history' ? '历史记录' : undefined}
+        subtitle={assetPanelMode === 'select'
+          ? '选择一张现有图片连接到 AI 图片节点'
+          : assetPanelInitialCategory === 'history'
+            ? '与经典工作台同步 · 单击图片或视频即可添加到画布'
+            : undefined}
         onClose={closeAssetPanel}
         onActivate={handleActivateAsset}
         onRename={assetPanelMode === 'browse' ? handleRenameAsset : undefined}

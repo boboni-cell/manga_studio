@@ -1,48 +1,56 @@
-# Canvas mobile and asset UI design QA
+# Design QA
 
-- Source visual truth:
-  - `/Users/zhanghanyue/Downloads/IMG_7139.PNG`
-  - `/var/folders/09/2l28qsrs7c581dly276t5q940000gn/T/codex-clipboard-c26c18e1-4664-490a-bec1-39d9400dcdfe.png`
-  - `/var/folders/09/2l28qsrs7c581dly276t5q940000gn/T/codex-clipboard-20a8ab4a-a484-4e8e-a245-fc37a9e8e78d.png`
-- Browser-rendered implementation evidence:
-  - `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/mobile-asset-panel.png`
-  - `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/mobile-node-selected.png`
-  - `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/mobile-multi-select-final.png`
-  - `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/desktop-asset-panel.png`
-  - `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/desktop-ai-image-node-final.png`
-- Viewports: 402 × 874 CSS px for mobile; 1280 × 800 CSS px for desktop.
-- Pixels and density: browser captures use the active browser density. The supplied mobile source is 1320 × 2868 px and was compared by normalized content regions because it includes Safari chrome; desktop sources are 856 × 1238 px and 1458 × 828 px.
-- State: canvas workbench with AI image nodes; selected-node toolbar; asset panel; mobile multi-select with two selected nodes.
+## Evidence
 
-## Findings
+- Source visual truth: `/var/folders/09/2l28qsrs7c581dly276t5q940000gn/T/codex-clipboard-e814b397-3544-4cca-9c0f-e80b9b69a509.png` (1022 × 724 px), showing the redundant Base URL, submit URL, and query URL fields that the user asked to replace with one complete URL field.
+- Classic history reference: `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/classic-history-desktop.png` (1440 × 1000 px).
+- API implementation: `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/api-settings-desktop.png` (1425 × 1042 px) and focused `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/api-settings-custom-video-focused.png` (384 × 692 px).
+- Canvas history implementation: `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/canvas-history-desktop.png` (1440 × 1000 px) and `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/canvas-history-mobile.png` (390 × 844 px).
+- Mobile API implementation: `/Users/zhanghanyue/Movies/manga_studio/artifacts/design-qa/api-settings-mobile.png` (375 × 2343 px).
+- CSS viewports: desktop 1440 × 1000, mobile 390 × 844. Device scale factor 1; no density normalization was required.
+- State: authenticated local QA user, video provider switched to Custom API, and canvas history panel open with two shared history records.
 
-- No actionable P0/P1/P2 issue remains in the changed surfaces.
-- The mobile source shows a fixed-width tool panel extending outside the viewport and controls trapped behind it. The implementation keeps canvas panels inside the viewport, enables panel scrolling, and gives the selected-node toolbar a 372 px viewport over a 1133 px horizontal scroll range with `touch-action: pan-x`.
-- The mobile source has no usable multi-select path. The implementation adds an explicit mobile-only multi-select control. Browser verification selected two nodes and rendered the batch toolbar; its 552 px content scrolls inside a 384 px viewport without shrinking or vertically wrapping actions.
-- The desktop asset source hides categories in a narrow horizontal strip and wraps the add label. The implementation uses the existing purple canvas tokens, a 720 px desktop panel, a single-line accent add action, and wrapped category chips so all eight categories remain visible.
-- The AI image source compresses all controls into one line. The implementation gives model configuration its own row and keeps style, camera, count, and generate actions in a separate aligned row.
-- The supplied screenshots document broken states rather than a desired visual mock, so the implementation intentionally does not reproduce their overflow and obstruction.
+## Full-view comparison
 
-## Interaction checks
+- API settings keeps the existing dark purple visual system, type hierarchy, field dimensions, radii, and action-button treatment. Custom API now shows one complete URL field; Base URL and query URL are not visible.
+- Canvas adds a matching rail button without changing the existing toolbar size or visual language. The history panel reads from the same `/api/history` records as the classic workbench and remains inside the viewport on desktop and mobile.
 
-- Tapped an AI image node at mobile width and confirmed the selected-node toolbar appeared.
-- Confirmed the selected-node toolbar can scroll horizontally to its full content width.
-- Enabled mobile multi-select, selected two nodes, and confirmed batch actions appeared in a horizontally scrollable toolbar.
-- Opened the asset panel at mobile and desktop widths; all category tabs were visible and the content area remained vertically scrollable.
-- Browser error overlay: none. Browser errors: none. Existing Three.js duplicate-instance warnings remain unrelated to this change.
+## Focused comparison
 
-## Required fidelity surfaces
+- The original API screenshot and focused implementation were opened together. The implementation removes the two redundant address fields while retaining the API key and model fields in the same order.
+- The classic and canvas history captures were opened together. Both show the same record names and media. Canvas intentionally uses the existing asset-panel card layout so selecting a record adds it directly to the node canvas.
 
-- Fonts and typography: existing application font stack, weights, truncation, and hierarchy are preserved; mobile batch actions stay on one line.
-- Spacing and layout rhythm: mobile panels respect 8 px viewport gutters and the bottom tool rail; desktop asset spacing uses the existing 8/12/16 px rhythm.
-- Colors and visual tokens: asset and floating panels now use the canvas surface, border, muted-text, and accent tokens instead of an isolated gray treatment.
-- Image quality and asset fidelity: asset preview rendering and object-cover behavior are unchanged.
-- Copy and content: existing labels are retained; only the explicit `多选` control and category-aware add label were introduced.
+## Fidelity surfaces
+
+- Fonts and typography: existing system font stack, weights, sizes, line heights, and truncation behavior are preserved.
+- Spacing and layout rhythm: the single endpoint field reduces vertical density; history panel spacing and mobile two-column cards fit without clipping persistent controls.
+- Colors and tokens: existing canvas and API purple tokens, borders, backgrounds, and active states are reused.
+- Image quality and assets: history previews use the original history media URLs; the new history icon comes from the existing Lucide icon dependency.
+- Copy and content: labels now say “完整接口 URL” and “历史记录”; guidance explicitly says only one URL is required and history is synchronized with the classic workbench.
 
 ## Comparison history
 
-- First pass found the mobile batch toolbar shrinking labels into vertical text.
-- The toolbar children were changed to non-shrinking, single-line items inside a horizontal scroll container.
-- Post-fix browser evidence measured two selected nodes, a visible batch toolbar, 384 px client width, 552 px scroll width, and zero flex shrink on all actions.
+1. Initial API visual check found a P1 issue: the Base URL label still rendered because the author `label { display:block }` rule overrode the HTML `hidden` attribute.
+2. Added an explicit `[hidden] { display:none!important }` rule, reloaded the page, and recaptured the same Custom API state. The Base URL and query URL are no longer visible.
+
+## Interaction and console checks
+
+- Tested opening the canvas history button on desktop and mobile.
+- Confirmed the history category opens directly, shows the same two classic records, and exposes media activation controls.
+- Confirmed Custom API exposes one visible complete endpoint field and the DashScope example placeholder.
+- Browser console: no errors. One pre-existing Three.js duplicate-instance warning remains and is unrelated to these changes.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain.
+- P3: the canvas history presentation is a compact picker rather than the classic full-page timeline; this is intentional so a record can be added to the canvas without leaving the current graph.
+
+## Implementation checklist
+
+- [x] One complete Custom API URL field.
+- [x] DashScope async submit and task polling derived automatically.
+- [x] Dedicated canvas history rail button.
+- [x] Shared classic history data on desktop and mobile.
+- [x] No new viewport obstruction.
 
 final result: passed

@@ -486,6 +486,8 @@
   "canvasToolbar": {
     "assets": "Assets",
     "assetsTitle": "View current project assets",
+    "history": "History",
+    "historyTitle": "View the same generation history as the classic workbench",
     "bulkPromptImport": "Bulk Import",
     "bulkPromptImportTitle": "Import prompts from a text or spreadsheet file",
     "logs": "Logs",

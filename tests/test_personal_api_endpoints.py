@@ -30,7 +30,7 @@ class PersonalApiEndpointTest(unittest.TestCase):
         with self.client.session_transaction() as session:
             session['user_id'] = 'endpoint-user'
 
-    def test_new_custom_video_requires_full_submit_and_status_urls(self):
+    def test_new_custom_video_requires_only_one_full_url(self):
         base = {
             'kind': 'video',
             'provider': 'custom',
@@ -43,23 +43,15 @@ class PersonalApiEndpointTest(unittest.TestCase):
         self.assertEqual(missing_submit.status_code, 400)
         self.assertIn('完整提交接口', missing_submit.get_json()['error'])
 
-        missing_status = self.client.post('/api/settings', json={
-            **base,
-            'submit_url': 'https://provider.example/v1/video/create',
-        })
-        self.assertEqual(missing_status.status_code, 400)
-        self.assertIn('完整查询接口', missing_status.get_json()['error'])
-
         saved = self.client.post('/api/settings', json={
             **base,
             'submit_url': 'https://provider.example/v1/video/create',
-            'status_url': 'https://provider.example/v1/video/{task_id}',
         })
         self.assertEqual(saved.status_code, 200)
         profile = saved.get_json()['profile']
         self.assertEqual(profile['endpoint_mode'], 'full')
         self.assertEqual(profile['submit_url'], 'https://provider.example/v1/video/create')
-        self.assertEqual(profile['status_url'], 'https://provider.example/v1/video/{task_id}')
+        self.assertEqual(profile['status_url'], '')
 
     def test_new_custom_text_and_image_require_full_submit_url(self):
         for kind in ('text', 'image'):
@@ -148,6 +140,47 @@ class PersonalApiEndpointTest(unittest.TestCase):
         self.assertEqual(post.call_args.args[0], 'https://provider.example/v9/create-video')
         self.assertEqual(get.call_args.args[0], 'https://provider.example/v9/tasks/task-1')
         self.assertEqual(app_module.JOBS['exact-endpoint-job']['status'], 'succeeded')
+
+    @mock.patch.object(app_module, 'save_video_history')
+    @mock.patch.object(app_module, 'download_and_save_video', return_value=('https://storage.example/video.mp4', 'video.mp4'))
+    @mock.patch.object(app_module.requests, 'get', return_value=FakeResponse(payload={
+        'output': {
+            'task_status': 'SUCCEEDED',
+            'video_url': 'https://provider.example/result.mp4',
+        },
+    }))
+    @mock.patch.object(app_module.requests, 'post', return_value=FakeResponse(payload={
+        'output': {'task_status': 'PENDING', 'task_id': 'dash-task-1'},
+    }))
+    def test_dashscope_full_url_derives_polling_and_payload(self, post, get, _download, _history):
+        app_module.JOBS['dashscope-job'] = {'status': 'pending'}
+        endpoint = 'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis'
+
+        app_module.third_party_video_adapter(
+            'dashscope-job', 'prompt', [], None, None, None, None,
+            '16:9', 5, 'https://studio.example',
+            model_key='wan2.6-t2v', resolution='768p',
+            api_base='https://ignored.example', api_key='secret', user_id='endpoint-user',
+            submit_url=endpoint,
+        )
+
+        self.assertEqual(post.call_args.args[0], endpoint)
+        self.assertEqual(post.call_args.kwargs['headers']['X-DashScope-Async'], 'enable')
+        self.assertEqual(post.call_args.kwargs['json'], {
+            'model': 'wan2.6-t2v',
+            'input': {'prompt': 'prompt'},
+            'parameters': {
+                'resolution': '720P',
+                'ratio': '16:9',
+                'duration': 5,
+                'prompt_extend': True,
+            },
+        })
+        self.assertEqual(
+            get.call_args.args[0],
+            'https://dashscope-intl.aliyuncs.com/api/v1/tasks/dash-task-1',
+        )
+        self.assertEqual(app_module.JOBS['dashscope-job']['status'], 'succeeded')
 
 
 if __name__ == '__main__':

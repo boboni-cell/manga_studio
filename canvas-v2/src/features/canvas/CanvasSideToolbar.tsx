@@ -1,7 +1,7 @@
 import { memo, useCallback, useState } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import { useTranslation } from 'react-i18next';
-import { Boxes, ImagePlus, Globe2, LayoutGrid, Images, ListPlus, Maximize2, ScrollText, Video } from 'lucide-react';
+import { Boxes, History, ImagePlus, Globe2, LayoutGrid, Images, ListPlus, Maximize2, ScrollText, Video } from 'lucide-react';
 
 import { CANVAS_NODE_TYPES, type CanvasNodeType } from '@/features/canvas/domain/canvasNodes';
 import {
@@ -66,6 +66,7 @@ const TOOLBAR_ITEMS: SideToolbarItem[] = [
 
 interface CanvasSideToolbarProps {
   onOpenAssets?: (buttonRect: DOMRect) => void;
+  onOpenHistory?: (buttonRect: DOMRect) => void;
   mobileMultiSelectMode?: boolean;
   onToggleMobileMultiSelect?: () => void;
 }
@@ -76,6 +77,7 @@ interface CanvasSideToolbarProps {
  */
 export const CanvasSideToolbar = memo(({
   onOpenAssets,
+  onOpenHistory,
   mobileMultiSelectMode = false,
   onToggleMobileMultiSelect,
 }: CanvasSideToolbarProps) => {
@@ -174,6 +176,16 @@ export const CanvasSideToolbar = memo(({
         >
           <Images className="h-4 w-4" />
           <span className="canvas-side-toolbar__label leading-tight">{t('canvasToolbar.assets')}</span>
+        </button>
+        <button
+          type="button"
+          title={t('canvasToolbar.historyTitle')}
+          aria-label={t('canvasToolbar.historyTitle')}
+          onClick={(event) => onOpenHistory?.(event.currentTarget.getBoundingClientRect())}
+          className="canvas-side-toolbar__button flex w-16 shrink-0 flex-col items-center gap-0.5 rounded-lg border border-[var(--canvas-rail-button-border)] bg-[var(--canvas-rail-button-bg)] px-2 py-2 text-[10px] text-[var(--canvas-rail-button-text)] transition-colors hover:border-accent/60 hover:bg-accent/15 hover:text-accent"
+        >
+          <History className="h-4 w-4" />
+          <span className="canvas-side-toolbar__label leading-tight">{t('canvasToolbar.history')}</span>
         </button>
         <button
           type="button"

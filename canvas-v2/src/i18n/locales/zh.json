@@ -486,6 +486,8 @@
   "canvasToolbar": {
     "assets": "资产",
     "assetsTitle": "查看当前项目资产",
+    "history": "历史记录",
+    "historyTitle": "查看与经典工作台相同的生成历史",
     "bulkPromptImport": "批量导入",
     "bulkPromptImportTitle": "从文本或表格文件批量导入提示词",
     "logs": "日志",

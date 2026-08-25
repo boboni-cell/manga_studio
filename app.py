@@ -2508,10 +2508,6 @@ def api_settings():
         if custom_full_endpoint:
             if not cfg.get('submit_url'):
                 return jsonify(error='新建 Custom API 必须填写完整提交接口 URL'), 400
-            if kind == 'video' and not cfg.get('status_url'):
-                return jsonify(error='新建视频 Custom API 必须填写完整查询接口 URL，并用 {task_id} 标记任务 ID'), 400
-            if kind == 'video' and '{task_id}' not in str(cfg.get('status_url')).replace('{taskId}', '{task_id}'):
-                return jsonify(error='视频查询接口必须包含 {task_id} 占位符'), 400
             cfg['endpoint_mode'] = 'full'
         try:
             cfg = normalize_api_profile(cfg)
@@ -2583,8 +2579,6 @@ def test_personal_api(kind, profile_id=None):
         if cfg.get('endpoint_mode') == 'full':
             if not cfg.get('submit_url'):
                 return jsonify(error='缺少完整提交接口 URL'), 400
-            if kind == 'video' and (not cfg.get('status_url') or '{task_id}' not in cfg.get('status_url')):
-                return jsonify(error='视频查询接口必须包含 {task_id} 占位符'), 400
             tested_at = datetime.now(timezone.utc).isoformat()
             cfg['last_test'] = tested_at
             settings = load_json(settings_path(), {})
@@ -3757,6 +3751,20 @@ def minimax_video_generate(job_id, script, images, audio_url, video_url, first_f
         JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': str(e)}
 
 
+def is_dashscope_video_endpoint(endpoint):
+    parsed = urlparse(str(endpoint or ''))
+    return (
+        parsed.hostname and parsed.hostname.endswith('aliyuncs.com')
+        and '/services/aigc/video-generation/video-synthesis' in parsed.path
+    )
+
+
+def dashscope_video_status_url(submit_url):
+    parsed = urlparse(submit_url)
+    api_prefix = parsed.path.split('/services/', 1)[0].rstrip('/')
+    return f'{parsed.scheme}://{parsed.netloc}{api_prefix}/tasks/{{task_id}}'
+
+
 def third_party_video_adapter(job_id, script, images, audio_url, video_url, first_frame_url, last_frame_url, ratio, duration, host_url,
                               model_key=THIRD_PARTY_MODEL_ID, resolution='720p',
                               original_script=None, optimize=False, api_base=None, api_key=None, user_id=None,
@@ -3815,10 +3823,30 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
 
         exact_submit_url = str(submit_url or '').strip()
         exact_status_url = str(status_url or '').strip()
+        dashscope_endpoint = is_dashscope_video_endpoint(exact_submit_url)
         if exact_submit_url:
-            request_payload = openai_payload if urlparse(exact_submit_url).path.rstrip('/').endswith('/videos') else payload
+            if dashscope_endpoint:
+                dashscope_input = {'prompt': script}
+                dashscope_image = first_frame_url or (ref_images[0]['url'] if ref_images else None)
+                if dashscope_image:
+                    dashscope_input['img_url'] = dashscope_image
+                if audio_url:
+                    dashscope_input['audio_url'] = final_audio
+                request_payload = {
+                    'model': model_key,
+                    'input': dashscope_input,
+                    'parameters': {
+                        'resolution': {'768p': '720P'}.get(resolution.lower(), resolution.upper()),
+                        'ratio': ratio,
+                        'duration': duration,
+                        'prompt_extend': True,
+                    },
+                }
+                headers['X-DashScope-Async'] = 'enable'
+            else:
+                request_payload = openai_payload if urlparse(exact_submit_url).path.rstrip('/').endswith('/videos') else payload
             r = requests.post(exact_submit_url, headers=headers, json=request_payload, timeout=30)
-            resolved_status_url = exact_status_url
+            resolved_status_url = exact_status_url or (dashscope_video_status_url(exact_submit_url) if dashscope_endpoint else None)
         else:
             r = requests.post(f'{api_base}/videos', headers=headers, json=openai_payload, timeout=30)
             resolved_status_url = None
@@ -3830,7 +3858,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
             return
 
         data = r.json()
-        data_body = data.get('data') if isinstance(data.get('data'), dict) else {}
+        data_body = data.get('data') if isinstance(data.get('data'), dict) else data.get('output') if isinstance(data.get('output'), dict) else {}
         direct_url = _find_media_url(data)
         task_id = data.get('task_id') or data.get('id') or data.get('job_id') or data_body.get('task_id') or data_body.get('id')
         if direct_url:
@@ -3853,8 +3881,8 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
                 return
 
             pd = pr.json()
-            pd_body = pd.get('data') if isinstance(pd.get('data'), dict) else pd
-            status = str(pd_body.get('status') or pd_body.get('state') or '').lower()
+            pd_body = pd.get('data') if isinstance(pd.get('data'), dict) else pd.get('output') if isinstance(pd.get('output'), dict) else pd
+            status = str(pd_body.get('status') or pd_body.get('state') or pd_body.get('task_status') or '').lower()
             vurl = _find_media_url(pd)
             if status in ('completed', 'succeeded', 'done', 'success', 'finished') or vurl:
                 if not vurl:
@@ -3875,7 +3903,7 @@ def third_party_video_adapter(job_id, script, images, audio_url, video_url, firs
                 JOBS[job_id] = {'status': 'succeeded', 'video_url': stored_url, 'source_video_url': vurl, 'error': None}
                 return
             elif status in ('failed', 'error', 'cancelled'):
-                err = pd.get('error') or pd.get('message', '未知错误')
+                err = pd_body.get('error') or pd_body.get('message') or pd.get('error') or pd.get('message', '未知错误')
                 JOBS[job_id] = {'status': 'failed', 'video_url': None, 'error': f'第三方生成失败: {err}'}
                 return
             else:
