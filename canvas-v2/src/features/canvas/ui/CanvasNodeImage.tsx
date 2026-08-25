@@ -12,6 +12,7 @@ import { AlertTriangle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { useCanvasStore } from '@/stores/canvasStore';
+import { NATIVE_MEDIA_NODRAG_CLASSNAME } from '@/features/canvas/application/nativeMediaInteraction';
 
 export interface CanvasNodeImageProps extends ImgHTMLAttributes<HTMLImageElement> {
   viewerSourceUrl?: string | null;
@@ -129,7 +130,8 @@ export const CanvasNodeImage = memo(({
       {...props}
       src={activeSrc}
       alt={alt}
-      className={className}
+      className={[className, NATIVE_MEDIA_NODRAG_CLASSNAME].filter(Boolean).join(' ')}
+      data-browser-media-actions="true"
       data-viewer-src={
         typeof viewerSourceUrl === 'string' && viewerSourceUrl.trim().length > 0
           ? viewerSourceUrl.trim()

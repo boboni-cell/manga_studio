@@ -114,6 +114,7 @@ export function ImageViewerModal({
             ref={imageRef}
             src={displayImageUrl}
             alt={t('viewer.imageAlt', '图片')}
+            data-browser-media-actions="true"
             className="select-none transition-opacity duration-[180ms]"
             style={{
               opacity: viewerOpacity,

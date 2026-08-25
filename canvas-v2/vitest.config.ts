@@ -14,6 +14,7 @@ export default defineConfig({
       'src/features/canvas/application/*Catalog.test.ts',
       'src/features/canvas/application/canvasClipboard.test.ts',
       'src/features/canvas/application/graphReferenceResolver.test.ts',
+      'src/features/canvas/application/nativeMediaInteraction.test.ts',
     ],
     environment: 'node',
   },
