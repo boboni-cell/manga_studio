@@ -523,6 +523,7 @@ class StyleGenerationTest(unittest.TestCase):
         generated_prompt = generate_mock.call_args.args[0]
         generation_references = generate_mock.call_args.args[6]
         self.assertIn('电影级写实光影', generated_prompt)
+        self.assertEqual(generate_mock.call_args.kwargs['resolution'], '')
         self.assertEqual(generation_references, [{
             'url': 'https://example.com/person.png',
             'role_label': '人物参考',
@@ -721,6 +722,101 @@ class NanoGptMidjourneyTest(unittest.TestCase):
         self.assertEqual(post_mock.call_args.kwargs['timeout'], 360)
         upload_mock.assert_called_once()
 
+    @mock.patch.object(app_module, 'upload_to_tos', return_value=('https://cdn.example.com/agnes.png', True))
+    @mock.patch.object(app_module.requests, 'post')
+    def test_agnes_text_to_image_uses_supported_contract(self, post_mock, upload_mock):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {'data': [{'b64_json': 'aW1hZ2U='}]}
+        post_mock.return_value = response
+
+        result = app_module.nano_image_generate(
+            '韩系人物肖像',
+            app_module.AGNES_IMAGE_MODEL_ID,
+            '1:1',
+            api_key='test-key',
+            base_url=app_module.AGNES_API_BASE,
+            resolution='2K',
+        )
+
+        self.assertEqual(result, ('https://cdn.example.com/agnes.png', mock.ANY))
+        request = post_mock.call_args
+        self.assertEqual(request.args[0], 'https://apihub.agnes-ai.com/v1/images/generations')
+        self.assertEqual(request.kwargs['json'], {
+            'model': app_module.AGNES_IMAGE_MODEL_ID,
+            'prompt': mock.ANY,
+            'size': '2K',
+            'ratio': '1:1',
+            'n': 1,
+            'return_base64': True,
+        })
+        self.assertNotIn('dimensions', request.kwargs['json'])
+        self.assertNotIn('width', request.kwargs['json'])
+        self.assertNotIn('height', request.kwargs['json'])
+        self.assertNotIn('aspect_ratio', request.kwargs['json'])
+        self.assertEqual(request.kwargs['timeout'], 360)
+        upload_mock.assert_called_once()
+
+    @mock.patch.object(app_module, 'upload_to_tos', return_value=('https://cdn.example.com/agnes-ref.png', True))
+    @mock.patch.object(app_module.requests, 'post')
+    def test_agnes_reference_image_uses_documented_extra_body(self, post_mock, upload_mock):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {'data': [{'b64_json': 'aW1hZ2U='}]}
+        post_mock.return_value = response
+
+        app_module.nano_image_generate(
+            '保持人物一致性',
+            app_module.AGNES_IMAGE_MODEL_ID,
+            '3:4',
+            api_key='test-key',
+            base_url=app_module.AGNES_API_BASE,
+            input_images=[{'url': '/static/reference.png'}],
+            host_url='https://studio.example.com',
+            resolution='2K',
+        )
+
+        payload = post_mock.call_args.kwargs['json']
+        self.assertEqual(payload['tags'], ['img2img'])
+        self.assertEqual(payload['extra_body'], {
+            'image': ['https://studio.example.com/static/reference.png'],
+            'response_format': 'b64_json',
+        })
+        self.assertNotIn('image', payload)
+        self.assertNotIn('return_base64', payload)
+        upload_mock.assert_called_once()
+
+    @mock.patch.object(app_module, 'upload_to_tos', return_value=('https://cdn.example.com/nano.png', True))
+    @mock.patch.object(app_module.requests, 'post')
+    def test_each_nano_queue_model_keeps_its_existing_generation_contract(self, post_mock, upload_mock):
+        response = mock.Mock(status_code=200)
+        response.json.return_value = {'data': [{'b64_json': 'aW1hZ2U='}]}
+        post_mock.return_value = response
+
+        expected_sizes = {
+            'gpt-image-2': '1024x1024',
+            'nano-banana-2': '2k',
+        }
+        for model_id, expected_size in expected_sizes.items():
+            with self.subTest(model=model_id):
+                app_module.nano_image_generate(
+                    '人物肖像', model_id, '1:1', api_key='test-key', resolution='2K'
+                )
+                request = post_mock.call_args
+                self.assertEqual(request.args[0], 'https://nano-gpt.com/api/v1/images/generations')
+                self.assertEqual(request.kwargs['json']['model'], model_id)
+                self.assertEqual(request.kwargs['json']['size'], expected_size)
+                self.assertEqual(request.kwargs['timeout'], 360)
+
+        self.assertEqual(upload_mock.call_count, 2)
+
+    def test_gpt_image_2_ratio_presets_are_current_supported_sizes(self):
+        supported = {
+            '1024x1024', '1024x768', '1024x1536', '1536x1024',
+            '1152x2048', '2048x1152', '2560x1440',
+        }
+        for ratio, size in app_module.RATIO_TO_SIZE_GPT_IMAGE.items():
+            with self.subTest(ratio=ratio):
+                self.assertIn(size, supported)
+
     @mock.patch.object(app_module.requests, 'post')
     def test_midjourney_rejects_reference_images_before_paid_request(self, post_mock):
         with self.assertRaisesRegex(Exception, '仅支持文生图'):
@@ -735,6 +831,31 @@ class NanoGptMidjourneyTest(unittest.TestCase):
 
 
 class VolcSeedream5ProTest(unittest.TestCase):
+    @mock.patch.object(app_module, 'download_and_save_image', return_value=('/stored/seedream45.jpg', 'seedream45.jpg'))
+    @mock.patch.object(app_module, 'Ark')
+    def test_seedream_4_5_uses_ark_image_api_with_legal_size(self, ark_mock, download_mock):
+        response = mock.Mock()
+        response.data = [mock.Mock(url='https://example.com/seedream45.jpg')]
+        ark_mock.return_value.images.generate.return_value = response
+
+        result = app_module.volc_image_generate(
+            '电影角色设定',
+            [],
+            'https://studio.example.com',
+            '16:9',
+            api_key='test-key',
+            model_id=app_module.VOLC_IMAGE_MODEL_ID,
+        )
+
+        self.assertEqual(result, ('/stored/seedream45.jpg', 'seedream45.jpg'))
+        ark_mock.return_value.images.generate.assert_called_once_with(
+            model=app_module.VOLC_IMAGE_MODEL_ID,
+            prompt='电影角色设定',
+            size='2560x1440',
+            watermark=False,
+        )
+        download_mock.assert_called_once_with('https://example.com/seedream45.jpg')
+
     def test_seedream_5_pro_is_a_builtin_ark_image_model(self):
         model_id = 'doubao-seedream-5-0-pro-260628'
         self.assertEqual(app_module.VOLC_IMAGE_MODELS[model_id], model_id)

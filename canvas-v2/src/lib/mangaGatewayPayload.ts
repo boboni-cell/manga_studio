@@ -24,6 +24,7 @@ export function buildImageRequest(
     prompt: payload.prompt,
     image_model: payload.model,
     ratio: payload.aspectRatio || '1:1',
+    resolution: optionalString(extra.resolutionType) || optionalString(payload.size),
     custom_size: optionalString(extra.custom_size),
     mode: optionalString(extra.mode) || 'storyboard',
     input_images: (payload.referenceImages ?? []).map((url, index) => ({

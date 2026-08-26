@@ -174,9 +174,9 @@ RATIO_TO_SIZE_AGNES = {
 # to 1024x1024, so use stricter/common dimensions plus aspect_ratio below.
 RATIO_TO_SIZE_GPT_IMAGE = {
     "1:1": "1024x1024", "2:3": "1024x1536", "3:2": "1536x1024",
-    "3:4": "1024x1365", "4:3": "1365x1024",
-    "9:16": "864x1536", "16:9": "1536x864",
-    "4:5": "1024x1280", "5:4": "1280x1024"
+    "3:4": "1024x1536", "4:3": "1024x768",
+    "9:16": "1152x2048", "16:9": "2048x1152",
+    "4:5": "1024x1536", "5:4": "1536x1024"
 }
 # Ratio → pixel size for Seedream (requires ≥3.6M pixels)
 RATIO_TO_SIZE_VOLC = {
@@ -4274,14 +4274,30 @@ def parse_image_size(size):
         return None, None
 
 
-def image_size_for_nano(model_id, ratio, custom_size=''):
+def image_size_for_nano(model_id, ratio, custom_size='', resolution=''):
     if ratio == 'custom' and custom_size:
         return custom_size
+    if model_id == 'nano-banana-2':
+        selected = str(resolution or '').strip().lower()
+        return selected if selected in {'1k', '2k', '4k'} else '2k'
     if model_id == AGNES_IMAGE_MODEL_ID:
         return RATIO_TO_SIZE_AGNES.get(ratio, "1024x1024")
     if model_id == 'gpt-image-2':
         return RATIO_TO_SIZE_GPT_IMAGE.get(ratio, "1024x1024")
     return RATIO_TO_SIZE_NANO.get(ratio, "1024x1024")
+
+
+def image_size_for_agnes(ratio, custom_size='', resolution=''):
+    if ratio == 'custom' and custom_size:
+        return custom_size
+    selected = str(resolution or '').strip()
+    if selected.upper() in {'1K', '2K', '3K', '4K'}:
+        return selected.upper()
+    if parse_image_size(selected) != (None, None):
+        return selected
+    if selected.lower() == 'auto':
+        return '1K'
+    return RATIO_TO_SIZE_AGNES.get(ratio, "1024x1024")
 
 
 def image_ratio_instruction(ratio, size):
@@ -4294,9 +4310,9 @@ def image_ratio_instruction(ratio, size):
 
 # ── Nano image generation ─────────────────────────────────────
 def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, base_url=None,
-                        input_images=None, host_url='', submit_url=None):
+                        input_images=None, host_url='', submit_url=None, resolution=''):
     """Call Nano-GPT images/generations API."""
-    size = image_size_for_nano(model_id, ratio, custom_size)
+    size = image_size_for_nano(model_id, ratio, custom_size, resolution)
     width, height = parse_image_size(size)
     final_prompt = image_ratio_instruction(ratio, size) + "\n" + prompt
     headers = {
@@ -4308,6 +4324,10 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
     is_nano_midjourney = (
         model_id == NANO_GPT_MIDJOURNEY_MODEL_ID
         and 'nano-gpt.com' in api_root.lower()
+    )
+    is_agnes_image = (
+        model_id == AGNES_IMAGE_MODEL_ID
+        and 'agnes-ai.com' in api_root.lower()
     )
     if is_nano_midjourney:
         if input_images:
@@ -4322,6 +4342,18 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
             'n': 4,
         }
         endpoint = submit_url or f'{api_root}/images'
+    elif is_agnes_image:
+        size = image_size_for_agnes(ratio, custom_size, resolution)
+        final_prompt = image_ratio_instruction(ratio, size) + "\n" + prompt
+        payload = {
+            'model': model_id,
+            'prompt': final_prompt,
+            'size': size,
+            'n': 1,
+        }
+        if ratio and ratio not in {'auto', 'custom'}:
+            payload['ratio'] = ratio
+        endpoint = submit_url or f'{api_root}/images/generations'
     else:
         payload = {
             'model': model_id,
@@ -4343,7 +4375,16 @@ def nano_image_generate(prompt, model_id, ratio, custom_size='', api_key=None, b
         if url:
             reference_urls.append(url)
     if reference_urls:
-        payload['image'] = reference_urls[0] if len(reference_urls) == 1 else reference_urls
+        if is_agnes_image:
+            payload['tags'] = ['img2img']
+            payload['extra_body'] = {
+                'image': reference_urls,
+                'response_format': 'b64_json',
+            }
+        else:
+            payload['image'] = reference_urls[0] if len(reference_urls) == 1 else reference_urls
+    elif is_agnes_image:
+        payload['return_base64'] = True
     r = requests.post(endpoint, headers=headers, json=payload, timeout=360)
     if r.status_code not in (200, 201):
         raise Exception(f'图片 API 生成失败: {r.status_code} {r.text[:200]}')
@@ -4424,6 +4465,7 @@ def generate_image():
             'model': VOLC_IMAGE_MODELS[selected_model],
         }
     ratio = body.get('ratio', DEFAULT_RATIO)
+    resolution = body.get('resolution', '')
     custom_size = body.get('custom_size', '')
     mode = body.get('mode', 'storyboard')
     input_images = body.get('input_images') or []
@@ -4476,7 +4518,7 @@ def generate_image():
                 local_url, filename = nano_image_generate(
                     prompt, image_model, ratio, custom_size,
                     image_cfg['api_key'], image_cfg['base_url'], input_images, host_url,
-                    submit_url=image_cfg.get('submit_url')
+                    submit_url=image_cfg.get('submit_url'), resolution=resolution
                 )
             elif image_cfg.get('provider') == 'ark':
                 local_url, filename = volc_image_generate(prompt, input_images, host_url, ratio, custom_size, image_cfg['api_key'], image_model)

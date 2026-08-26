@@ -41,6 +41,7 @@ describe('Manga Studio Flask gateway payloads', () => {
       prompt: 'portrait',
       image_model: 'personal-api',
       ratio: '3:4',
+      resolution: '2K',
       use_personal_api: true,
       api_profile_id: 'image-profile-1',
       style_id: 'style-1',
@@ -48,6 +49,22 @@ describe('Manga Studio Flask gateway payloads', () => {
     expect(request.input_images).toEqual([
       { url: 'https://example.com/ref.png', role_label: '参考图' },
     ]);
+  });
+
+  it('forwards the selected platform image resolution to Flask', () => {
+    const request = buildImageRequest({
+      prompt: 'portrait',
+      model: 'agnes-image-2.1-flash',
+      size: '2048x2048',
+      aspectRatio: '1:1',
+      extraParams: { resolutionType: '2K' },
+    });
+
+    expect(request).toMatchObject({
+      image_model: 'agnes-image-2.1-flash',
+      ratio: '1:1',
+      resolution: '2K',
+    });
   });
 
   it('routes a video personal API and every supported reference field', () => {
